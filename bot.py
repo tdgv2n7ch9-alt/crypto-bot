@@ -17,7 +17,7 @@ import pytz
 # ============================================================
 # НАСТРОЙКИ — ВСТАВЬ СВОИ ДАННЫЕ
 # ============================================================
-8840157382:AAG5QtS381RwZ5LpxkIoxPepSIfI9zwANMA
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8840157382:AAG5QtS381RwZ5LpxkIoxPepSIfI9zwANMA")
 CHAT_ID   = None                  # заполнится автоматически при /start
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
