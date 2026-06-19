@@ -437,45 +437,44 @@ def build_market_report(coins: list) -> list:
     dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
     pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
     pct = pos / len(coins) * 100
-    mood = "🟢 БЫЧИЙ" if pct >= 60 else ("🔴 МЕДВЕЖИЙ" if pct < 40 else "🟡 НЕЙТРАЛЬНЫЙ")
+    mood = "🟢 Бычий" if pct >= 60 else ("🔴 Медвежий" if pct < 40 else "🟡 Нейтральный")
 
-    def trend_icon(ch):
-        if ch >= 5:  return "🟢"
-        if ch >= 0:  return "🔵"
-        if ch >= -5: return "🟠"
-        return "🔴"
+    def arr(ch): return "🟢" if ch >= 5 else ("🔵" if ch >= 0 else ("🟠" if ch >= -5 else "🔴"))
+    def ps(ch): return f"+{ch:.2f}%" if ch >= 0 else f"{ch:.2f}%"
 
-    def fc2(ch):
-        return f"+{ch:.2f}%" if ch >= 0 else f"{ch:.2f}%"
+    sep = ""
+    now_str = now.strftime("%d.%m.%Y  %H:%M")
 
-    t1  = f"📊 BEST TRADE — ОБЗОР РЫНКА\n"
-    t1 += f"🕐 {now.strftime('%d.%m.%Y %H:%M')} Istanbul\n\n"
-    t1 += f"Сентимент: {mood}\n"
-    t1 += f"Растут: {pos}/{len(coins)} ({pct:.0f}%)\n\n"
-    t1 += f"🚀 ТОП-15 РОСТ за 24ч\n"
-    t1 += "─" * 30 + "\n"
+    lines1 = [
+        f"📊 *BEST TRADE — Обзор рынка*",
+        f"🕐 {now_str} Istanbul",
+        "",
+        f"Сентимент: {mood}",
+        f"Растут: {pos}/{len(coins)} ({pct:.0f}%)",
+        "",
+        "🚀 *ТОП-15 РОСТ за 24ч*",
+    ]
     b1 = []
     for i, c in enumerate(up[:15], 1):
         q  = c["quote"]["USDT"]
         ch = q.get("percent_change_24h", 0)
-        p  = q.get("price", 0)
-        t1 += f"{i:>2}. {c['symbol']:<8} ${fp(p):<14} {trend_icon(ch)} {fc2(ch)}\n"
+        lines1.append(f"{arr(ch)} {i}. *{c['symbol']}*  ${fp(q['price'])}  {ps(ch)}")
     for c in up[:8]:
         b1.append(InlineKeyboardButton(
             f"📊 {c['symbol']}",
             url=cmc_link(c.get("slug", c["symbol"].lower()))
         ))
 
-    t2  = "─" * 30 + "\n"
-    t2 += f"📉 ТОП-15 ПАДЕНИЕ за 24ч\n"
-    t2 += "─" * 30 + "\n"
+    lines2 = [
+        "📉 *ТОП-15 ПАДЕНИЕ за 24ч*",
+    ]
     b2 = []
     for i, c in enumerate(dn[:15], 1):
         q  = c["quote"]["USDT"]
         ch = q.get("percent_change_24h", 0)
-        p  = q.get("price", 0)
-        t2 += f"{i:>2}. {c['symbol']:<8} ${fp(p):<14} {trend_icon(ch)} {fc2(ch)}\n"
-    t2 += "\n📡 CoinMarketCap • Топ-300 монет"
+        lines2.append(f"{arr(ch)} {i}. *{c['symbol']}*  ${fp(q['price'])}  {ps(ch)}")
+    lines2.append("")
+    lines2.append("📡 CoinMarketCap • Топ-300 монет")
     for c in dn[:8]:
         b2.append(InlineKeyboardButton(
             f"📊 {c['symbol']}",
@@ -483,70 +482,74 @@ def build_market_report(coins: list) -> list:
         ))
 
     return [
-        {"text": f"```\n{t1}```", "btns": b1},
-        {"text": f"```\n{t2}```", "btns": b2},
+        {"text": "\n".join(lines1), "btns": b1},
+        {"text": "\n".join(lines2), "btns": b2},
     ]
+
 
 def build_signals_report(coins: list) -> list:
     now      = datetime.now(TZ)
     analyzed = [(c, full_analysis(c)) for c in coins]
-    longs    = sorted(
-        [(c,a) for c,a in analyzed if a["score"] >= 3],
-        key=lambda x: x[1]["score"], reverse=True
-    )[:12]
-    shorts   = sorted(
-        [(c,a) for c,a in analyzed if a["score"] <= -3],
-        key=lambda x: x[1]["score"]
-    )[:12]
+    longs  = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
+                    key=lambda x: x[1]["score"], reverse=True)[:12]
+    shorts = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
+                    key=lambda x: x[1]["score"])[:12]
 
-    def fc2(ch): return f"+{ch:.2f}%" if ch >= 0 else f"{ch:.2f}%"
+    def ps(ch): return f"+{ch:.2f}%" if ch >= 0 else f"{ch:.2f}%"
+    sep = ""
+    now_str = now.strftime("%d.%m.%Y  %H:%M")
 
     def blk(c, a):
         e20 = "✅" if a["ema20"] else "❌"
         e50 = "✅" if a["ema50"] else "❌"
         e200= "✅" if a["ema200"] else "❌"
-        return (
-            f"📊 {c['symbol']}/USDT  {'🟢 LONG' if a['is_long'] else '🔴 SHORT'}\n"
-            f"💰 Цена: {fp(a['price'])}\n"
-            f"📈 1ч {fc2(a['ch1h'])} | 24ч {fc2(a['ch24h'])}\n"
-            f"📉 RSI 4ч: {a['rsi_4h']} | 1ч: {a['rsi_1h']}\n"
-            f"🎯 Зоны: {a['zone1']}\n"
-            f"EMA: {e20}20 {e50}50 {e200}200\n"
-            f"⚡ {a['action']}\n"
-            f"{'─'*28}\n"
-        )
+        side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
+        return [
+            "",
+            f"📊 *{c['symbol']}/USDT*  {side}",
+            f"💰 Цена: ${fp(a['price'])}",
+            f"📈 1ч {ps(a['ch1h'])}  |  24ч {ps(a['ch24h'])}",
+            f"📉 RSI 4ч: {a['rsi_4h']}  |  1ч: {a['rsi_1h']}",
+            f"🎯 Зона: {a['zone1']}",
+            f"EMA20 {e20}  EMA50 {e50}  EMA200 {e200}",
+            f"⚡ {a['action']}",
+            ]
 
-    t1  = f"🤖 BEST TRADE — СИГНАЛЫ\n"
-    t1 += f"🕐 {now.strftime('%d.%m.%Y %H:%M')} Istanbul\n\n"
-    t1 += f"🟢 ЛОНГ ({len(longs)} монет)\n"
-    t1 += "─" * 28 + "\n"
+    lines1 = [
+        "🤖 *BEST TRADE — Сигналы*",
+        f"🕐 {now_str} Istanbul",
+        "",
+        f"🟢 *ЛОНГ ({len(longs)} монет)*",
+    ]
     b1 = []
     for c, a in longs:
-        t1 += blk(c, a)
+        lines1.extend(blk(c, a))
         b1.append(InlineKeyboardButton(
             f"📊 {c['symbol']}",
             url=cmc_link(c.get("slug", c["symbol"].lower()))
         ))
     if not longs:
-        t1 += "Нет явных лонг-сигналов\n"
+        lines1.append("Нет явных лонг-сигналов")
 
-    t2  = f"🔴 ШОРТ ({len(shorts)} монет)\n"
-    t2 += "─" * 28 + "\n"
+    lines2 = [
+        f"🔴 *ШОРТ ({len(shorts)} монет)*",
+    ]
     b2 = []
     for c, a in shorts:
-        t2 += blk(c, a)
+        lines2.extend(blk(c, a))
         b2.append(InlineKeyboardButton(
             f"📊 {c['symbol']}",
             url=cmc_link(c.get("slug", c["symbol"].lower()))
         ))
     if not shorts:
-        t2 += "Нет явных шорт-сигналов\n"
-    t2 += "\n⚠️ Риск на сделку: 2-3%\nСтоп ВСЕГДА до входа!"
+        lines2.append("Нет явных шорт-сигналов")
+    lines2.extend(["", "⚠️ Риск на сделку: 2-3%", "Стоп ВСЕГДА до входа!"])
 
     return [
-        {"text": f"```\n{t1}```", "btns": b1},
-        {"text": f"```\n{t2}```", "btns": b2},
+        {"text": "\n".join(lines1), "btns": b1},
+        {"text": "\n".join(lines2), "btns": b2},
     ]
+
 
 def build_period_report(period: str, coins: list) -> list:
     field_map = {"1h": "percent_change_1h", "24h": "percent_change_24h", "7d": "percent_change_7d"}
@@ -592,8 +595,8 @@ def build_period_report(period: str, coins: list) -> list:
         ))
 
     return [
-        {"text": f"```\n{t1}```", "btns": b1},
-        {"text": f"```\n{t2}```", "btns": b2},
+        {"text": f"{t1}", "btns": b1},
+        {"text": f"{t2}", "btns": b2},
     ]
 
 # ═══════════════════════════════════════════
