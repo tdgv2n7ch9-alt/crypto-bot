@@ -370,8 +370,7 @@ def generate_chart(symbol: str, a: dict, candles: list) -> io.BytesIO:
     side_color = GREEN if a["is_long"] else RED
     ax.set_title(
         f"{symbol}/USDT  •  1h  •  {side_label}",
-        color=WHITE, fontsize=13, fontweight="bold", pad=10,
-        color=side_color
+        color=side_color, fontsize=13, fontweight="bold", pad=10
     )
 
     # ── Инфо-панель справа ──
