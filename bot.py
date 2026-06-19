@@ -392,15 +392,13 @@ def main():
     scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
     bot = app.bot
 
-    # Каждые 30 минут
-scheduler.add_job(
+    scheduler.add_job(
     lambda: asyncio.create_task(send_scheduled(bot, "🔄 Обновление каждые 30 минут")),
     "interval",
     minutes=30
-)    scheduler.start()
-    log.info("✅ Бот запущен! Рассылка: 11:00 и 23:00 МСК")
-
-    app.run_polling(drop_pending_updates=True)
+)
+scheduler.start()
+log.info("✅ Бот запущен! Рассылка каждые 30 минут")app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
