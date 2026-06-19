@@ -392,18 +392,12 @@ def main():
     scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
     bot = app.bot
 
-    # 11:00 МСК — утренняя сессия (открытие Европы)
-    scheduler.add_job(
-        lambda: asyncio.create_task(send_scheduled(bot, "🌅 Утренняя сессия — Европа открылась")),
-        "cron", hour=11, minute=0
-    )
-    # 23:00 МСК — ночная сессия (пик Америки)
-    scheduler.add_job(
-        lambda: asyncio.create_task(send_scheduled(bot, "🌙 Ночная сессия — Пик США")),
-        "cron", hour=23, minute=0
-    )
-
-    scheduler.start()
+    # Каждые 30 минут
+scheduler.add_job(
+    lambda: asyncio.create_task(send_scheduled(bot, "🔄 Обновление каждые 30 минут")),
+    "interval",
+    minutes=30
+)    scheduler.start()
     log.info("✅ Бот запущен! Рассылка: 11:00 и 23:00 МСК")
 
     app.run_polling(drop_pending_updates=True)
