@@ -45,27 +45,33 @@ def get_top300():
         log.error(f"CMC error: {e}")
         return []
 
-def get_binance_ohlcv(symbol: str, interval: str = "1h", limit: int = 60) -> list:
-    """Получить свечи с Binance"""
+def get_price_history(slug: str, symbol: str) -> list:
+    """Получить историю цены с CoinGecko (7 дней, 4ч псевдо-свечи)"""
     try:
-        url = f"https://api.binance.com/api/v3/klines"
-        params = {"symbol": f"{symbol}USDT", "interval": interval, "limit": limit}
-        r = requests.get(url, params=params, timeout=10)
+        url = f"https://api.coingecko.com/api/v3/coins/{slug}/market_chart"
+        params = {"vs_currency": "usd", "days": "7", "interval": "hourly"}
+        r = requests.get(url, params=params, timeout=12)
         r.raise_for_status()
         data = r.json()
+        prices  = data.get("prices", [])
+        volumes = data.get("total_volumes", [])
         candles = []
-        for d in data:
+        step = 4
+        for i in range(0, len(prices) - step, step):
+            chunk_p = [p[1] for p in prices[i:i+step]]
+            chunk_v = [v[1] for v in volumes[i:i+step]] if volumes else [0]*step
+            ts = prices[i][0] / 1000
             candles.append({
-                "time":  datetime.fromtimestamp(d[0] / 1000, tz=TZ),
-                "open":  float(d[1]),
-                "high":  float(d[2]),
-                "low":   float(d[3]),
-                "close": float(d[4]),
-                "vol":   float(d[5]),
+                "time":  datetime.fromtimestamp(ts, tz=TZ),
+                "open":  chunk_p[0],
+                "high":  max(chunk_p),
+                "low":   min(chunk_p),
+                "close": chunk_p[-1],
+                "vol":   sum(chunk_v),
             })
         return candles
     except Exception as e:
-        log.error(f"Binance OHLCV error {symbol}: {e}")
+        log.error(f"CoinGecko error {slug}: {e}")
         return []
 
 def cmc_link(slug: str)  -> str: return f"https://coinmarketcap.com/currencies/{slug}/"
@@ -699,7 +705,7 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     a      = full_analysis(coin)
     slug   = coin.get("slug", symbol.lower())
-    candles = get_binance_ohlcv(symbol, "1h", 60)
+    candles = get_price_history(coin.get('slug', symbol.lower()), symbol)
 
     # Генерируем график
     try:
@@ -779,7 +785,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         a       = full_analysis(coin)
         slug    = coin.get("slug", symbol.lower())
-        candles = get_binance_ohlcv(symbol, "1h", 60)
+        candles = get_price_history(coin.get('slug', symbol.lower()), symbol)
         try:
             chart_buf = generate_chart(symbol, a, candles)
             caption   = f"```\n{coin_text(symbol, coin, a)}```"
