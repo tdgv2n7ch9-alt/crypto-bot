@@ -189,6 +189,68 @@ def get_binance_alltime_low(symbol: str) -> float:
     except:
         return 0
 
+def get_funding_rate(symbol: str) -> dict:
+    """Фандинг рейт с Binance Futures"""
+    try:
+        url    = "https://fapi.binance.com/fapi/v1/premiumIndex"
+        params = {"symbol": f"{symbol}USDT"}
+        r      = requests.get(url, params=params, timeout=8)
+        r.raise_for_status()
+        d    = r.json()
+        rate = float(d.get("lastFundingRate", 0)) * 100  # в %
+        mark = float(d.get("markPrice", 0))
+        idx  = float(d.get("indexPrice", 0))
+        # Basis = разница между фьючерсом и спотом
+        basis = (mark - idx) / idx * 100 if idx > 0 else 0
+
+        if rate > 0.1:    fr_signal = "🔴 Перегрет (лонги доминируют)"
+        elif rate > 0.05: fr_signal = "🟡 Умеренный бычий"
+        elif rate > 0:    fr_signal = "🟢 Нейтральный"
+        elif rate > -0.05: fr_signal = "🟡 Умеренный медвежий"
+        else:              fr_signal = "🟢 Шорт-сквиз возможен!"
+
+        return {"rate": rate, "signal": fr_signal, "mark": mark, "basis": basis, "ok": True}
+    except:
+        return {"rate": 0, "signal": "—", "mark": 0, "basis": 0, "ok": False}
+
+def get_open_interest(symbol: str) -> dict:
+    """Open Interest с Binance Futures — изменение OI за 24ч"""
+    try:
+        # Текущий OI
+        url = "https://fapi.binance.com/fapi/v1/openInterest"
+        r   = requests.get(url, params={"symbol": f"{symbol}USDT"}, timeout=8)
+        r.raise_for_status()
+        oi_now = float(r.json().get("openInterest", 0))
+
+        # OI Statistics (история)
+        url2 = "https://fapi.binance.com/futures/data/openInterestHist"
+        r2   = requests.get(url2, params={
+            "symbol": f"{symbol}USDT", "period": "1h", "limit": 25
+        }, timeout=8)
+        r2.raise_for_status()
+        hist = r2.json()
+        if hist and len(hist) >= 2:
+            oi_24h_ago = float(hist[0].get("sumOpenInterest", oi_now))
+            oi_change  = (oi_now - oi_24h_ago) / oi_24h_ago * 100 if oi_24h_ago > 0 else 0
+        else:
+            oi_change = 0
+
+        if oi_change > 5:    oi_signal = "📈 OI растёт — тренд усиливается"
+        elif oi_change > 1:  oi_signal = "🟢 OI умеренно растёт"
+        elif oi_change > -1: oi_signal = "🟡 OI стабилен"
+        elif oi_change > -5: oi_signal = "🟠 OI снижается — позиции закрываются"
+        else:                oi_signal = "🔴 OI резко падает — осторожно"
+
+        return {"oi": oi_now, "change": oi_change, "signal": oi_signal, "ok": True}
+    except:
+        return {"oi": 0, "change": 0, "signal": "—", "ok": False}
+
+def get_market_extras(symbol: str) -> dict:
+    """Получаем фандинг + OI за один вызов"""
+    fr = get_funding_rate(symbol)
+    oi = get_open_interest(symbol)
+    return {"funding": fr, "oi": oi}
+
 # ═══════════════════════════════════════════
 # ФОРМАТИРОВАНИЕ
 # ═══════════════════════════════════════════
@@ -404,11 +466,11 @@ def get_supertrend_signal(symbol: str) -> dict:
 
 def full_analysis(coin: dict) -> dict:
     """
-    Полный многофакторный анализ монеты:
-    TA (EMA, RSI, MACD-proxy, Bollinger-proxy, Volume, Momentum)
-    + SMC (BOS, OB, FVG, Liquidity, структура)
-    + Fundamental (mcap rank, vol/mcap, momentum score)
-    + Итоговый "Rocket Score" 0-100
+    Многофакторный анализ. Ключевое правило:
+    - is_long определяется ТОЛЬКО реальными данными (ch24h, ch7d, ch30d)
+    - Rocket Score учитывает качество сетапа, а не просто рост
+    - Vol/MCap > 50% = подозрительно → штраф
+    - Монета должна РЕАЛЬНО расти чтобы быть LONG
     """
     q     = coin["quote"]["USDT"]
     ch1h  = q.get("percent_change_1h",  0) or 0
@@ -422,7 +484,8 @@ def full_analysis(coin: dict) -> dict:
     rank  = coin.get("cmc_rank", 999)
     vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
 
-    # ── RSI приближение по изменениям ──
+    suspicious = vol_ratio > 50  # ETF-прокси, памп-энд-дамп
+
     def rsi_est(m):
         if m > 15:  return 82.0
         if m > 8:   return 70.0
@@ -433,172 +496,141 @@ def full_analysis(coin: dict) -> dict:
         if m > -15: return 25.0
         return 18.0
 
-    m4h    = ch1h * 0.5 + ch24h * 0.5
+    m4h    = ch1h * 0.4 + ch24h * 0.6
     rsi_1h = rsi_est(ch1h)
     rsi_4h = rsi_est(m4h)
     rsi_1d = rsi_est(ch24h)
 
-    # ── EMA СТРУКТУРА (приближение через % изменения) ──
-    # Логика: если монета росла 30д — она выше EMA200; росла 7д — выше EMA20
-    above_ema200 = ch30d > 0
-    above_ema50  = ch30d > -10
-    above_ema20  = ch7d  > 0
+    # EMA - улучшенная логика (90д для EMA200)
+    above_ema20  = ch7d  > -5
+    above_ema50  = ch30d > -20
+    above_ema200 = ch90d > -50
 
-    # ── BOLLINGER BANDS proxy ──
-    # Если 1ч изменение очень маленькое → цена у средней, хорошая точка
-    bb_squeeze = abs(ch1h) < 0.5   # сжатие боллинджера
-    bb_breakout = abs(ch1h) >= 3.0  # пробой боллинджера
-
-    # ── MACD proxy ──
-    # Быстрая EMA (7д) пересекает медленную (30д) снизу вверх
-    macd_bullish = ch7d > 0 and ch30d < ch7d  # быстрая выше медленной и растёт
-    macd_bearish = ch7d < 0 and ch30d > ch7d
-
-    # ── VOLUME ANALYSIS ──
-    vol_spike    = vol_ratio >= 20   # аномальный объём — умные деньги
-    vol_high     = vol_ratio >= 10
-    vol_low      = vol_ratio < 3
-    # Объём растёт при росте цены → подтверждение
-    vol_confirm_bull = ch24h > 3 and vol_ratio >= 8
-    vol_confirm_bear = ch24h < -3 and vol_ratio >= 8
-
-    # ── MOMENTUM (сила тренда) ──
-    # Многотаймфреймный моментум: все TF согласованы?
+    momentum_pos    = ch1h > 0 and ch24h > 0
+    tf_bull_strong  = ch1h > 0 and ch24h > 2  and ch7d > 3
+    tf_bear_strong  = ch1h < 0 and ch24h < -2 and ch7d < -3
     tf_aligned_bull = ch1h > 0 and ch24h > 0 and ch7d > 0 and ch30d > 0
     tf_aligned_bear = ch1h < 0 and ch24h < 0 and ch7d < 0 and ch30d < 0
-    # Ускорение: 1ч > 4ч > 1д (набирает силу)
-    momentum_accel = ch1h > (ch24h / 24) * 2  # 1ч бьёт средний часовой темп 24ч в 2 раза
 
-    # ── SMC АНАЛИЗ ──
-    # BOS (Break of Structure): новый хай после коррекции
-    # Прокси: 7д рост после 30д коррекции → BOS пробой
-    smc_bos_bull = ch7d > 5 and ch30d < -5   # пробой структуры вверх после коррекции
-    smc_bos_bear = ch7d < -5 and ch30d > 5
+    bb_squeeze  = abs(ch1h) < 0.3
+    bb_breakout = abs(ch1h) >= 3.0
+    macd_bullish = ch7d > 0 and ch24h > ch7d / 7
+    macd_bearish = ch7d < 0 and ch24h < ch7d / 7
 
-    # OB (Order Block): зоны накопления умных денег
-    # Прокси: большой объём + маленькое движение цены → накопление
-    smc_ob_accumulation = vol_ratio >= 15 and abs(ch24h) < 3  # накопление OB
-    smc_ob_distribution = vol_ratio >= 15 and abs(ch24h) < 3 and ch7d < 0
+    vol_spike        = 5 <= vol_ratio <= 50
+    vol_high         = 2 <= vol_ratio < 5
+    vol_low          = vol_ratio < 1
+    vol_confirm_bull = ch24h > 3 and 3 <= vol_ratio <= 50
+    vol_confirm_bear = ch24h < -3 and 3 <= vol_ratio <= 50
 
-    # FVG (Fair Value Gap): имбаланс, который нужно закрыть
-    # Прокси: резкий скачок 1ч создаёт FVG
-    smc_fvg_bull = ch1h >= 3 and ch24h > 5   # FVG после импульса вверх
-    smc_fvg_bear = ch1h <= -3 and ch24h < -5  # FVG после импульса вниз
+    smc_bos_bull    = ch7d  > 8  and ch30d < -10
+    smc_bos_bear    = ch7d  < -8 and ch30d > 10
+    smc_ob_accum    = 5 <= vol_ratio <= 40 and abs(ch24h) < 2
+    smc_liq_sweep   = ch1h < -3 and vol_ratio >= 5
+    smc_smart_accum = ch24h < -3 and ch7d > 0 and 5 <= vol_ratio <= 50
+    smc_smart_dist  = ch24h > 8  and 10 <= vol_ratio <= 50
+    smc_fvg_bull    = ch1h >= 2 and ch24h > 3
+    smc_fvg_bear    = ch1h <= -2 and ch24h < -3
 
-    # LIQUIDITY SWEEP: свип ликвидности перед разворотом
-    # Прокси: резкий всплеск вниз с объёмом → свип лоёв, потом рост
-    smc_liq_sweep_bull = ch1h < -4 and vol_ratio >= 12  # свип низов с объёмом
-    smc_liq_sweep_bear = ch1h > 4  and vol_ratio >= 12  # свип хаёв с объёмом
+    fund_rank_top20  = rank <= 20
+    fund_rank_top50  = rank <= 50
+    fund_rank_top200 = rank <= 200
+    fund_liquid      = vol >= 10_000_000 and vol_ratio <= 50
+    fund_mega        = mcap >= 1_000_000_000
+    fund_mid         = mcap >= 100_000_000
+    fund_recovery    = ch90d < -40 and ch7d > 5 and not suspicious
 
-    # SMART MONEY DIVERGENCE: цена падает, объём растёт → накопление
-    smc_smart_accum = ch24h < -5 and vol_ratio >= 15  # умные деньги покупают на падении
-    smc_smart_dist  = ch24h > 10  and vol_ratio >= 15  # умные деньги продают на росте
+    # DIRECTION SCORE
+    dir_score = 0
+    if ch24h >= 10:   dir_score += 4
+    elif ch24h >= 5:  dir_score += 3
+    elif ch24h >= 2:  dir_score += 2
+    elif ch24h >= 0:  dir_score += 1
+    elif ch24h >= -3:  dir_score -= 1
+    elif ch24h >= -8:  dir_score -= 2
+    elif ch24h >= -15: dir_score -= 3
+    else:              dir_score -= 4
 
-    # ── ФУНДАМЕНТАЛЬНЫЙ АНАЛИЗ ──
-    # Ранг монеты (топ монеты более надёжны)
-    fund_rank_top50   = rank <= 50
-    fund_rank_top200  = rank <= 200
-    # Liquidity score: большой объём относительно капы = ликвидная монета
-    fund_liquid = vol >= 50_000_000      # объём > $50M = ликвидная
-    fund_mega   = mcap >= 1_000_000_000  # капа > $1B = голубые фишки
-    fund_mid    = mcap >= 100_000_000    # капа > $100M = средний уровень
-    # Recovery potential: сильно упала за 90д но начинает восстановление
-    fund_recovery = ch90d < -50 and ch7d > 5  # упала -50% за 90д, но +5% за неделю
+    if ch7d >= 10:  dir_score += 3
+    elif ch7d >= 3: dir_score += 2
+    elif ch7d >= 0: dir_score += 1
+    elif ch7d >= -5:  dir_score -= 1
+    elif ch7d >= -15: dir_score -= 2
+    else:             dir_score -= 3
 
-    # ── ROCKET SCORE (0-100) — главный показатель потенциала ──
-    rocket = 50  # база
+    if ch30d >= 20: dir_score += 2
+    elif ch30d >= 5: dir_score += 1
+    elif ch30d >= -10: pass
+    elif ch30d >= -25: dir_score -= 1
+    else:              dir_score -= 2
 
-    # Технический анализ (+/-)
-    if above_ema200 and above_ema50 and above_ema20: rocket += 8
-    elif above_ema50 and above_ema20:                rocket += 5
-    elif above_ema20:                                rocket += 2
+    if ch1h >= 2: dir_score += 1
+    elif ch1h <= -2: dir_score -= 1
+
+    if smc_bos_bull:    dir_score += 2
+    if smc_smart_accum: dir_score += 2
+    if tf_aligned_bull: dir_score += 2
+    if smc_bos_bear:    dir_score -= 2
+    if tf_aligned_bear: dir_score -= 2
+    if fund_recovery:   dir_score += 3
+    if fund_rank_top20 and dir_score >= -2:
+        dir_score = max(dir_score, 0)
+
+    is_long = dir_score >= 0
+
+    # ROCKET SCORE
+    rocket = 50
+    if above_ema200 and above_ema50 and above_ema20: rocket += 6
+    elif above_ema50 and above_ema20:                rocket += 3
+    elif above_ema20:                                rocket += 1
     elif not above_ema50 and not above_ema200:       rocket -= 8
 
-    if rsi_4h < 30:   rocket += 8   # перепродан — лучшая точка входа
-    elif rsi_4h < 40: rocket += 5
-    elif rsi_4h < 50: rocket += 2
-    elif rsi_4h > 70: rocket -= 5
-    elif rsi_4h > 80: rocket -= 8
+    if is_long:
+        if rsi_4h < 30:   rocket += 10
+        elif rsi_4h < 40: rocket += 7
+        elif rsi_4h < 50: rocket += 3
+        elif rsi_4h > 75: rocket -= 5
+        elif rsi_4h > 65: rocket -= 2
+    else:
+        if rsi_4h > 75:   rocket += 10
+        elif rsi_4h > 65: rocket += 7
+        elif rsi_4h > 55: rocket += 3
+        elif rsi_4h < 35: rocket -= 5
 
-    if macd_bullish:  rocket += 5
-    if macd_bearish:  rocket -= 5
-    if bb_squeeze:    rocket += 3   # сжатие перед взрывом
-    if bb_breakout and ch1h > 0: rocket += 4
-
-    if vol_spike:              rocket += 6
-    elif vol_high:             rocket += 3
-    elif vol_low:              rocket -= 4
-    if vol_confirm_bull:       rocket += 5
-    if vol_confirm_bear:       rocket -= 5
-
-    if tf_aligned_bull:        rocket += 6
-    if tf_aligned_bear:        rocket -= 6
-    if momentum_accel:         rocket += 4
-
-    # SMC факторы
-    if smc_bos_bull:           rocket += 7   # BOS пробой вверх — сильный сигнал
-    if smc_bos_bear:           rocket -= 7
-    if smc_ob_accumulation:    rocket += 6   # накопление OB
-    if smc_liq_sweep_bull:     rocket += 5   # свип лоёв → готов к росту
-    if smc_liq_sweep_bear:     rocket -= 5
-    if smc_smart_accum:        rocket += 8   # умные деньги покупают
-    if smc_smart_dist:         rocket -= 6   # умные деньги продают
-    if smc_fvg_bull:           rocket += 3   # FVG вверх
-    if smc_fvg_bear:           rocket -= 3
-
-    # Фундаментальные факторы
-    if fund_rank_top50:        rocket += 5
-    elif fund_rank_top200:     rocket += 3
-    if fund_liquid:            rocket += 4
-    if fund_mega:              rocket += 4
-    elif fund_mid:             rocket += 2
-    if fund_recovery:          rocket += 9   # восстановление после обвала
-
-    # 90д momentum
-    if ch90d > 50:             rocket -= 4  # перегрета (90д +50%)
-    elif ch90d > 0:            rocket += 2  # устойчивый рост
-    elif ch90d < -70:          rocket += 5  # глубокая коррекция = возможность
+    if tf_bull_strong and is_long:      rocket += 7
+    if tf_bear_strong and not is_long:  rocket += 7
+    if macd_bullish and is_long:        rocket += 4
+    if macd_bearish and not is_long:    rocket += 4
+    if bb_squeeze:                      rocket += 4
+    if bb_breakout and momentum_pos and is_long: rocket += 5
+    if vol_spike:   rocket += 5
+    elif vol_high:  rocket += 2
+    elif vol_low:   rocket -= 5
+    if vol_confirm_bull and is_long:     rocket += 5
+    if vol_confirm_bear and not is_long: rocket += 5
+    if smc_bos_bull and is_long:         rocket += 7
+    if smc_ob_accum and is_long:         rocket += 5
+    if smc_liq_sweep and is_long:        rocket += 4
+    if smc_smart_accum and is_long:      rocket += 8
+    if smc_fvg_bull and is_long:         rocket += 3
+    if fund_rank_top20:                  rocket += 6
+    elif fund_rank_top50:                rocket += 4
+    elif fund_rank_top200:               rocket += 2
+    if fund_liquid:                      rocket += 3
+    if fund_mega:                        rocket += 3
+    elif fund_mid:                       rocket += 1
+    if fund_recovery and is_long:        rocket += 9
+    if suspicious:                       rocket -= 20
+    if ch90d > 100:                      rocket -= 5
+    if ch24h < -10 and is_long:          rocket -= 8
+    if ch7d  < -15 and is_long:          rocket -= 6
 
     rocket = max(0, min(100, rocket))
+    score  = dir_score - (3 if suspicious else 0)
 
-    # ── ОСНОВНОЙ SCORE для сортировки сигналов ──
-    score = 0
-    if above_ema200 and above_ema50 and above_ema20: score += 3
-    elif above_ema50 and above_ema20:                score += 2
-    elif above_ema20:                                score += 1
-    elif not above_ema50 and not above_ema200:       score -= 2
-    if rsi_4h < 30:    score += 3
-    elif rsi_4h < 40:  score += 2
-    elif rsi_4h > 70:  score -= 2
-    elif rsi_4h > 80:  score -= 3
-    if ch24h >= 10:    score += 2
-    elif ch24h >= 4:   score += 1
-    elif ch24h <= -10: score -= 2
-    elif ch24h <= -4:  score -= 1
-    if ch1h >= 3:      score += 1
-    elif ch1h <= -3:   score -= 1
-    if vol_ratio >= 20: score += 2
-    elif vol_ratio >= 10: score += 1
-    if smc_bos_bull:    score += 2
-    if smc_smart_accum: score += 2
-    if tf_aligned_bull: score += 1
-    if fund_recovery:   score += 2
-
-    is_long = score >= 0
-
-    # Дополнительная проверка: если монета падает по всем TF — это шорт
-    # Независимо от score
-    if ch24h < -5 and ch7d < -10 and ch30d < -15:
-        is_long = False
-    # Если монета растёт по всем TF — это лонг
-    if ch24h > 3 and ch7d > 5 and ch30d > 5:
-        is_long = True
-
-    # ── TP/SL динамические (учитываем волатильность) ──
-    # Чем выше RSI и объём, тем агрессивнее TP
     tp_mult = 1.0
-    if rsi_4h < 35:  tp_mult = 1.3  # перепродан → больше потенциал
-    if vol_spike:    tp_mult *= 1.2
+    if rsi_4h < 35 and is_long: tp_mult = 1.3
+    if vol_spike:                tp_mult = min(tp_mult * 1.15, 1.5)
 
     if is_long:
         tp1   = round(price * (1 + 0.04 * tp_mult), 8)
@@ -615,7 +647,6 @@ def full_analysis(coin: dict) -> dict:
 
     rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
 
-    # EMA значения (приближение)
     ema20_1h  = round(price / (1 + ch1h  / 100 * 0.15), 8)
     ema50_1h  = round(price / (1 + ch1h  / 100 * 0.40), 8)
     ema200_1h = round(price / (1 + ch1h  / 100 * 1.20), 8)
@@ -626,7 +657,6 @@ def full_analysis(coin: dict) -> dict:
     ema50_1d  = round(price / (1 + ch7d  / 100 * 0.20), 8)
     ema200_1d = round(price / (1 + ch7d  / 100 * 0.60), 8)
 
-    # ── МЕТКИ ──
     if rocket >= 80:   rocket_label = "🚀🔥 ROCKET"
     elif rocket >= 70: rocket_label = "🚀 СИЛЬНЫЙ"
     elif rocket >= 60: rocket_label = "✅ ХОРОШИЙ"
@@ -634,30 +664,29 @@ def full_analysis(coin: dict) -> dict:
     elif rocket >= 40: rocket_label = "🟠 СЛАБЫЙ"
     else:              rocket_label = "🔴 ИЗБЕГАТЬ"
 
-    if score >= 7:    label = "🚀🔥 СИЛЬНЫЙ ЛОНГ"
-    elif score >= 5:  label = "🔥 ЛОНГ"
-    elif score >= 3:  label = "✅ ЛОНГ"
+    if score >= 8:    label = "🚀🔥 СИЛЬНЫЙ ЛОНГ" if is_long else "💥 СИЛЬНЫЙ ШОРТ"
+    elif score >= 5:  label = "🔥 ЛОНГ" if is_long else "🔻 ШОРТ"
+    elif score >= 3:  label = "✅ ЛОНГ" if is_long else "📉 ШОРТ"
     elif score >= 1:  label = "📈 СЛАБЫЙ ЛОНГ"
     elif score >= -1: label = "⚪️ НЕЙТРАЛЬНО"
-    elif score >= -3: label = "📉 СЛАБЫЙ ШОРТ"
-    elif score >= -5: label = "🔻 ШОРТ"
-    else:             label = "💥 СИЛЬНЫЙ ШОРТ"
+    else:             label = "🔻 ШОРТ"
 
-    # SMC факторы для отображения
     smc_factors = []
-    if smc_bos_bull:        smc_factors.append("BOS ↑")
-    if smc_bos_bear:        smc_factors.append("BOS ↓")
-    if smc_ob_accumulation: smc_factors.append("OB Накопление")
-    if smc_liq_sweep_bull:  smc_factors.append("Liq Sweep ↑")
-    if smc_liq_sweep_bear:  smc_factors.append("Liq Sweep ↓")
-    if smc_smart_accum:     smc_factors.append("Smart Accum 💎")
-    if smc_smart_dist:      smc_factors.append("Smart Dist ⚠️")
-    if smc_fvg_bull:        smc_factors.append("FVG ↑")
-    if smc_fvg_bear:        smc_factors.append("FVG ↓")
-    if tf_aligned_bull:     smc_factors.append("TF Align Bull")
-    if fund_recovery:       smc_factors.append("Recovery 🔄")
-    if bb_squeeze:          smc_factors.append("BB Squeeze")
-    if macd_bullish:        smc_factors.append("MACD Bull")
+    if smc_bos_bull:    smc_factors.append("BOS ↑")
+    if smc_bos_bear:    smc_factors.append("BOS ↓")
+    if smc_ob_accum:    smc_factors.append("OB Накопление")
+    if smc_liq_sweep:   smc_factors.append("Liq Sweep")
+    if smc_smart_accum: smc_factors.append("Smart Accum 💎")
+    if smc_smart_dist:  smc_factors.append("Smart Dist ⚠️")
+    if smc_fvg_bull:    smc_factors.append("FVG ↑")
+    if smc_fvg_bear:    smc_factors.append("FVG ↓")
+    if tf_aligned_bull: smc_factors.append("TF Align Bull")
+    if tf_aligned_bear: smc_factors.append("TF Align Bear")
+    if fund_recovery:   smc_factors.append("Recovery 🔄")
+    if bb_squeeze:      smc_factors.append("BB Squeeze")
+    if macd_bullish:    smc_factors.append("MACD Bull")
+    if macd_bearish:    smc_factors.append("MACD Bear")
+    if suspicious:      smc_factors.append("⚠️ Vol аномалия")
 
     return {
         "label": label, "score": score, "is_long": is_long,
@@ -670,15 +699,14 @@ def full_analysis(coin: dict) -> dict:
         "ema20_1h": ema20_1h, "ema50_1h": ema50_1h, "ema200_1h": ema200_1h,
         "ema20_4h": ema20_4h, "ema50_4h": ema50_4h, "ema200_4h": ema200_4h,
         "ema20_1d": ema20_1d, "ema50_1d": ema50_1d, "ema200_1d": ema200_1d,
-        # SMC / TA флаги
         "above_ema200": above_ema200, "above_ema50": above_ema50, "above_ema20": above_ema20,
         "macd_bullish": macd_bullish, "macd_bearish": macd_bearish,
         "bb_squeeze": bb_squeeze, "vol_spike": vol_spike,
         "tf_aligned_bull": tf_aligned_bull, "smc_bos_bull": smc_bos_bull,
         "smc_smart_accum": smc_smart_accum, "fund_recovery": fund_recovery,
-        "smc_factors": smc_factors,
+        "smc_factors": smc_factors, "suspicious": suspicious,
         "fund_rank_top50": fund_rank_top50, "fund_liquid": fund_liquid,
-        "st_label": "—",  # будет заполнено в send_coin если нужно
+        "st_label": "—",
     }
 
 # ═══════════════════════════════════════════
@@ -959,13 +987,22 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
 # ═══════════════════════════════════════════
 # ТЕКСТ СИГНАЛА
 # ═══════════════════════════════════════════
-def build_signal_text(symbol: str, a: dict, stats_24h: dict = None, atl: float = 0) -> str:
+def build_signal_text(symbol: str, a: dict,
+                      stats_24h: dict = None,
+                      atl: float = 0,
+                      extras: dict = None) -> str:
+    """
+    Чистый формат сигнала.
+    Убрано: EMA таблица (видна на графике), Vol/MCap%, строка 1H/24H/7D/30D
+    Добавлено: Фандинг рейт, Open Interest, итоговый вывод
+    """
     is_long = a["is_long"]
     price   = a["price"]
     tp1, tp2, tp3 = a["tp1"], a["tp2"], a["tp3"]
     sl, swing     = a["sl"],  a["swing"]
-    rsi_1h = a["rsi_1h"]; rsi_4h = a["rsi_4h"]; rsi_1d = a["rsi_1d"]
-    rr     = a["rr"]; vol = a["vol"]
+    rsi_4h = a["rsi_4h"]
+    rr     = a["rr"]
+    vol    = a["vol"]
     rocket = a.get("rocket", 50)
     rocket_label = a.get("rocket_label", "")
 
@@ -978,73 +1015,112 @@ def build_signal_text(symbol: str, a: dict, stats_24h: dict = None, atl: float =
         v = d if is_long else -d
         return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
 
-    def sl_pct(): return f"-{abs(sl-price)/price*100:.2f}%"
+    def sl_pct(): return f"-{abs(sl - price) / price * 100:.2f}%"
 
+    vol_str = (f"${vol/1e9:.2f}B" if vol >= 1e9 else
+               f"${vol/1e6:.1f}M" if vol >= 1e6 else f"${vol/1e3:.0f}K")
+
+    filled = int(rocket / 10)
+    bar    = "█" * filled + "░" * (10 - filled)
+
+    # EMA позиция (кратко)
+    ema_pos = []
+    if a.get("above_ema200"): ema_pos.append("EMA200✅")
+    if a.get("above_ema50"):  ema_pos.append("EMA50✅")
+    if a.get("above_ema20"):  ema_pos.append("EMA20✅")
+    if not ema_pos:           ema_pos = ["Ниже всех EMA ⚠️"]
+    ema_str = " | ".join(ema_pos)
+
+    # RSI иконка
     def rsi_icon(r):
         if r < 30: return "🟢"
         if r > 70: return "🔴"
         return "🔵"
 
-    vol_str = (f"${vol/1e9:.2f}B" if vol >= 1e9 else
-               f"${vol/1e6:.1f}M" if vol >= 1e6 else f"${vol/1e3:.0f}K")
+    # SMC факторы — только значимые (без BB Squeeze)
+    raw_smc = [f for f in a.get("smc_factors", [])
+               if "BB Squeeze" not in f and "MACD" not in f]
+    smc_key = raw_smc[:3] if raw_smc else []
 
-    def ep(v):
-        if not v: return "—"
-        d = (price - v) / v * 100
-        return f"{'▲' if d>=0 else '▼'}{abs(d):.1f}%"
+    # Дополнительные индикаторы
+    macd_str = "▲ Бычий" if a.get("macd_bullish") else ("▼ Медвежий" if a.get("macd_bearish") else "Нейтральный")
+    st_str   = a.get("st_label", "—")
 
-    filled = int(rocket / 10)
-    bar = "█" * filled + "░" * (10 - filled)
-
-    smc_factors = a.get("smc_factors", [])
-    smc_line = "  ".join(smc_factors[:5]) if smc_factors else "—"
-
-    ema_pos = []
-    if a.get("above_ema200"): ema_pos.append("EMA200✅")
-    if a.get("above_ema50"):  ema_pos.append("EMA50✅")
-    if a.get("above_ema20"):  ema_pos.append("EMA20✅")
-    if not ema_pos: ema_pos = ["Ниже всех EMA⚠️"]
+    # Итоговый вывод
+    score = a.get("score", 0)
+    if rocket >= 75 and is_long:
+        conclusion = "🔥 Высокий потенциал — приоритетный сетап"
+    elif rocket >= 60 and is_long:
+        conclusion = "✅ Хороший сетап — можно рассматривать"
+    elif rocket >= 75 and not is_long:
+        conclusion = "📉 Сильный шорт-сетап"
+    elif is_long and a.get("smc_smart_accum"):
+        conclusion = "💎 Smart Money накапливают — следим"
+    elif is_long and a.get("fund_recovery"):
+        conclusion = "🔄 Восстановление после коррекции"
+    else:
+        conclusion = "⚠️ Слабый сигнал — ждём подтверждения"
 
     lines = [
         f"📊 *{symbol}USDT*  {side_emoji} *{side_text}*",
         f"🕐 {now_utc3()}",
         "",
-        f"🚀 *Rocket Score:* `{rocket}/100`  {rocket_label}",
-        f"`{bar}`",
-        f"📍 {' | '.join(ema_pos)}",
+        f"🚀 *{rocket}/100* {rocket_label}  `{bar}`",
+        f"📍 {ema_str}",
+        f"💡 {conclusion}",
         "",
-        f"💰 Вход:  `{fp(price)}`",
-        f"🎯 TP1:  `{fp(tp1)}`  ({pct(tp1)})",
-        f"🎯 TP2:  `{fp(tp2)}`  ({pct(tp2)})",
-        f"🎯 TP3:  `{fp(tp3)}`  ({pct(tp3)})",
-        f"🛑 SL:   `{fp(sl)}`   ({sl_pct()})",
+        f"💰 Вход:    `{fp(price)}`",
+        f"🎯 TP1:    `{fp(tp1)}`  ({pct(tp1)})",
+        f"🎯 TP2:    `{fp(tp2)}`  ({pct(tp2)})",
+        f"🎯 TP3:    `{fp(tp3)}`  ({pct(tp3)})",
+        f"🛑 SL:      `{fp(sl)}`  ({sl_pct()})",
         f"📌 {swing_lbl}:  `{fp(swing)}`",
         "",
         "━━━━━━━━━━━━━━━━━━",
-        f"📐 R:R: 1:{rr:.1f}  |  💹 Объём: {vol_str}",
-        f"🏆 Rank #{a.get('rank','—')}  |  Vol/MCap: {a.get('vol_ratio',0):.1f}%",
-        f"📊 1H `{fc(a['ch1h'])}`  24H `{fc(a['ch24h'])}`  7D `{fc(a['ch7d'])}`  30D `{fc(a['ch30d'])}`",
-        "",
-        f"🧠 *SMC:* `{smc_line}`",
-        "",
-        "📉 *EMA (% от цены):*",
-        f"┌ 1H  EMA20`{ep(a['ema20_1h'])}` EMA50`{ep(a['ema50_1h'])}` EMA200`{ep(a['ema200_1h'])}`",
-        f"├ 4H  EMA20`{ep(a['ema20_4h'])}` EMA50`{ep(a['ema50_4h'])}` EMA200`{ep(a['ema200_4h'])}`",
-        f"└ 1D  EMA20`{ep(a['ema20_1d'])}` EMA50`{ep(a['ema50_1d'])}` EMA200`{ep(a['ema200_1d'])}`",
-        "",
-        f"📈 RSI: 1H{rsi_icon(rsi_1h)}`{rsi_1h:.0f}` 4H{rsi_icon(rsi_4h)}`{rsi_4h:.0f}` 1D{rsi_icon(rsi_1d)}`{rsi_1d:.0f}`",
-        f"⚡️ *Supertrend (4H):* `{a.get('st_label', '—')}`",
+        f"📐 R:R `1:{rr:.1f}`  |  💹 Объём `{vol_str}`  |  Rank `#{a.get('rank','—')}`",
+        f"📈 RSI 4H {rsi_icon(rsi_4h)}`{rsi_4h:.0f}`  |  MACD `{macd_str}`",
+        f"⚡️ Supertrend: `{st_str}`",
     ]
 
-    if stats_24h:
-        h24 = stats_24h.get("high", 0); l24 = stats_24h.get("low", 0)
-        if h24 and l24:
-            lines += ["", "━━━━━━━━━━━━━━━━━━",
-                      f"📅 *24H:*  🔼`{fp(h24)}`  🔽`{fp(l24)}`",
-                      f"🎯 *Лучший вход дня:* `{fp(l24*1.005)}`"]
+    # SMC факторы
+    if smc_key:
+        lines.append(f"🧠 SMC: `{'  •  '.join(smc_key)}`")
 
+    # 24H min/max + лучший вход
+    if stats_24h:
+        h24 = stats_24h.get("high", 0)
+        l24 = stats_24h.get("low",  0)
+        if h24 and l24:
+            best = l24 * 1.005 if is_long else h24 * 0.995
+            lines += [
+                "",
+                "━━━━━━━━━━━━━━━━━━",
+                f"📅 24H:  🔼 `{fp(h24)}`   🔽 `{fp(l24)}`",
+                f"🎯 Лучший вход дня: `{fp(best)}`",
+            ]
+
+    # Фандинг + OI (если есть данные с фьючерсов)
+    if extras:
+        fr = extras.get("funding", {})
+        oi = extras.get("oi", {})
+        if fr.get("ok") or oi.get("ok"):
+            lines.append("")
+            lines.append("━━━━━━━━━━━━━━━━━━")
+        if fr.get("ok"):
+            rate_str = f"{fr['rate']:+.4f}%"
+            lines.append(f"💸 *Фандинг:* `{rate_str}`  {fr['signal']}")
+        if oi.get("ok") and oi.get("oi", 0) > 0:
+            oi_ch = oi.get("change", 0)
+            oi_str = f"{oi_ch:+.1f}% за 24ч"
+            lines.append(f"📊 *OI:* `{oi_str}`  {oi['signal']}")
+
+    # Исторический минимум
     if atl and atl > 0:
-        lines.append(f"🏆 *Ист. минимум:* `{fp(atl)}`")
+        from_atl = (price - atl) / atl * 100
+        lines.append(f"🏆 От ист. минимума: `+{from_atl:.0f}%`  (min `{fp(atl)}`)")
+
+    lines += ["", f"#{symbol}USDT"]
+    return "\n".join(lines)
 
     lines += ["", f"#{symbol}USDT"]
     return "\n".join(lines)
@@ -1372,7 +1448,10 @@ async def send_signals_batch(bot, chat_id, coins):
     analyzed = [(c, full_analysis(c)) for c in coins]
 
     # Сортировка по Rocket Score — лучшие монеты первыми
-    rockets  = sorted([(c,a) for c,a in analyzed if a["rocket"] >= 65 and a["is_long"]],
+    rockets  = sorted([(c,a) for c,a in analyzed
+                       if a["rocket"] >= 65 and a["is_long"]
+                       and not a.get("suspicious", False)
+                       and a["ch24h"] > -5],   # не падает сегодня
                       key=lambda x: x[1]["rocket"], reverse=True)[:3]
     longs    = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
                       key=lambda x: x[1]["score"], reverse=True)[:5]
@@ -1409,16 +1488,17 @@ async def send_signals_batch(bot, chat_id, coins):
     async def _send(coin, a):
         sym  = coin["symbol"]
         slug = coin.get("slug", sym.lower())
-        # Получаем Supertrend
+        # Supertrend
         try:
             st_data = get_supertrend_signal(sym)
             a["st_label"] = st_data["label"]
         except:
             a["st_label"] = "—"
-        stats = get_binance_24h(sym)
-        text  = build_signal_text(sym, a, stats)
+        stats  = get_binance_24h(sym)
+        extras = get_market_extras(sym)  # фандинг + OI
+        text   = build_signal_text(sym, a, stats, extras=extras)
         await send_coin(bot, chat_id, sym, slug, a, text)
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2.0)  # чуть больше паузы из-за доп запросов
 
     for coin, a in rockets:
         await _send(coin, a)
@@ -1487,11 +1567,17 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not coin:
         await msg.edit_text(f"❌ {symbol} не найден в топ-500")
         return
-    a     = full_analysis(coin)
-    slug  = coin.get("slug", symbol.lower())
-    stats = get_binance_24h(symbol)
-    atl   = get_binance_alltime_low(symbol)
-    text  = build_signal_text(symbol, a, stats, atl)
+    a      = full_analysis(coin)
+    slug   = coin.get("slug", symbol.lower())
+    try:
+        st_data = get_supertrend_signal(symbol)
+        a["st_label"] = st_data["label"]
+    except:
+        a["st_label"] = "—"
+    stats  = get_binance_24h(symbol)
+    atl    = get_binance_alltime_low(symbol)
+    extras = get_market_extras(symbol)
+    text   = build_signal_text(symbol, a, stats, atl, extras)
     await msg.delete()
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
 
@@ -1542,7 +1628,8 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Нет данных"); return
 
     analyzed = [(c, full_analysis(c)) for c in coins]
-    rockets  = sorted([(c,a) for c,a in analyzed],
+    rockets  = sorted([(c,a) for c,a in analyzed
+                       if not a.get("suspicious", False)],
                       key=lambda x: x[1]["rocket"], reverse=True)[:10]
 
     nav = InlineKeyboardMarkup([[
@@ -1644,7 +1731,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not coins:
             await q.edit_message_text("❌ Нет данных"); return
         analyzed = [(c, full_analysis(c)) for c in coins]
-        rockets  = sorted([(c,a) for c,a in analyzed],
+        rockets  = sorted([(c,a) for c,a in analyzed
+                           if not a.get("suspicious", False)],
                           key=lambda x: x[1]["rocket"], reverse=True)[:10]
         nav = InlineKeyboardMarkup([[
             InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
