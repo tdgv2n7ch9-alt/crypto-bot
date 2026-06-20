@@ -384,49 +384,61 @@ def generate_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
 # ТЕКСТ СИГНАЛА (стиль примера)
 # ═══════════════════════════════════════════
 def build_signal_text(symbol: str, coin: dict, a: dict) -> str:
+    """Формат 1в1 как Kriptano — чистый текст под графиком"""
     now  = datetime.now(TZ)
     name = coin.get("name", symbol)
     slug = coin.get("slug", symbol.lower())
     rank = coin.get("cmc_rank", "?")
-    side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
 
-    # Изменение по таймфреймам
-    ch_15m = a["ch1h"] * 0.25   # приблизительно
+    side_emoji = "🟢" if a["is_long"] else "🔴"
+    side_text  = "LONG" if a["is_long"] else "SHORT"
+
+    # Зоны набора — берём zone1 нижнюю и верхнюю границы
+    z1 = a["zone1"].replace("`", "")
+    z2 = a["zone2"].replace("`", "")
+    z3 = a["zone3"].replace("`", "")
+
+    # Изменения по таймфреймам
+    ch_15m = a["ch1h"] * 0.25
     ch_1h  = a["ch1h"]
     ch_4h  = (a["ch1h"] + a["ch24h"]) / 2
     ch_1d  = a["ch24h"]
 
-    text = (
-        f"🔥 Монета в игре: #{symbol}-USDT\n"
-        f"📊 {name}  {side}  •  #{rank} CMC\n"
-        f"\n"
-        f"💰 Цена: {fp(a['price'])}\n"
-        f"📈 Изменение: "
-        f"15м {fc(ch_15m)} | 1ч {fc(ch_1h)} | 4ч {fc(ch_4h)} | 1д {fc(ch_1d)}\n"
-        f"📉 RSI: "
-        f"4ч {a['rsi_4h']} | 1ч {a['rsi_1h']} | 15м {a['rsi_15m']}\n"
-        f"\n"
-        f"🎯 Зоны набора:\n"
-        f"{a['zone1']}\n"
-        f"{a['zone2']}\n"
-        f"{a['zone3']}\n"
-        f"\n"
-        f"💡 Зашли на 1-м уровне → усредняйте на 3-м,\n"
-        f"зашли на 2-м → усредняйте на 4-м\n"
-        f"🎲 Тейки устанавливайте на 4-6% чистого движения на откате\n"
-        f"🛑 Стоп-лосс на 6-9% за уровни после затихания волатильности\n"
-        f"\n"
-        f"EMA20: {'✅' if a['ema20'] else '❌'}  "
-        f"EMA50: {'✅' if a['ema50'] else '❌'}  "
-        f"EMA200: {'✅' if a['ema200'] else '❌'}\n"
-        f"\n"
-        f"⚡ {a['action']}\n"
-        f"\n"
-        f"🕐 Отправлено: {now.strftime('%d.%m %H:%M:%S')} UTC+3\n"
-        f"\n"
-        f"#{symbol}USDT"
-    )
-    return text
+    def ps(ch): return ("+" if ch >= 0 else "") + f"{ch:.2f}%"
+
+    lines = [
+        f"📊 *{symbol}USDT*  {side_emoji} *{side_text}*",
+        "",
+        f"💰 *Точка входа:* {fp(a['price'])}",
+        f"🎯 *Тейк-профит 1:* {a['tp1']}",
+        f"🎯 *Тейк-профит 2:* {a['tp2']}",
+        f"🎯 *Тейк-профит 3:* {a['tp3']}",
+        f"🛑 *Стоп лосс:* {a['stop']}",
+        f"📌 *Swing:* {a['swing']}",
+        "",
+        f"📈 *Изменение:* 15м {ps(ch_15m)} | 1ч {ps(ch_1h)} | 4ч {ps(ch_4h)} | 1д {ps(ch_1d)}",
+        f"📉 *RSI:* 4ч {a['rsi_4h']} | 1ч {a['rsi_1h']}",
+        "",
+        f"🎯 *Зоны набора:*",
+        z1,
+        z2,
+        z3,
+        "",
+        f"💡 Зашли на 1-м уровне → усредняйте на 3-м,",
+        f"зашли на 2-м → усредняйте на 4-м",
+        f"🎲 Тейки на 4-6% чистого движения на откате",
+        f"🛑 Стоп-лосс на 6-9% за уровни после затихания волатильности",
+        "",
+        f"EMA20: {'✅' if a['ema20'] else '❌'}  EMA50: {'✅' if a['ema50'] else '❌'}  EMA200: {'✅' if a['ema200'] else '❌'}",
+        "",
+        f"⚡ *{a['action']}*",
+        "",
+        f"🕐 Отправлено: {now.strftime('%d.%m %H:%M:%S')} UTC+3",
+        "",
+        f"#{symbol}USDT",
+    ]
+    return "\n".join(lines)
+
 
 # ═══════════════════════════════════════════
 # СВОДКА РЫНКА
@@ -438,19 +450,18 @@ def build_market_report(coins: list) -> list:
     pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
     pct = pos / len(coins) * 100
     mood = "🟢 Бычий" if pct >= 60 else ("🔴 Медвежий" if pct < 40 else "🟡 Нейтральный")
+    now_str = now.strftime("%d.%m.%Y  %H:%M")
+    sent_str = now.strftime("%d.%m %H:%M:%S")
 
     def arr(ch): return "🟢" if ch >= 5 else ("🔵" if ch >= 0 else ("🟠" if ch >= -5 else "🔴"))
-    def ps(ch): return f"+{ch:.2f}%" if ch >= 0 else f"{ch:.2f}%"
-
-    sep = ""
-    now_str = now.strftime("%d.%m.%Y  %H:%M")
+    def ps(ch): return ("+" if ch >= 0 else "") + f"{ch:.2f}%"
 
     lines1 = [
-        f"📊 *BEST TRADE — Обзор рынка*",
-        f"🕐 {now_str} Istanbul",
+        "🔥 *Обзор рынка*",
+        "📊 BEST TRADE  •  " + now_str + " Istanbul",
         "",
-        f"Сентимент: {mood}",
-        f"Растут: {pos}/{len(coins)} ({pct:.0f}%)",
+        "Сентимент: " + mood,
+        "Растут: " + str(pos) + " из " + str(len(coins)) + " монет (" + f"{pct:.0f}" + "%)",
         "",
         "🚀 *ТОП-15 РОСТ за 24ч*",
     ]
@@ -458,26 +469,37 @@ def build_market_report(coins: list) -> list:
     for i, c in enumerate(up[:15], 1):
         q  = c["quote"]["USDT"]
         ch = q.get("percent_change_24h", 0)
-        lines1.append(f"{arr(ch)} {i}. *{c['symbol']}*  ${fp(q['price'])}  {ps(ch)}")
+        sym = c["symbol"]
+        price = fp(q["price"])
+        pct_s = ps(ch)
+        icon = arr(ch)
+        lines1.append(icon + " " + str(i) + ". *" + sym + "*")
+        lines1.append("    💰 $" + price + "  " + pct_s)
     for c in up[:8]:
         b1.append(InlineKeyboardButton(
-            f"📊 {c['symbol']}",
+            "📊 " + c["symbol"],
             url=cmc_link(c.get("slug", c["symbol"].lower()))
         ))
 
-    lines2 = [
-        "📉 *ТОП-15 ПАДЕНИЕ за 24ч*",
-    ]
+    lines2 = ["📉 *ТОП-15 ПАДЕНИЕ за 24ч*"]
     b2 = []
     for i, c in enumerate(dn[:15], 1):
         q  = c["quote"]["USDT"]
         ch = q.get("percent_change_24h", 0)
-        lines2.append(f"{arr(ch)} {i}. *{c['symbol']}*  ${fp(q['price'])}  {ps(ch)}")
-    lines2.append("")
-    lines2.append("📡 CoinMarketCap • Топ-300 монет")
+        sym = c["symbol"]
+        price = fp(q["price"])
+        pct_s = ps(ch)
+        icon = arr(ch)
+        lines2.append(icon + " " + str(i) + ". *" + sym + "*")
+        lines2.append("    💰 $" + price + "  " + pct_s)
+    lines2.extend([
+        "",
+        "🕐 Отправлено: " + sent_str + " UTC+3",
+        "📡 CoinMarketCap • Топ-300 монет",
+    ])
     for c in dn[:8]:
         b2.append(InlineKeyboardButton(
-            f"📊 {c['symbol']}",
+            "📊 " + c["symbol"],
             url=cmc_link(c.get("slug", c["symbol"].lower()))
         ))
 
