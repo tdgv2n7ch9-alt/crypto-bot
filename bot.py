@@ -217,6 +217,139 @@ def calc_rsi(prices, period=14):
     if al == 0: return 100.0
     return round(100 - (100 / (1 + ag / al)), 1)
 
+def calc_atr(candles: list, period: int = 14) -> list:
+    """Average True Range"""
+    if len(candles) < 2:
+        return [0.0] * len(candles)
+    trs = [0.0]
+    for i in range(1, len(candles)):
+        h = candles[i]["high"]
+        l = candles[i]["low"]
+        pc = candles[i-1]["close"]
+        tr = max(h - l, abs(h - pc), abs(l - pc))
+        trs.append(tr)
+    atrs = [0.0] * period
+    if len(trs) >= period:
+        atrs_val = sum(trs[:period]) / period
+        atrs[period-1] = atrs_val
+        for i in range(period, len(trs)):
+            atrs_val = (atrs_val * (period - 1) + trs[i]) / period
+            atrs.append(atrs_val)
+    else:
+        atrs = [0.0] * len(trs)
+    # Pad to match candles length
+    while len(atrs) < len(candles):
+        atrs.append(atrs[-1] if atrs else 0.0)
+    return atrs[:len(candles)]
+
+def calc_supertrend(candles: list, period: int = 10, multiplier: float = 3.0) -> list:
+    """
+    Supertrend индикатор.
+    Возвращает список dict: {"value": float, "direction": 1=bull/-1=bear, "signal": "BUY"/"SELL"/None}
+    signal — только в момент смены направления
+    """
+    n    = len(candles)
+    atrs = calc_atr(candles, period)
+
+    results    = [{"value": 0.0, "direction": 1, "signal": None}] * n
+    upper_band = [0.0] * n
+    lower_band = [0.0] * n
+    st         = [0.0] * n
+    direction  = [1]  * n  # 1 = bull, -1 = bear
+
+    for i in range(period, n):
+        hl2  = (candles[i]["high"] + candles[i]["low"]) / 2
+        atr  = atrs[i]
+        ub   = hl2 + multiplier * atr
+        lb   = hl2 - multiplier * atr
+
+        # Adjust bands
+        if i > period:
+            prev_ub = upper_band[i-1]
+            prev_lb = lower_band[i-1]
+            ub = min(ub, prev_ub) if candles[i-1]["close"] < prev_ub else ub
+            lb = max(lb, prev_lb) if candles[i-1]["close"] > prev_lb else lb
+
+        upper_band[i] = ub
+        lower_band[i] = lb
+
+        prev_dir  = direction[i-1] if i > period else 1
+        prev_st   = st[i-1] if i > period else lb
+        close     = candles[i]["close"]
+
+        if prev_dir == 1:
+            # Was bullish — stay bullish if close > lower band
+            if close < lower_band[i]:
+                direction[i] = -1
+                st[i]        = upper_band[i]
+            else:
+                direction[i] = 1
+                st[i]        = lower_band[i]
+        else:
+            # Was bearish — stay bearish if close < upper band
+            if close > upper_band[i]:
+                direction[i] = 1
+                st[i]        = lower_band[i]
+            else:
+                direction[i] = -1
+                st[i]        = upper_band[i]
+
+        # Signal — только при смене
+        sig = None
+        if i > period and direction[i] != direction[i-1]:
+            sig = "BUY" if direction[i] == 1 else "SELL"
+
+        results[i] = {"value": st[i], "direction": direction[i], "signal": sig}
+
+    return results
+
+def get_supertrend_signal(symbol: str) -> dict:
+    """
+    Получает текущий сигнал Supertrend для монеты.
+    Возвращает: direction, last_signal, last_signal_price, last_signal_time, pct_since_signal
+    """
+    candles = get_binance_ohlc(symbol, interval="4h", limit=100)
+    if not candles or len(candles) < 20:
+        return {"direction": 1, "last_signal": None, "label": "Нет данных"}
+
+    st = calc_supertrend(candles, period=10, multiplier=3.0)
+
+    current_dir = st[-1]["direction"]
+    current_val = st[-1]["value"]
+
+    # Ищем последний сигнал
+    last_signal = None
+    last_signal_price = None
+    last_signal_time  = None
+    for i in range(len(st) - 1, -1, -1):
+        if st[i]["signal"]:
+            last_signal       = st[i]["signal"]
+            last_signal_price = candles[i]["close"]
+            last_signal_time  = candles[i].get("time")
+            break
+
+    current_price = candles[-1]["close"]
+    pct = 0.0
+    if last_signal_price and last_signal_price > 0:
+        pct = (current_price - last_signal_price) / last_signal_price * 100
+        if last_signal == "SELL":
+            pct = -pct  # для шорта инвертируем
+
+    label = "🟢 BUY" if current_dir == 1 else "🔴 SELL"
+
+    return {
+        "direction":          current_dir,
+        "supertrend_value":   current_val,
+        "label":              label,
+        "last_signal":        last_signal,
+        "last_signal_price":  last_signal_price,
+        "last_signal_time":   last_signal_time,
+        "pct_since_signal":   round(pct, 2),
+        "current_price":      current_price,
+        "st_values":          st,
+        "candles":            candles,
+    }
+
 def full_analysis(coin: dict) -> dict:
     """
     Полный многофакторный анализ монеты:
@@ -485,6 +618,7 @@ def full_analysis(coin: dict) -> dict:
         "smc_smart_accum": smc_smart_accum, "fund_recovery": fund_recovery,
         "smc_factors": smc_factors,
         "fund_rank_top50": fund_rank_top50, "fund_liquid": fund_liquid,
+        "st_label": "—",  # будет заполнено в send_coin если нужно
     }
 
 # ═══════════════════════════════════════════
@@ -538,6 +672,9 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
     ema50_all  = calc_ema(closes_all, 50)
     ema200_all = calc_ema(closes_all, min(200, n_all))
 
+    # Supertrend по всем данным
+    st_all = calc_supertrend(candles, period=10, multiplier=3.0)
+
     # Показываем последние 100
     display_n = min(100, n_all)
     start_idx = n_all - display_n
@@ -545,6 +682,7 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
     ema20_v   = ema20_all[start_idx:]
     ema50_v   = ema50_all[start_idx:]
     ema200_v  = ema200_all[start_idx:]
+    st_v      = st_all[start_idx:]
 
     n    = len(candles)
     vols = [c.get("vol", 0) for c in candles]
@@ -579,6 +717,46 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
                    xmin=ob["idx"] / n, xmax=1.0,
                    alpha=0.10, color=ob_color, zorder=1)
 
+    # ── SUPERTREND — зелёная/красная зона под/над ценой ──
+    bull_xs, bull_ys = [], []
+    bear_xs, bear_ys = [], []
+    for i, s in enumerate(st_v):
+        if s["value"] > 0:
+            if s["direction"] == 1:
+                bull_xs.append(i); bull_ys.append(s["value"])
+            else:
+                bear_xs.append(i); bear_ys.append(s["value"])
+
+    if bull_xs:
+        ax.fill_between(bull_xs,
+                        [candles[i]["close"] for i in bull_xs],
+                        bull_ys,
+                        alpha=0.12, color=GREEN, zorder=1)
+        ax.scatter(bull_xs, bull_ys, color=GREEN, s=2.5, zorder=4, linewidths=0)
+    if bear_xs:
+        ax.fill_between(bear_xs,
+                        [candles[i]["close"] for i in bear_xs],
+                        bear_ys,
+                        alpha=0.12, color=RED, zorder=1)
+        ax.scatter(bear_xs, bear_ys, color=RED, s=2.5, zorder=4, linewidths=0)
+
+    # ── BUY/SELL стрелки на моментах переключения ──
+    for i, s in enumerate(st_v):
+        if s["signal"] == "BUY":
+            ax.annotate("▲ BUY",
+                        xy=(i, candles[i]["low"] * 0.9985),
+                        fontsize=7.5, color=GREEN, fontweight="bold",
+                        ha="center", va="top", zorder=10,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor=BG,
+                                  edgecolor=GREEN, alpha=0.85, lw=1.0))
+        elif s["signal"] == "SELL":
+            ax.annotate("▼ SELL",
+                        xy=(i, candles[i]["high"] * 1.0015),
+                        fontsize=7.5, color=RED, fontweight="bold",
+                        ha="center", va="bottom", zorder=10,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor=BG,
+                                  edgecolor=RED, alpha=0.85, lw=1.0))
+
     # ── СВЕЧИ ──
     w = 0.4
     for i, c in enumerate(candles):
@@ -607,6 +785,15 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
                     color=col, fontsize=6.2, va="center", fontweight="bold", zorder=8,
                     bbox=dict(boxstyle="round,pad=0.15", facecolor=BG,
                               alpha=0.7, edgecolor=col, lw=0.6))
+
+    # ── SUPERTREND подпись текущего состояния ──
+    current_st = st_v[-1] if st_v else {"direction": 1, "value": price}
+    st_label   = "🟢 SUPERTREND: BUY" if current_st["direction"] == 1 else "🔴 SUPERTREND: SELL"
+    st_color   = GREEN if current_st["direction"] == 1 else RED
+    ax.text(0.012, 0.79, st_label,
+            fontsize=8, color=st_color, fontweight="bold",
+            va="top", ha="left", transform=ax.transAxes, zorder=10,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor=BG, edgecolor=st_color, alpha=0.85, lw=1.2))
 
     # ── ЗОНЫ SL/TP ──
     if is_long:
@@ -786,6 +973,7 @@ def build_signal_text(symbol: str, a: dict, stats_24h: dict = None, atl: float =
         f"└ 1D  EMA20`{ep(a['ema20_1d'])}` EMA50`{ep(a['ema50_1d'])}` EMA200`{ep(a['ema200_1d'])}`",
         "",
         f"📈 RSI: 1H{rsi_icon(rsi_1h)}`{rsi_1h:.0f}` 4H{rsi_icon(rsi_4h)}`{rsi_4h:.0f}` 1D{rsi_icon(rsi_1d)}`{rsi_1d:.0f}`",
+        f"⚡️ *Supertrend (4H):* `{a.get('st_label', '—')}`",
     ]
 
     if stats_24h:
@@ -1067,7 +1255,17 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
          InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals")],
     ])
 
-    # Получаем 24h stats для графика
+    # Supertrend — получаем реальный сигнал
+    try:
+        st_data = get_supertrend_signal(symbol)
+        a["st_label"] = st_data["label"]
+        # Если текст ещё не содержит ST — пересобираем с ST
+        if "Supertrend" not in text:
+            stats_24h_for_text = get_binance_24h(symbol)
+            text = build_signal_text(symbol, a, stats_24h_for_text)
+    except Exception as e:
+        log.error(f"ST fetch {symbol}: {e}")
+
     stats_24h = get_binance_24h(symbol)
     chart = None
     try:
@@ -1430,8 +1628,79 @@ async def send_scheduled(bot: Bot):
         except Exception as e:
             log.error(f"Рассылка {cid}: {e}")
 
+supertrend_cache = {}  # {symbol: last_direction}
+
+async def check_supertrend_signals(bot, chat_ids, coins):
+    """
+    Проверяет смену Supertrend для топ монет.
+    Алерт когда BUY→SELL или SELL→BUY переключение.
+    Проверяем топ-50 по объёму (остальные слишком медленно).
+    """
+    now_ts = datetime.now(TZ).timestamp()
+    # Берём топ-50 по объёму 24h
+    top_by_vol = sorted(coins,
+                        key=lambda x: x["quote"]["USDT"].get("volume_24h", 0),
+                        reverse=True)[:50]
+
+    for coin in top_by_vol:
+        sym = coin["symbol"]
+        try:
+            st_data = get_supertrend_signal(sym)
+            new_dir = st_data["direction"]
+            old_dir = supertrend_cache.get(sym)
+
+            # Обновляем кэш
+            supertrend_cache[sym] = new_dir
+
+            # Сигнал только при смене
+            if old_dir is None or old_dir == new_dir:
+                continue
+
+            slug       = coin.get("slug", sym.lower())
+            signal_lbl = "🟢 BUY" if new_dir == 1 else "🔴 SELL"
+            prev_lbl   = "🔴 SELL" if new_dir == 1 else "🟢 BUY"
+            price      = st_data["current_price"]
+            pct        = st_data["pct_since_signal"]
+            last_sig   = st_data.get("last_signal", "")
+            last_price = st_data.get("last_signal_price")
+            last_time  = st_data.get("last_signal_time")
+
+            time_str = last_time.strftime("%d.%m %H:%M UTC+3") if last_time else "—"
+            pct_str  = f"+{pct:.2f}%" if pct >= 0 else f"{pct:.2f}%"
+
+            text = (
+                f"⚡️ *SUPERTREND — смена сигнала!*\n"
+                f"🕐 {now_utc3()}\n\n"
+                f"*{sym}USDT*  {prev_lbl} ➜ *{signal_lbl}*\n\n"
+                f"💰 Цена сейчас: `{fp(price)}`\n"
+            )
+            if last_price:
+                text += f"📍 Последний сигнал: `{fp(last_price)}` ({time_str})\n"
+                text += f"📈 Движение с сигнала: `{pct_str}`\n"
+
+            text += (
+                f"\n"
+                f"{'🚀 Преобладают покупатели — ищем лонг' if new_dir == 1 else '📉 Преобладают продавцы — осторожно'}\n\n"
+                f"⚠️ Риск: 2% депозита | SL обязателен\n\n"
+                f"#{sym}USDT"
+            )
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                InlineKeyboardButton("CMC", url=cmc_link(slug)),
+            ]])
+            for cid in chat_ids:
+                try:
+                    await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                except Exception as e:
+                    log.error(f"ST alert {cid}: {e}")
+            log.info(f"Supertrend {sym}: {prev_lbl}→{signal_lbl} @ {fp(price)}")
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            log.error(f"ST check {sym}: {e}")
+
 async def check_alerts(bot: Bot):
-    """Каждые 5 мин: pump/dump + zone alerts"""
+    """Каждые 5 мин: pump/dump + zone + supertrend alerts"""
     chat_ids = load_chat_ids() | user_chat_ids
     if not chat_ids: return
     try:
@@ -1439,6 +1708,7 @@ async def check_alerts(bot: Bot):
         if not coins: return
         await check_pump_dump(bot, chat_ids, coins)
         await check_entry_zones(bot, chat_ids, coins)
+        await check_supertrend_signals(bot, chat_ids, coins)
     except Exception as e:
         log.error(f"check_alerts: {e}")
 
