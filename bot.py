@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
-📊 BEST TRADE Bot v8.0
-- Обзор рынка: блок ТОП-5 ЛОНГИ / ТОП-5 ШОРТЫ из топ-300 CMC
-- Сигналы: фикс отправки графика (caption limit guard + split fallback)
-- Рыночный обзор каждые 30 мин
+📊 BEST TRADE Bot v9.0
+- Топ-500 CMC
+- /1 market  /2 BTC coin  /3 signals  /4 top
+- Время UTC+3 везде
+- График с EMA20/50/200 (200 свечей)
+- Хештег #SYMBOLUSDT внизу каждого поста
+- Pump/Dump детектор (каждые 5 мин)
+- Алерт входа в зону (каждые 5 мин)
+- Min/Max дня + лучшая точка входа
+- Обзор рынка: 🚀 лонги / 📉 шорты с эмодзи
+- Рассылка каждые 30 мин
 """
 
 import asyncio
@@ -12,7 +19,6 @@ import logging
 import os
 import random
 import requests
-import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -46,15 +52,20 @@ SLC    = "#EA3943"
 ENTRYC = "#FFD700"
 SWINGC = "#4A90D9"
 
+# ── КЭШ для pump/dump и алертов ──
+price_cache      = {}   # {symbol: [price1, price2, ...]} последние цены
+alerted_zones    = {}   # {symbol: timestamp} чтобы не спамить
+pump_alerted     = {}   # {symbol: timestamp}
+
 # ═══════════════════════════════════════════
-# CMC / DATA
+# DATA FUNCTIONS
 # ═══════════════════════════════════════════
-def get_top300():
+def get_top500():
     try:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
+        url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-        params  = {"limit": 300, "convert": "USDT", "sort": "market_cap"}
-        r = requests.get(url, headers=headers, params=params, timeout=15)
+        params  = {"limit": 500, "convert": "USDT", "sort": "market_cap"}
+        r = requests.get(url, headers=headers, params=params, timeout=20)
         r.raise_for_status()
         return r.json().get("data", [])
     except Exception as e:
@@ -63,7 +74,7 @@ def get_top300():
 
 def get_global_metrics() -> dict:
     try:
-        url = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest"
+        url     = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
@@ -71,7 +82,6 @@ def get_global_metrics() -> dict:
         q = d.get("quote", {}).get("USD", {})
         return {
             "total_mcap":      q.get("total_market_cap", 0),
-            "total_vol_24h":   q.get("total_volume_24h", 0),
             "btc_dominance":   d.get("btc_dominance", 0),
             "eth_dominance":   d.get("eth_dominance", 0),
             "mcap_change_24h": q.get("total_market_cap_yesterday_percentage_change", 0),
@@ -82,34 +92,32 @@ def get_global_metrics() -> dict:
 
 def get_btc_eth_price() -> dict:
     try:
-        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
         params  = {"symbol": "BTC,ETH", "convert": "USD"}
         r = requests.get(url, headers=headers, params=params, timeout=10)
         r.raise_for_status()
-        data = r.json().get("data", {})
+        data   = r.json().get("data", {})
         result = {}
         for sym in ["BTC", "ETH"]:
             if sym in data:
                 item = data[sym]
-                q = (item[0] if isinstance(item, list) else item)["quote"]["USD"]
+                q    = (item[0] if isinstance(item, list) else item)["quote"]["USD"]
                 result[sym] = {
                     "price": q.get("price", 0),
                     "ch1h":  q.get("percent_change_1h", 0),
                     "ch24h": q.get("percent_change_24h", 0),
-                    "ch7d":  q.get("percent_change_7d", 0),
                 }
         return result
     except Exception as e:
         log.error(f"BTC/ETH price error: {e}")
         return {}
 
-def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 80) -> list:
-    """Получаем OHLC с Binance — без ограничений, без API ключа"""
+def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
     try:
-        url = "https://api.binance.com/api/v3/klines"
+        url    = "https://api.binance.com/api/v3/klines"
         params = {"symbol": f"{symbol}USDT", "interval": interval, "limit": limit}
-        r = requests.get(url, params=params, timeout=12)
+        r      = requests.get(url, params=params, timeout=12)
         r.raise_for_status()
         return [
             {
@@ -126,24 +134,38 @@ def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 80) -> list
         log.error(f"Binance OHLC error {symbol}: {e}")
         return []
 
-def get_coingecko_ohlc(slug: str, days: int = 7) -> list:
-    """Fallback — CoinGecko (может блокироваться на Railway)"""
+def get_binance_24h(symbol: str) -> dict:
+    """24h stats: high, low, open"""
     try:
-        url = f"https://api.coingecko.com/api/v3/coins/{slug}/ohlc"
-        params = {"vs_currency": "usd", "days": str(days)}
-        r = requests.get(url, params=params, timeout=12)
+        url    = "https://api.binance.com/api/v3/ticker/24hr"
+        params = {"symbol": f"{symbol}USDT"}
+        r      = requests.get(url, params=params, timeout=8)
         r.raise_for_status()
-        return [{"time": datetime.fromtimestamp(d[0]/1000, tz=TZ),
-                 "open": d[1], "high": d[2], "low": d[3], "close": d[4], "vol": 0}
-                for d in r.json()]
-    except Exception as e:
-        log.error(f"CoinGecko OHLC error {slug}: {e}")
-        return []
+        d = r.json()
+        return {
+            "high":  float(d.get("highPrice", 0)),
+            "low":   float(d.get("lowPrice", 0)),
+            "open":  float(d.get("openPrice", 0)),
+            "vol":   float(d.get("quoteVolume", 0)),
+        }
+    except:
+        return {}
 
-def cmc_link(slug):   return f"https://coinmarketcap.com/currencies/{slug}/"
-def tv_link(symbol):  return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}USDT"
+def get_binance_alltime_low(symbol: str) -> float:
+    """Исторический минимум — берём monthly свечи"""
+    try:
+        url    = "https://api.binance.com/api/v3/klines"
+        params = {"symbol": f"{symbol}USDT", "interval": "1M", "limit": 200}
+        r      = requests.get(url, params=params, timeout=12)
+        r.raise_for_status()
+        lows = [float(d[3]) for d in r.json()]
+        return min(lows) if lows else 0
+    except:
+        return 0
 
-# ── ФОРМАТИРОВАНИЕ ──
+# ═══════════════════════════════════════════
+# ФОРМАТИРОВАНИЕ
+# ═══════════════════════════════════════════
 def fp(p):
     if p >= 1000: return f"{p:,.2f}"
     if p >= 1:    return f"{p:.4f}"
@@ -158,13 +180,21 @@ def fm(m):
     if m >= 1e6:  return f"${m/1e6:.2f}M"
     return f"${m:.0f}"
 
-def trend_arrow(ch):
-    if ch >= 3:  return "🟢"
-    if ch >= 0:  return "🔵"
-    if ch >= -3: return "🟠"
-    return "🔴"
+def now_utc3() -> str:
+    return datetime.now(TZ).strftime("%d.%m.%Y %H:%M UTC+3")
 
-# ── ТЕХНИЧЕСКИЙ АНАЛИЗ ──
+def trend_arrow(ch):
+    if ch >= 3:  return "🚀"
+    if ch >= 0:  return "🟢"
+    if ch >= -3: return "🔴"
+    return "💥"
+
+def cmc_link(slug):  return f"https://coinmarketcap.com/currencies/{slug}/"
+def tv_link(symbol): return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}USDT"
+
+# ═══════════════════════════════════════════
+# ТЕХНИЧЕСКИЙ АНАЛИЗ
+# ═══════════════════════════════════════════
 def calc_ema(prices, period):
     if len(prices) < period:
         return [None] * len(prices)
@@ -176,7 +206,7 @@ def calc_ema(prices, period):
         emas.append(p * k + emas[-1] * (1 - k))
     return emas
 
-def calc_rsi_val(prices, period=14):
+def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50.0
     deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
@@ -185,43 +215,173 @@ def calc_rsi_val(prices, period=14):
     ag = sum(gains) / period
     al = sum(losses) / period
     if al == 0: return 100.0
-    return round(100 - (100 / (1 + ag/al)), 1)
+    return round(100 - (100 / (1 + ag / al)), 1)
 
 def full_analysis(coin: dict) -> dict:
+    """
+    Полный многофакторный анализ монеты:
+    TA (EMA, RSI, MACD-proxy, Bollinger-proxy, Volume, Momentum)
+    + SMC (BOS, OB, FVG, Liquidity, структура)
+    + Fundamental (mcap rank, vol/mcap, momentum score)
+    + Итоговый "Rocket Score" 0-100
+    """
     q     = coin["quote"]["USDT"]
     ch1h  = q.get("percent_change_1h",  0) or 0
     ch24h = q.get("percent_change_24h", 0) or 0
     ch7d  = q.get("percent_change_7d",  0) or 0
     ch30d = q.get("percent_change_30d", 0) or 0
-    vol   = q.get("volume_24h", 0) or 0
-    mcap  = q.get("market_cap", 0) or 0
-    price = q.get("price",      0) or 0
+    ch90d = q.get("percent_change_90d", 0) or 0
+    vol   = q.get("volume_24h",  0) or 0
+    mcap  = q.get("market_cap",  0) or 0
+    price = q.get("price",       0) or 0
+    rank  = coin.get("cmc_rank", 999)
     vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
 
-    ema20  = ch7d > 0
-    ema50  = ch30d > -10
-    ema200 = ch30d > 0
-
+    # ── RSI приближение по изменениям ──
     def rsi_est(m):
-        if m > 15: return 82.0
-        if m > 8:  return 70.0
-        if m > 3:  return 60.0
-        if m > 0:  return 52.0
-        if m > -3: return 45.0
-        if m > -8: return 35.0
-        if m > -15:return 25.0
+        if m > 15:  return 82.0
+        if m > 8:   return 70.0
+        if m > 3:   return 60.0
+        if m > 0:   return 52.0
+        if m > -3:  return 45.0
+        if m > -8:  return 35.0
+        if m > -15: return 25.0
         return 18.0
 
-    m4h     = ch1h * 0.5 + ch24h * 0.5
-    rsi_4h  = rsi_est(m4h)
-    rsi_1h  = rsi_est(ch1h)
-    rsi_1d  = rsi_est(ch24h)
+    m4h    = ch1h * 0.5 + ch24h * 0.5
+    rsi_1h = rsi_est(ch1h)
+    rsi_4h = rsi_est(m4h)
+    rsi_1d = rsi_est(ch24h)
 
+    # ── EMA СТРУКТУРА (приближение через % изменения) ──
+    # Логика: если монета росла 30д — она выше EMA200; росла 7д — выше EMA20
+    above_ema200 = ch30d > 0
+    above_ema50  = ch30d > -10
+    above_ema20  = ch7d  > 0
+
+    # ── BOLLINGER BANDS proxy ──
+    # Если 1ч изменение очень маленькое → цена у средней, хорошая точка
+    bb_squeeze = abs(ch1h) < 0.5   # сжатие боллинджера
+    bb_breakout = abs(ch1h) >= 3.0  # пробой боллинджера
+
+    # ── MACD proxy ──
+    # Быстрая EMA (7д) пересекает медленную (30д) снизу вверх
+    macd_bullish = ch7d > 0 and ch30d < ch7d  # быстрая выше медленной и растёт
+    macd_bearish = ch7d < 0 and ch30d > ch7d
+
+    # ── VOLUME ANALYSIS ──
+    vol_spike    = vol_ratio >= 20   # аномальный объём — умные деньги
+    vol_high     = vol_ratio >= 10
+    vol_low      = vol_ratio < 3
+    # Объём растёт при росте цены → подтверждение
+    vol_confirm_bull = ch24h > 3 and vol_ratio >= 8
+    vol_confirm_bear = ch24h < -3 and vol_ratio >= 8
+
+    # ── MOMENTUM (сила тренда) ──
+    # Многотаймфреймный моментум: все TF согласованы?
+    tf_aligned_bull = ch1h > 0 and ch24h > 0 and ch7d > 0 and ch30d > 0
+    tf_aligned_bear = ch1h < 0 and ch24h < 0 and ch7d < 0 and ch30d < 0
+    # Ускорение: 1ч > 4ч > 1д (набирает силу)
+    momentum_accel = ch1h > (ch24h / 24) * 2  # 1ч бьёт средний часовой темп 24ч в 2 раза
+
+    # ── SMC АНАЛИЗ ──
+    # BOS (Break of Structure): новый хай после коррекции
+    # Прокси: 7д рост после 30д коррекции → BOS пробой
+    smc_bos_bull = ch7d > 5 and ch30d < -5   # пробой структуры вверх после коррекции
+    smc_bos_bear = ch7d < -5 and ch30d > 5
+
+    # OB (Order Block): зоны накопления умных денег
+    # Прокси: большой объём + маленькое движение цены → накопление
+    smc_ob_accumulation = vol_ratio >= 15 and abs(ch24h) < 3  # накопление OB
+    smc_ob_distribution = vol_ratio >= 15 and abs(ch24h) < 3 and ch7d < 0
+
+    # FVG (Fair Value Gap): имбаланс, который нужно закрыть
+    # Прокси: резкий скачок 1ч создаёт FVG
+    smc_fvg_bull = ch1h >= 3 and ch24h > 5   # FVG после импульса вверх
+    smc_fvg_bear = ch1h <= -3 and ch24h < -5  # FVG после импульса вниз
+
+    # LIQUIDITY SWEEP: свип ликвидности перед разворотом
+    # Прокси: резкий всплеск вниз с объёмом → свип лоёв, потом рост
+    smc_liq_sweep_bull = ch1h < -4 and vol_ratio >= 12  # свип низов с объёмом
+    smc_liq_sweep_bear = ch1h > 4  and vol_ratio >= 12  # свип хаёв с объёмом
+
+    # SMART MONEY DIVERGENCE: цена падает, объём растёт → накопление
+    smc_smart_accum = ch24h < -5 and vol_ratio >= 15  # умные деньги покупают на падении
+    smc_smart_dist  = ch24h > 10  and vol_ratio >= 15  # умные деньги продают на росте
+
+    # ── ФУНДАМЕНТАЛЬНЫЙ АНАЛИЗ ──
+    # Ранг монеты (топ монеты более надёжны)
+    fund_rank_top50   = rank <= 50
+    fund_rank_top200  = rank <= 200
+    # Liquidity score: большой объём относительно капы = ликвидная монета
+    fund_liquid = vol >= 50_000_000      # объём > $50M = ликвидная
+    fund_mega   = mcap >= 1_000_000_000  # капа > $1B = голубые фишки
+    fund_mid    = mcap >= 100_000_000    # капа > $100M = средний уровень
+    # Recovery potential: сильно упала за 90д но начинает восстановление
+    fund_recovery = ch90d < -50 and ch7d > 5  # упала -50% за 90д, но +5% за неделю
+
+    # ── ROCKET SCORE (0-100) — главный показатель потенциала ──
+    rocket = 50  # база
+
+    # Технический анализ (+/-)
+    if above_ema200 and above_ema50 and above_ema20: rocket += 8
+    elif above_ema50 and above_ema20:                rocket += 5
+    elif above_ema20:                                rocket += 2
+    elif not above_ema50 and not above_ema200:       rocket -= 8
+
+    if rsi_4h < 30:   rocket += 8   # перепродан — лучшая точка входа
+    elif rsi_4h < 40: rocket += 5
+    elif rsi_4h < 50: rocket += 2
+    elif rsi_4h > 70: rocket -= 5
+    elif rsi_4h > 80: rocket -= 8
+
+    if macd_bullish:  rocket += 5
+    if macd_bearish:  rocket -= 5
+    if bb_squeeze:    rocket += 3   # сжатие перед взрывом
+    if bb_breakout and ch1h > 0: rocket += 4
+
+    if vol_spike:              rocket += 6
+    elif vol_high:             rocket += 3
+    elif vol_low:              rocket -= 4
+    if vol_confirm_bull:       rocket += 5
+    if vol_confirm_bear:       rocket -= 5
+
+    if tf_aligned_bull:        rocket += 6
+    if tf_aligned_bear:        rocket -= 6
+    if momentum_accel:         rocket += 4
+
+    # SMC факторы
+    if smc_bos_bull:           rocket += 7   # BOS пробой вверх — сильный сигнал
+    if smc_bos_bear:           rocket -= 7
+    if smc_ob_accumulation:    rocket += 6   # накопление OB
+    if smc_liq_sweep_bull:     rocket += 5   # свип лоёв → готов к росту
+    if smc_liq_sweep_bear:     rocket -= 5
+    if smc_smart_accum:        rocket += 8   # умные деньги покупают
+    if smc_smart_dist:         rocket -= 6   # умные деньги продают
+    if smc_fvg_bull:           rocket += 3   # FVG вверх
+    if smc_fvg_bear:           rocket -= 3
+
+    # Фундаментальные факторы
+    if fund_rank_top50:        rocket += 5
+    elif fund_rank_top200:     rocket += 3
+    if fund_liquid:            rocket += 4
+    if fund_mega:              rocket += 4
+    elif fund_mid:             rocket += 2
+    if fund_recovery:          rocket += 9   # восстановление после обвала
+
+    # 90д momentum
+    if ch90d > 50:             rocket -= 4  # перегрета (90д +50%)
+    elif ch90d > 0:            rocket += 2  # устойчивый рост
+    elif ch90d < -70:          rocket += 5  # глубокая коррекция = возможность
+
+    rocket = max(0, min(100, rocket))
+
+    # ── ОСНОВНОЙ SCORE для сортировки сигналов ──
     score = 0
-    if ema200 and ema50 and ema20: score += 3
-    elif ema50 and ema20:          score += 2
-    elif ema20:                    score += 1
-    elif not ema50 and not ema200: score -= 2
+    if above_ema200 and above_ema50 and above_ema20: score += 3
+    elif above_ema50 and above_ema20:                score += 2
+    elif above_ema20:                                score += 1
+    elif not above_ema50 and not above_ema200:       score -= 2
     if rsi_4h < 30:    score += 3
     elif rsi_4h < 40:  score += 2
     elif rsi_4h > 70:  score -= 2
@@ -234,41 +394,55 @@ def full_analysis(coin: dict) -> dict:
     elif ch1h <= -3:   score -= 1
     if vol_ratio >= 20: score += 2
     elif vol_ratio >= 10: score += 1
+    if smc_bos_bull:    score += 2
+    if smc_smart_accum: score += 2
+    if tf_aligned_bull: score += 1
+    if fund_recovery:   score += 2
 
     is_long = score >= 0
 
+    # ── TP/SL динамические (учитываем волатильность) ──
+    # Чем выше RSI и объём, тем агрессивнее TP
+    tp_mult = 1.0
+    if rsi_4h < 35:  tp_mult = 1.3  # перепродан → больше потенциал
+    if vol_spike:    tp_mult *= 1.2
+
     if is_long:
-        tp1   = round(price * 1.04, 8)
-        tp2   = round(price * 1.06, 8)
-        tp3   = round(price * 1.10, 8)
+        tp1   = round(price * (1 + 0.04 * tp_mult), 8)
+        tp2   = round(price * (1 + 0.08 * tp_mult), 8)
+        tp3   = round(price * (1 + 0.15 * tp_mult), 8)
         sl    = round(price * 0.85, 8)
         swing = round(price * 0.92, 8)
     else:
-        tp1   = round(price * 0.96, 8)
-        tp2   = round(price * 0.94, 8)
-        tp3   = round(price * 0.90, 8)
+        tp1   = round(price * (1 - 0.04 * tp_mult), 8)
+        tp2   = round(price * (1 - 0.08 * tp_mult), 8)
+        tp3   = round(price * (1 - 0.15 * tp_mult), 8)
         sl    = round(price * 1.15, 8)
         swing = round(price * 1.08, 8)
 
     rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
 
-    ema_pos = "выше EMA200 ✅" if ema200 else "ниже EMA200 ⚠️"
+    # EMA значения (приближение)
+    ema20_1h  = round(price / (1 + ch1h  / 100 * 0.15), 8)
+    ema50_1h  = round(price / (1 + ch1h  / 100 * 0.40), 8)
+    ema200_1h = round(price / (1 + ch1h  / 100 * 1.20), 8)
+    ema20_4h  = round(price / (1 + ch24h / 100 * 0.10), 8)
+    ema50_4h  = round(price / (1 + ch24h / 100 * 0.25), 8)
+    ema200_4h = round(price / (1 + ch24h / 100 * 0.80), 8)
+    ema20_1d  = round(price / (1 + ch7d  / 100 * 0.08), 8)
+    ema50_1d  = round(price / (1 + ch7d  / 100 * 0.20), 8)
+    ema200_1d = round(price / (1 + ch7d  / 100 * 0.60), 8)
 
-    # EMA приближённые значения по таймфреймам
-    # 1H: EMA20 ≈ цена * (1 + ch1h/100 * коэф), EMA50, EMA200
-    ema20_1h  = round(price / (1 + ch1h  / 100 * 0.15), 6)
-    ema50_1h  = round(price / (1 + ch1h  / 100 * 0.40), 6)
-    ema200_1h = round(price / (1 + ch1h  / 100 * 1.20), 6)
-    # 4H: используем ch24h как база
-    ema20_4h  = round(price / (1 + ch24h / 100 * 0.10), 6)
-    ema50_4h  = round(price / (1 + ch24h / 100 * 0.25), 6)
-    ema200_4h = round(price / (1 + ch24h / 100 * 0.80), 6)
-    # 1D: используем ch7d
-    ema20_1d  = round(price / (1 + ch7d  / 100 * 0.08), 6)
-    ema50_1d  = round(price / (1 + ch7d  / 100 * 0.20), 6)
-    ema200_1d = round(price / (1 + ch7d  / 100 * 0.60), 6)
+    # ── МЕТКИ ──
+    if rocket >= 80:   rocket_label = "🚀🔥 ROCKET"
+    elif rocket >= 70: rocket_label = "🚀 СИЛЬНЫЙ"
+    elif rocket >= 60: rocket_label = "✅ ХОРОШИЙ"
+    elif rocket >= 50: rocket_label = "🟡 СРЕДНИЙ"
+    elif rocket >= 40: rocket_label = "🟠 СЛАБЫЙ"
+    else:              rocket_label = "🔴 ИЗБЕГАТЬ"
 
-    if score >= 5:    label = "🔥 СИЛЬНЫЙ ЛОНГ"
+    if score >= 7:    label = "🚀🔥 СИЛЬНЫЙ ЛОНГ"
+    elif score >= 5:  label = "🔥 ЛОНГ"
     elif score >= 3:  label = "✅ ЛОНГ"
     elif score >= 1:  label = "📈 СЛАБЫЙ ЛОНГ"
     elif score >= -1: label = "⚪️ НЕЙТРАЛЬНО"
@@ -276,121 +450,134 @@ def full_analysis(coin: dict) -> dict:
     elif score >= -5: label = "🔻 ШОРТ"
     else:             label = "💥 СИЛЬНЫЙ ШОРТ"
 
+    # SMC факторы для отображения
+    smc_factors = []
+    if smc_bos_bull:        smc_factors.append("BOS ↑")
+    if smc_bos_bear:        smc_factors.append("BOS ↓")
+    if smc_ob_accumulation: smc_factors.append("OB Накопление")
+    if smc_liq_sweep_bull:  smc_factors.append("Liq Sweep ↑")
+    if smc_liq_sweep_bear:  smc_factors.append("Liq Sweep ↓")
+    if smc_smart_accum:     smc_factors.append("Smart Accum 💎")
+    if smc_smart_dist:      smc_factors.append("Smart Dist ⚠️")
+    if smc_fvg_bull:        smc_factors.append("FVG ↑")
+    if smc_fvg_bear:        smc_factors.append("FVG ↓")
+    if tf_aligned_bull:     smc_factors.append("TF Align Bull")
+    if fund_recovery:       smc_factors.append("Recovery 🔄")
+    if bb_squeeze:          smc_factors.append("BB Squeeze")
+    if macd_bullish:        smc_factors.append("MACD Bull")
+
     return {
         "label": label, "score": score, "is_long": is_long,
+        "rocket": rocket, "rocket_label": rocket_label,
         "price": price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "swing": swing, "rr": rr,
         "rsi_4h": rsi_4h, "rsi_1h": rsi_1h, "rsi_1d": rsi_1d,
-        "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d, "ch30d": ch30d,
-        "ema_pos": ema_pos, "ema200": ema200,
-        "vol": vol, "mcap": mcap, "vol_ratio": vol_ratio,
-        # EMA по таймфреймам
-        "ema20_1h":  ema20_1h,  "ema50_1h":  ema50_1h,  "ema200_1h": ema200_1h,
-        "ema20_4h":  ema20_4h,  "ema50_4h":  ema50_4h,  "ema200_4h": ema200_4h,
-        "ema20_1d":  ema20_1d,  "ema50_1d":  ema50_1d,  "ema200_1d": ema200_1d,
+        "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d, "ch30d": ch30d, "ch90d": ch90d,
+        "vol": vol, "mcap": mcap, "vol_ratio": vol_ratio, "rank": rank,
+        "ema20_1h": ema20_1h, "ema50_1h": ema50_1h, "ema200_1h": ema200_1h,
+        "ema20_4h": ema20_4h, "ema50_4h": ema50_4h, "ema200_4h": ema200_4h,
+        "ema20_1d": ema20_1d, "ema50_1d": ema50_1d, "ema200_1d": ema200_1d,
+        # SMC / TA флаги
+        "above_ema200": above_ema200, "above_ema50": above_ema50, "above_ema20": above_ema20,
+        "macd_bullish": macd_bullish, "macd_bearish": macd_bearish,
+        "bb_squeeze": bb_squeeze, "vol_spike": vol_spike,
+        "tf_aligned_bull": tf_aligned_bull, "smc_bos_bull": smc_bos_bull,
+        "smc_smart_accum": smc_smart_accum, "fund_recovery": fund_recovery,
+        "smc_factors": smc_factors,
+        "fund_rank_top50": fund_rank_top50, "fund_liquid": fund_liquid,
     }
 
 # ═══════════════════════════════════════════
-# ГЕНЕРАЦИЯ ГРАФИКА — BEST TRADE STYLE
+# ГЕНЕРАЦИЯ ГРАФИКА
 # ═══════════════════════════════════════════
-def detect_order_blocks(candles: list, is_long: bool) -> list:
-    """Определяем Order Block зоны из реальных свечей"""
+def detect_order_blocks(candles, is_long):
     obs = []
     if len(candles) < 5:
         return obs
     for i in range(2, len(candles) - 1):
-        c = candles[i]
+        c    = candles[i]
         body = abs(c["close"] - c["open"])
         prev = candles[i - 1]
-        # Бычий OB: медвежья свеча перед сильным движением вверх
         if is_long:
             if (c["close"] < c["open"] and
                 candles[i+1]["close"] > c["high"] and
                 body > abs(prev["close"] - prev["open"]) * 1.2):
                 obs.append({"lo": c["low"], "hi": c["high"], "idx": i, "type": "bull"})
-        # Медвежий OB: бычья свеча перед сильным движением вниз
         else:
             if (c["close"] > c["open"] and
                 candles[i+1]["close"] < c["low"] and
                 body > abs(prev["close"] - prev["open"]) * 1.2):
                 obs.append({"lo": c["low"], "hi": c["high"], "idx": i, "type": "bear"})
-    return obs[-3:]  # последние 3 OB
+    return obs[-3:]
 
-def generate_signal_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
-    is_long = a["is_long"]
-    price   = a["price"]
+def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.BytesIO:
+    is_long       = a["is_long"]
+    price         = a["price"]
     tp1, tp2, tp3 = a["tp1"], a["tp2"], a["tp3"]
     sl, swing     = a["sl"],  a["swing"]
     rsi           = a["rsi_4h"]
 
-    # ── ДАННЫЕ: Binance первый, CoinGecko запасной ──
-    candles = get_binance_ohlc(symbol, interval="4h", limit=80)
-    if not candles or len(candles) < 10:
-        candles = get_coingecko_ohlc(slug, days=7)
-    if not candles or len(candles) < 10:
-        # Заглушка если оба источника недоступны
+    # Данные с Binance
+    candles = get_binance_ohlc(symbol, interval="4h", limit=200)
+    if not candles or len(candles) < 20:
         p = price * 0.96
-        for _ in range(60):
+        for _ in range(200):
             ch = random.gauss(0, 0.008)
             o = p; c = p * (1 + ch)
             h = max(o, c) * (1 + abs(random.gauss(0, 0.003)))
             l = min(o, c) * (1 - abs(random.gauss(0, 0.003)))
-            candles.append({"open": o, "high": h, "low": l, "close": c, "vol": random.uniform(1e5, 1e6)})
+            candles.append({"open": o, "high": h, "low": l, "close": c, "vol": random.uniform(1e5,1e6), "time": None})
             p = c
         candles[-1]["close"] = price
 
-    n      = len(candles)
-    closes = [c["close"] for c in candles]
-    vols   = [c.get("vol", 0) for c in candles]
+    n_all      = len(candles)
+    closes_all = [c["close"] for c in candles]
 
-    # EMA
-    ema20  = calc_ema(closes, min(20, n))
-    ema50  = calc_ema(closes, min(50, n))
-    ema200 = calc_ema(closes, min(200, n))
+    # EMA по всем данным
+    ema20_all  = calc_ema(closes_all, 20)
+    ema50_all  = calc_ema(closes_all, 50)
+    ema200_all = calc_ema(closes_all, min(200, n_all))
 
-    # Order Blocks
-    obs = detect_order_blocks(candles, is_long)
+    # Показываем последние 100
+    display_n = min(100, n_all)
+    start_idx = n_all - display_n
+    candles   = candles[start_idx:]
+    ema20_v   = ema20_all[start_idx:]
+    ema50_v   = ema50_all[start_idx:]
+    ema200_v  = ema200_all[start_idx:]
 
-    # ── FIGURE ──
-    fig = plt.figure(figsize=(13, 8.2), facecolor=BG)
-    gs  = fig.add_gridspec(8, 1, hspace=0,
+    n    = len(candles)
+    vols = [c.get("vol", 0) for c in candles]
+    obs  = detect_order_blocks(candles, is_long)
+
+    fig = plt.figure(figsize=(13, 8.5), facecolor=BG)
+    gs  = fig.add_gridspec(9, 1, hspace=0,
                             left=0.01, right=0.80,
-                            top=0.995, bottom=0.06)
+                            top=0.995, bottom=0.05)
     ax_brand = fig.add_subplot(gs[0:1, 0])
     ax       = fig.add_subplot(gs[1:7, 0])
-    axv      = fig.add_subplot(gs[7:,  0], sharex=ax)
+    axv      = fig.add_subplot(gs[7:8, 0], sharex=ax)
+    ax_info  = fig.add_subplot(gs[8:,  0])
 
+    for a_ in [ax_brand, ax, axv, ax_info]:
+        a_.set_facecolor(BG)
+
+    # ── БРЕНДИНГ ──
     ax_brand.set_facecolor(ORANGE)
-    ax.set_facecolor(BG)
-    axv.set_facecolor(BG)
-
-    # ══════════════════════════════════════
-    # БРЕНДИНГ-ПОЛОСА — BEST TRADE
-    # ══════════════════════════════════════
-    ax_brand.set_xlim(0, 1)
-    ax_brand.set_ylim(0, 1)
-    ax_brand.axis("off")
+    ax_brand.set_xlim(0, 1); ax_brand.set_ylim(0, 1); ax_brand.axis("off")
     ax_brand.text(0.5, 0.55, "B E S T   T R A D E",
                   fontsize=20, color=WHITE, fontweight="bold",
-                  ha="center", va="center",
-                  transform=ax_brand.transAxes)
+                  ha="center", va="center", transform=ax_brand.transAxes)
     ax_brand.text(0.5, 0.12, "S  I  G  N  A  L  S",
                   fontsize=7, color=WHITE, alpha=0.70,
-                  ha="center", va="center",
-                  transform=ax_brand.transAxes)
-    for xv in [0.06, 0.94]:
-        ax_brand.axvline(xv, color=WHITE, alpha=0.20, lw=0.8)
+                  ha="center", va="center", transform=ax_brand.transAxes)
 
-    # ── ORDER BLOCK ЗОНЫ (за свечами) ──
+    # ── ORDER BLOCKS ──
     for ob in obs:
-        ob_color = "#16C784" if ob["type"] == "bull" else "#EA3943"
+        ob_color = GREEN if ob["type"] == "bull" else RED
         ax.axhspan(ob["lo"], ob["hi"],
                    xmin=ob["idx"] / n, xmax=1.0,
                    alpha=0.10, color=ob_color, zorder=1)
-        ax.axhline(ob["hi"], color=ob_color, lw=0.5,
-                   alpha=0.30, linestyle="-", zorder=1)
-        ax.axhline(ob["lo"], color=ob_color, lw=0.5,
-                   alpha=0.30, linestyle="-", zorder=1)
 
     # ── СВЕЧИ ──
     w = 0.4
@@ -403,18 +590,25 @@ def generate_signal_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
             linewidth=0, facecolor=col, zorder=3
         ))
 
-    # ── EMA ──
-    for vals, col, lbl, lw in [
-        (ema20,  YELLOW,    "EMA 20",  1.1),
-        (ema50,  ORANGE,    "EMA 50",  1.2),
-        (ema200, "#FF6B6B", "EMA 200", 1.4),
-    ]:
+    # ── EMA — жирные линии с подписями ──
+    ema_cfg = [
+        (ema20_v,  "#F0B90B", "EMA20",  2.0),
+        (ema50_v,  "#F7931A", "EMA50",  2.2),
+        (ema200_v, "#FF4560", "EMA200", 2.5),
+    ]
+    for vals, col, lbl, lw in ema_cfg:
         pts = [(i, v) for i, v in enumerate(vals) if v is not None]
         if len(pts) > 1:
-            ax.plot([p[0] for p in pts], [p[1] for p in pts],
-                    color=col, lw=lw, alpha=0.88, label=lbl, zorder=4)
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            ax.plot(xs, ys, color=col, lw=lw, alpha=0.95, label=lbl, zorder=5)
+            lx, ly = pts[-1]
+            ax.text(lx + 0.8, ly, f" {lbl}\n {fp(ly)}",
+                    color=col, fontsize=6.2, va="center", fontweight="bold", zorder=8,
+                    bbox=dict(boxstyle="round,pad=0.15", facecolor=BG,
+                              alpha=0.7, edgecolor=col, lw=0.6))
 
-    # ── ЗОНЫ SL/TP (полупрозрачные) ──
+    # ── ЗОНЫ SL/TP ──
     if is_long:
         ax.axhspan(sl,    price, alpha=0.07, color=RED,   zorder=1)
         ax.axhspan(price, tp1,   alpha=0.05, color=GREEN, zorder=1)
@@ -432,12 +626,12 @@ def generate_signal_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
         return f"(+{v:.2f}%)" if v >= 0 else f"({v:.2f}%)"
 
     def draw_lvl(val, color, label, extra="", ls="--", lw=1.2, bold=False):
-        ax.axhline(val, color=color, linestyle=ls, linewidth=lw, alpha=0.92, zorder=5)
+        ax.axhline(val, color=color, linestyle=ls, linewidth=lw, alpha=0.92, zorder=6)
         ax.text(n + ext * 0.04, val,
                 f"  {label}  {fp(val)}  {extra}",
-                color=color, fontsize=7.8, va="center",
+                color=color, fontsize=7.5, va="center",
                 fontweight="bold" if bold else "normal",
-                fontfamily="monospace", zorder=6)
+                fontfamily="monospace", zorder=7)
 
     draw_lvl(tp3,   TP3C,   "TP3",   pct_str(tp3),  "--", 1.0)
     draw_lvl(tp2,   TP2C,   "TP2",   pct_str(tp2),  "--", 1.0)
@@ -446,50 +640,50 @@ def generate_signal_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
     draw_lvl(swing, SWINGC, "Swing", "",             ":",  1.0)
     draw_lvl(sl,    SLC,    "SL",    pct_str(sl),    "--", 1.3)
 
+    # 24h min/max линии
+    if stats_24h:
+        h24 = stats_24h.get("high", 0)
+        l24 = stats_24h.get("low",  0)
+        if h24: ax.axhline(h24, color="#AAAAFF", linestyle=":", lw=0.8, alpha=0.6, zorder=4)
+        if l24: ax.axhline(l24, color="#FFAAAA", linestyle=":", lw=0.8, alpha=0.6, zorder=4)
+
     ax.annotate("▲" if is_long else "▼",
                 xy=(n - 1, price), fontsize=14,
-                color=ENTRYC, ha="center", va="bottom", zorder=7)
+                color=ENTRYC, ha="center", va="bottom", zorder=9)
 
     ax.legend(loc="upper left", fontsize=7.5,
               facecolor="#0D1B2A", edgecolor="#1E2A3A",
               labelcolor=WHITE, framealpha=0.92,
               borderpad=0.5, handlelength=1.4)
 
-    # ── ОБЪЁМ (реальный с Binance) ──
+    # ── ОБЪЁМ ──
     max_vol = max(vols) if max(vols) > 0 else 1
     for i, c in enumerate(candles):
         col = GREEN if c["close"] >= c["open"] else RED
-        axv.bar(i, vols[i] / max_vol, width=0.7,
-                color=col, alpha=0.40, zorder=2)
+        axv.bar(i, vols[i] / max_vol, width=0.7, color=col, alpha=0.40, zorder=2)
     axv.set_yticks([])
     axv.spines[:].set_visible(False)
 
-    # ── X МЕТКИ (реальное время из Binance) ──
+    # ── X МЕТКИ ──
     step  = max(n // 8, 1)
     ticks = list(range(0, n, step))
     if candles[0].get("time"):
         xlbls = [candles[i]["time"].strftime("%d.%m\n%H:%M") for i in ticks]
     else:
         now_t = datetime.now(timezone.utc)
-        xlbls = [(now_t - timedelta(hours=(n - i) * 4)).strftime("%d.%m\n%H:%M")
-                 for i in ticks]
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(xlbls, fontsize=6.5, color=GRAY)
+        xlbls = [(now_t - timedelta(hours=(n - i) * 4)).strftime("%d.%m\n%H:%M") for i in ticks]
+    ax.set_xticks(ticks); ax.set_xticklabels(xlbls, fontsize=6.5, color=GRAY)
     axv.tick_params(axis="x", colors=GRAY, labelsize=6)
 
-    # ── ОСИ ──
     ax.tick_params(axis="y", colors=GRAY, labelsize=7.5, right=False, left=False)
-    ax.yaxis.set_label_position("right")
-    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right"); ax.yaxis.tick_right()
     ax.grid(color="#1A2535", lw=0.3, zorder=0)
     ax.spines[:].set_color("#1E2A3A")
 
-    # ── ЗАГОЛОВОК НА ГРАФИКЕ ──
+    # ── ЗАГОЛОВОК ──
     side_str  = "LONG" if is_long else "SHORT"
-    side_col  = GREEN if is_long else RED
     rsi_color = GREEN if rsi < 35 else (RED if rsi > 65 else GRAY)
-    rsi_tag   = "Перепродан" if rsi < 35 else ("Перекуплен" if rsi > 65 else "Нейтральный")
-
+    rsi_tag   = "Перепродан 🟢" if rsi < 35 else ("Перекуплен 🔴" if rsi > 65 else "Нейтральный ⚪")
     ax.text(0.012, 0.97, f"{symbol}USDT  •  4H  •  {side_str}",
             fontsize=11, color=WHITE, fontweight="bold",
             va="top", ha="left", transform=ax.transAxes, zorder=10)
@@ -497,87 +691,114 @@ def generate_signal_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
             fontsize=8, color=rsi_color,
             va="top", ha="left", transform=ax.transAxes, zorder=10)
 
+    # ── НИЖНЯЯ ИНФО ПОЛОСА (24h stats) ──
+    ax_info.axis("off")
+    if stats_24h:
+        h24 = stats_24h.get("high", 0)
+        l24 = stats_24h.get("low",  0)
+        best_entry = l24 * 1.005 if l24 else price
+        info_txt = (f"  📅 24H:  🔼 {fp(h24)}   🔽 {fp(l24)}   "
+                    f"🎯 Лучший вход: {fp(best_entry)}")
+        ax_info.text(0.01, 0.5, info_txt,
+                     color=GRAY, fontsize=7.5, va="center",
+                     transform=ax_info.transAxes)
+
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150,
-                bbox_inches="tight", facecolor=BG)
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=BG)
     plt.close(fig)
     buf.seek(0)
     return buf
 
 # ═══════════════════════════════════════════
-# ТЕКСТ СИГНАЛА — ЧИСТЫЙ ФОРМАТ
+# ТЕКСТ СИГНАЛА
 # ═══════════════════════════════════════════
-def build_signal_text(symbol: str, a: dict) -> str:
+def build_signal_text(symbol: str, a: dict, stats_24h: dict = None, atl: float = 0) -> str:
     is_long = a["is_long"]
     price   = a["price"]
     tp1, tp2, tp3 = a["tp1"], a["tp2"], a["tp3"]
     sl, swing     = a["sl"],  a["swing"]
-    rsi_1h = a["rsi_1h"]
-    rsi_4h = a["rsi_4h"]
-    rsi_1d = a["rsi_1d"]
-    rr     = a["rr"]
-    vol    = a["vol"]
+    rsi_1h = a["rsi_1h"]; rsi_4h = a["rsi_4h"]; rsi_1d = a["rsi_1d"]
+    rr     = a["rr"]; vol = a["vol"]
+    rocket = a.get("rocket", 50)
+    rocket_label = a.get("rocket_label", "")
 
     side_emoji = "🟢" if is_long else "🔴"
     side_text  = "LONG" if is_long else "SHORT"
     swing_lbl  = "Swing Low" if is_long else "Swing High"
 
-    def pct(target):
-        d = (target - price) / price * 100
+    def pct(t):
+        d = (t - price) / price * 100
         v = d if is_long else -d
         return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
 
-    def sl_pct():
-        d = abs(sl - price) / price * 100
-        return f"-{d:.2f}%"
+    def sl_pct(): return f"-{abs(sl-price)/price*100:.2f}%"
 
     def rsi_icon(r):
-        if r < 30:  return "🟢"
-        if r > 70:  return "🔴"
+        if r < 30: return "🟢"
+        if r > 70: return "🔴"
         return "🔵"
 
-    # Объём в читаемом формате $
-    if vol >= 1e9:   vol_str = f"${vol/1e9:.2f}B"
-    elif vol >= 1e6: vol_str = f"${vol/1e6:.1f}M"
-    else:            vol_str = f"${vol/1e3:.0f}K"
+    vol_str = (f"${vol/1e9:.2f}B" if vol >= 1e9 else
+               f"${vol/1e6:.1f}M" if vol >= 1e6 else f"${vol/1e3:.0f}K")
 
-    # % отклонение цены от EMA (+ = цена выше EMA, - = ниже)
-    def ema_pct(ema_val):
-        if ema_val <= 0: return "—"
-        d = (price - ema_val) / ema_val * 100
-        arrow = "▲" if d >= 0 else "▼"
-        return f"{arrow}{abs(d):.1f}%"
+    def ep(v):
+        if not v: return "—"
+        d = (price - v) / v * 100
+        return f"{'▲' if d>=0 else '▼'}{abs(d):.1f}%"
 
-    e20_1h  = ema_pct(a["ema20_1h"])
-    e50_1h  = ema_pct(a["ema50_1h"])
-    e200_1h = ema_pct(a["ema200_1h"])
-    e20_4h  = ema_pct(a["ema20_4h"])
-    e50_4h  = ema_pct(a["ema50_4h"])
-    e200_4h = ema_pct(a["ema200_4h"])
-    e20_1d  = ema_pct(a["ema20_1d"])
-    e50_1d  = ema_pct(a["ema50_1d"])
-    e200_1d = ema_pct(a["ema200_1d"])
+    filled = int(rocket / 10)
+    bar = "█" * filled + "░" * (10 - filled)
+
+    smc_factors = a.get("smc_factors", [])
+    smc_line = "  ".join(smc_factors[:5]) if smc_factors else "—"
+
+    ema_pos = []
+    if a.get("above_ema200"): ema_pos.append("EMA200✅")
+    if a.get("above_ema50"):  ema_pos.append("EMA50✅")
+    if a.get("above_ema20"):  ema_pos.append("EMA20✅")
+    if not ema_pos: ema_pos = ["Ниже всех EMA⚠️"]
 
     lines = [
         f"📊 *{symbol}USDT*  {side_emoji} *{side_text}*",
+        f"🕐 {now_utc3()}",
         "",
-        f"💰 *Вход:*  `{fp(price)}`",
-        f"🎯 *TP 1:*  `{fp(tp1)}`  ({pct(tp1)})",
-        f"🎯 *TP 2:*  `{fp(tp2)}`  ({pct(tp2)})",
-        f"🎯 *TP 3:*  `{fp(tp3)}`  ({pct(tp3)})",
-        f"🛑 *SL:*    `{fp(sl)}`   ({sl_pct()})",
-        f"📌 *{swing_lbl}:*  `{fp(swing)}`",
+        f"🚀 *Rocket Score:* `{rocket}/100`  {rocket_label}",
+        f"`{bar}`",
+        f"📍 {' | '.join(ema_pos)}",
         "",
-        f"━━━━━━━━━━━━━━━━━━",
-        f"📐 *R:R:* 1:{rr:.1f}  |  💹 *Объём 24H:* {vol_str}",
+        f"💰 Вход:  `{fp(price)}`",
+        f"🎯 TP1:  `{fp(tp1)}`  ({pct(tp1)})",
+        f"🎯 TP2:  `{fp(tp2)}`  ({pct(tp2)})",
+        f"🎯 TP3:  `{fp(tp3)}`  ({pct(tp3)})",
+        f"🛑 SL:   `{fp(sl)}`   ({sl_pct()})",
+        f"📌 {swing_lbl}:  `{fp(swing)}`",
         "",
-        f"📉 *Скользящие (% от цены):*",
-        f"┌ *1H*   EMA20 `{e20_1h}`  EMA50 `{e50_1h}`  EMA200 `{e200_1h}`",
-        f"├ *4H*   EMA20 `{e20_4h}`  EMA50 `{e50_4h}`  EMA200 `{e200_4h}`",
-        f"└ *1D*   EMA20 `{e20_1d}`  EMA50 `{e50_1d}`  EMA200 `{e200_1d}`",
+        "━━━━━━━━━━━━━━━━━━",
+        f"📐 R:R: 1:{rr:.1f}  |  💹 Объём: {vol_str}",
+        f"🏆 Rank #{a.get('rank','—')}  |  Vol/MCap: {a.get('vol_ratio',0):.1f}%",
+        f"📊 1H `{fc(a['ch1h'])}`  24H `{fc(a['ch24h'])}`  7D `{fc(a['ch7d'])}`  30D `{fc(a['ch30d'])}`",
         "",
-        f"📈 *RSI:*  1H {rsi_icon(rsi_1h)} `{rsi_1h:.0f}`  |  4H {rsi_icon(rsi_4h)} `{rsi_4h:.0f}`  |  1D {rsi_icon(rsi_1d)} `{rsi_1d:.0f}`",
+        f"🧠 *SMC:* `{smc_line}`",
+        "",
+        "📉 *EMA (% от цены):*",
+        f"┌ 1H  EMA20`{ep(a['ema20_1h'])}` EMA50`{ep(a['ema50_1h'])}` EMA200`{ep(a['ema200_1h'])}`",
+        f"├ 4H  EMA20`{ep(a['ema20_4h'])}` EMA50`{ep(a['ema50_4h'])}` EMA200`{ep(a['ema200_4h'])}`",
+        f"└ 1D  EMA20`{ep(a['ema20_1d'])}` EMA50`{ep(a['ema50_1d'])}` EMA200`{ep(a['ema200_1d'])}`",
+        "",
+        f"📈 RSI: 1H{rsi_icon(rsi_1h)}`{rsi_1h:.0f}` 4H{rsi_icon(rsi_4h)}`{rsi_4h:.0f}` 1D{rsi_icon(rsi_1d)}`{rsi_1d:.0f}`",
     ]
+
+    if stats_24h:
+        h24 = stats_24h.get("high", 0); l24 = stats_24h.get("low", 0)
+        if h24 and l24:
+            lines += ["", "━━━━━━━━━━━━━━━━━━",
+                      f"📅 *24H:*  🔼`{fp(h24)}`  🔽`{fp(l24)}`",
+                      f"🎯 *Лучший вход дня:* `{fp(l24*1.005)}`"]
+
+    if atl and atl > 0:
+        lines.append(f"🏆 *Ист. минимум:* `{fp(atl)}`")
+
+    lines += ["", f"#{symbol}USDT"]
     return "\n".join(lines)
 
 # ═══════════════════════════════════════════
@@ -585,25 +806,22 @@ def build_signal_text(symbol: str, a: dict) -> str:
 # ═══════════════════════════════════════════
 BTC_ZONES = {
     "support":    [
-        {"level": 62137, "label": "S1 Королев (верх)"},
-        {"level": 61316, "label": "S2 Королев (низ)"},
-        {"level": 59000, "label": "S3 Психологический"},
+        {"level": 62137, "label": "S1"},
+        {"level": 61316, "label": "S2"},
+        {"level": 59000, "label": "S3"},
     ],
     "resistance": [
-        {"level": 63800, "label": "R1 Локальное"},
-        {"level": 65000, "label": "R2 Ключевой"},
-        {"level": 67000, "label": "R3 Верх канала"},
+        {"level": 63800, "label": "R1"},
+        {"level": 65000, "label": "R2"},
+        {"level": 67000, "label": "R3"},
     ],
 }
 
-def analyze_market(btc: dict, eth: dict, gm: dict, coins: list) -> dict:
-    bp = btc.get("price", 0)
-    ep = eth.get("price", 0)
-    bd = gm.get("btc_dominance", 0)
-    ed = gm.get("eth_dominance", 0)
+def analyze_market(btc, eth, gm, coins):
+    bp = btc.get("price", 0); ep = eth.get("price", 0)
+    bd = gm.get("btc_dominance", 0); ed = gm.get("eth_dominance", 0)
     od = 100 - bd - ed
-    tm = gm.get("total_mcap", 0)
-    mc = gm.get("mcap_change_24h", 0)
+    tm = gm.get("total_mcap", 0); mc = gm.get("mcap_change_24h", 0)
 
     sup = next((z for z in BTC_ZONES["support"]    if bp > z["level"]), None)
     res = next((z for z in BTC_ZONES["resistance"] if bp < z["level"]), None)
@@ -613,30 +831,28 @@ def analyze_market(btc: dict, eth: dict, gm: dict, coins: list) -> dict:
     pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
     sp  = pos / len(coins) * 100 if coins else 50
 
-    if sp >= 65:   sent = "🟢 Бычий"
-    elif sp >= 50: sent = "🔵 Умеренно бычий"
-    elif sp >= 35: sent = "🟠 Умеренно медвежий"
-    else:          sent = "🔴 Медвежий"
+    if sp >= 65:   sent = "🚀 Бычий"
+    elif sp >= 50: sent = "🟢 Умеренно бычий"
+    elif sp >= 35: sent = "🔴 Умеренно медвежий"
+    else:          sent = "💥 Медвежий"
 
-    dom_sig    = ("🔴 BTC доминирует — альты под давлением" if bd > 59 else
+    dom_sig    = ("💥 BTC доминирует — альты под давлением" if bd > 59 else
                   ("🟡 BTC.D нейтральна" if bd > 56 else
-                   "🟢 BTC.D снижается — деньги в альты"))
+                   "🚀 BTC.D снижается — деньги в альты"))
     others_sig = ("🔴 Альты слабеют" if od < 8.2 else
-                  ("🟢 Альты усиливаются" if od > 8.8 else "🟡 Альты нейтральны"))
-    total_sig  = ("🟢 Рынок растёт" if mc >= 2 else
-                  ("🔵 Стабильно" if mc >= 0 else
-                   ("🟠 Коррекция" if mc >= -2 else "🔴 Рынок падает")))
+                  ("🚀 Альты усиливаются" if od > 8.8 else "🟡 Альты нейтральны"))
+    total_sig  = ("🚀 Рынок растёт" if mc >= 2 else
+                  ("🟢 Стабильно"   if mc >= 0 else
+                   ("🔴 Коррекция"   if mc >= -2 else "💥 Рынок падает")))
 
-    bulls = sum([btc.get("ch24h",0)>1, eth.get("ch24h",0)>1,
-                 bd<57, mc>0, od>8.3])
-    if bulls >= 4:   verdict = "🟢 БЫЧИЙ — ищем лонги"
-    elif bulls >= 3: verdict = "🔵 УМЕРЕННО БЫЧИЙ — осторожные лонги"
+    bulls = sum([btc.get("ch24h", 0) > 1, eth.get("ch24h", 0) > 1, bd < 57, mc > 0, od > 8.3])
+    if bulls >= 4:   verdict = "🚀 БЫЧИЙ — ищем лонги"
+    elif bulls >= 3: verdict = "🟢 УМЕРЕННО БЫЧИЙ — осторожные лонги"
     elif bulls >= 2: verdict = "🟡 НЕЙТРАЛЬНЫЙ — ждём сигналов"
-    elif bulls >= 1: verdict = "🟠 ОСТОРОЖНО — рынок под давлением"
-    else:            verdict = "🔴 МЕДВЕЖИЙ — воздерживаемся от лонгов"
+    elif bulls >= 1: verdict = "🔴 ОСТОРОЖНО — рынок под давлением"
+    else:            verdict = "💥 МЕДВЕЖИЙ — воздерживаемся от лонгов"
 
-    # ── ТОП ЛОНГИ / ШОРТЫ из топ-300 ──
-    analyzed = [(c, full_analysis(c)) for c in coins]
+    analyzed   = [(c, full_analysis(c)) for c in coins]
     top_longs  = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
                         key=lambda x: x[1]["score"], reverse=True)[:5]
     top_shorts = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
@@ -655,37 +871,22 @@ def analyze_market(btc: dict, eth: dict, gm: dict, coins: list) -> dict:
     }
 
 def build_overview_text(ms: dict) -> str:
-    now = datetime.now(TZ).strftime("%d.%m.%Y  %H:%M")
-    sup = ms["btc_sup"]
-    res = ms["btc_res"]
-    s_line = f"  └ 🟢 Поддержка: ${sup['level']:,}  ({sup['label']})  —  {sup['dist']:.1f}% ниже" if sup else ""
-    r_line = f"  └ 🔴 Сопротивление: ${res['level']:,}  ({res['label']})  —  {res['dist']:.1f}% выше" if res else ""
+    sup = ms["btc_sup"]; res = ms["btc_res"]
+    s_line = f"  └ 🟢 Поддержка: ${sup['level']:,} ({sup['label']}) — {sup['dist']:.1f}% ниже" if sup else ""
+    r_line = f"  └ 🔴 Сопротивление: ${res['level']:,} ({res['label']}) — {res['dist']:.1f}% выше" if res else ""
 
-    # ── ТОП ЛОНГИ ──
-    long_lines = []
-    for i, (c, a) in enumerate(ms.get("top_longs", []), 1):
-        sym = c["symbol"]
-        p   = a["price"]
-        ch  = a["ch24h"]
-        rsi = a["rsi_4h"]
-        sign = "+" if ch >= 0 else ""
-        long_lines.append(f"  {i}. *{sym}*  ${fp(p)}  {sign}{ch:.1f}%  RSI {rsi:.0f}")
-
-    # ── ТОП ШОРТЫ ──
+    long_lines  = []
     short_lines = []
+    for i, (c, a) in enumerate(ms.get("top_longs", []), 1):
+        sym = c["symbol"]; ch = a["ch24h"]
+        long_lines.append(f"  {i}. 🚀 *{sym}*  ${fp(a['price'])}  {fc(ch)}  RSI {a['rsi_4h']:.0f}")
     for i, (c, a) in enumerate(ms.get("top_shorts", []), 1):
-        sym = c["symbol"]
-        p   = a["price"]
-        ch  = a["ch24h"]
-        rsi = a["rsi_4h"]
-        short_lines.append(f"  {i}. *{sym}*  ${fp(p)}  {ch:.1f}%  RSI {rsi:.0f}")
-
-    long_block  = "\n".join(long_lines)  if long_lines  else "  Нет сигналов"
-    short_block = "\n".join(short_lines) if short_lines else "  Нет сигналов"
+        sym = c["symbol"]; ch = a["ch24h"]
+        short_lines.append(f"  {i}. 📉 *{sym}*  ${fp(a['price'])}  {fc(ch)}  RSI {a['rsi_4h']:.0f}")
 
     return "\n".join([
-        "🌍 *ОБЗОР РЫНКА  —  BEST TRADE*",
-        f"🕐 {now}  Istanbul",
+        "🌍 *ОБЗОР РЫНКА — BEST TRADE*",
+        f"🕐 {now_utc3()}",
         "",
         "━━━━━━━━━━━━━━━━━━━━━━",
         f"{trend_arrow(ms['btc_ch24h'])} *BTC*  ${ms['btc_price']:,.0f}  ({fc(ms['btc_ch24h'])})",
@@ -705,14 +906,14 @@ def build_overview_text(ms: dict) -> str:
         "",
         "━━━━━━━━━━━━━━━━━━━━━━",
         f"🧭 *Настроение:* {ms['sentiment']}",
-        f"  Растут {ms['sentiment_pct']:.0f}% монет из топ-300",
+        f"  Растут {ms['sentiment_pct']:.0f}% монет из топ-500",
         "",
         "━━━━━━━━━━━━━━━━━━━━━━",
-        "🟢 *ТОП ЛОНГИ* (топ-300)",
-        long_block,
+        "🚀 *ТОП ЛОНГИ* (топ-500)",
+    ] + (long_lines if long_lines else ["  Нет сигналов"]) + [
         "",
-        "🔴 *ТОП ШОРТЫ* (топ-300)",
-        short_block,
+        "📉 *ТОП ШОРТЫ* (топ-500)",
+    ] + (short_lines if short_lines else ["  Нет сигналов"]) + [
         "",
         "━━━━━━━━━━━━━━━━━━━━━━",
         f"🎯 *ВЕРДИКТ:* {ms['verdict']}",
@@ -720,10 +921,10 @@ def build_overview_text(ms: dict) -> str:
         "⚠️ Риск: *2% депозита*  |  SL обязателен",
     ])
 
-def overview_kb() -> InlineKeyboardMarkup:
+def overview_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("₿ BTC",    url="https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT"),
-         InlineKeyboardButton("Ξ ETH",    url="https://www.tradingview.com/chart/?symbol=BINANCE:ETHUSDT")],
+        [InlineKeyboardButton("₿ BTC",    url=tv_link("BTC")),
+         InlineKeyboardButton("Ξ ETH",    url=tv_link("ETH"))],
         [InlineKeyboardButton("BTC.D",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
          InlineKeyboardButton("TOTAL",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL"),
          InlineKeyboardButton("OTHERS.D", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:OTHERS.D")],
@@ -732,269 +933,397 @@ def overview_kb() -> InlineKeyboardMarkup:
     ])
 
 # ═══════════════════════════════════════════
-# ОТЧЁТЫ
+# PUMP / DUMP ДЕТЕКТОР
 # ═══════════════════════════════════════════
-def build_market_report(coins: list) -> list:
-    now  = datetime.now(TZ)
-    up   = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h",0), reverse=True)
-    dn   = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h",0))
-    pos  = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h",0)>0)
-    pct  = pos/len(coins)*100
-    mood = "🟢 Бычий" if pct>=60 else ("🔴 Медвежий" if pct<40 else "🟡 Нейтральный")
+async def check_pump_dump(bot, chat_ids, coins):
+    now_ts = datetime.now(TZ).timestamp()
+    for coin in coins:
+        sym   = coin["symbol"]
+        q     = coin["quote"]["USDT"]
+        price = q.get("price", 0)
+        ch1h  = q.get("percent_change_1h", 0) or 0
 
-    def ps(ch): return ("+" if ch>=0 else "")+f"{ch:.2f}%"
-    def ar(ch): return "🟢" if ch>=5 else ("🔵" if ch>=0 else ("🟠" if ch>=-5 else "🔴"))
+        # Обновляем кэш цен
+        if sym not in price_cache:
+            price_cache[sym] = []
+        price_cache[sym].append(price)
+        if len(price_cache[sym]) > 12:  # храним последний час
+            price_cache[sym].pop(0)
 
-    t1 = [f"🔥 *Обзор рынка — BEST TRADE*",
-          f"🕐 {now.strftime('%d.%m.%Y  %H:%M')} Istanbul",
-          f"Сентимент: {mood}  |  Растут: {pos}/{len(coins)} ({pct:.0f}%)",
-          "", "🚀 *ТОП-15 РОСТ за 24ч*"]
-    b1 = []
-    for i, c in enumerate(up[:15], 1):
-        q  = c["quote"]["USDT"]
-        ch = q.get("percent_change_24h", 0)
-        t1.append(f"{ar(ch)} {i}. *{c['symbol']}*  ${fp(q['price'])}  {ps(ch)}")
-    for c in up[:8]:
-        b1.append(InlineKeyboardButton(f"📊 {c['symbol']}", url=cmc_link(c.get("slug",c["symbol"].lower()))))
+        # Pump: +5% за 1ч
+        if ch1h >= 5:
+            last_alert = pump_alerted.get(sym, 0)
+            if now_ts - last_alert > 3600:  # не чаще раза в час
+                pump_alerted[sym] = now_ts
+                slug = coin.get("slug", sym.lower())
+                text = (f"🚀 *PUMP DETECTED!*\n"
+                        f"🕐 {now_utc3()}\n\n"
+                        f"*{sym}USDT*  +{ch1h:.2f}% за 1ч\n"
+                        f"💰 Цена: `{fp(price)}`\n"
+                        f"⚠️ Не гонись за памп-ом — жди отката!\n\n"
+                        f"#{sym}USDT")
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("CMC", url=cmc_link(slug)),
+                ]])
+                for cid in chat_ids:
+                    try:
+                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    except Exception as e:
+                        log.error(f"Pump alert {cid}: {e}")
+                log.info(f"PUMP alert: {sym} +{ch1h:.2f}%")
 
-    t2 = ["📉 *ТОП-15 ПАДЕНИЕ за 24ч*"]
-    b2 = []
-    for i, c in enumerate(dn[:15], 1):
-        q  = c["quote"]["USDT"]
-        ch = q.get("percent_change_24h", 0)
-        t2.append(f"{ar(ch)} {i}. *{c['symbol']}*  ${fp(q['price'])}  {ps(ch)}")
-    t2.extend(["", f"📡 CoinMarketCap • Топ-300 • {now.strftime('%H:%M:%S')} UTC+3"])
-    for c in dn[:8]:
-        b2.append(InlineKeyboardButton(f"📊 {c['symbol']}", url=cmc_link(c.get("slug",c["symbol"].lower()))))
+        # Dump: -5% за 1ч
+        elif ch1h <= -5:
+            last_alert = pump_alerted.get(f"dump_{sym}", 0)
+            if now_ts - last_alert > 3600:
+                pump_alerted[f"dump_{sym}"] = now_ts
+                slug = coin.get("slug", sym.lower())
+                text = (f"💥 *DUMP DETECTED!*\n"
+                        f"🕐 {now_utc3()}\n\n"
+                        f"*{sym}USDT*  {ch1h:.2f}% за 1ч\n"
+                        f"💰 Цена: `{fp(price)}`\n"
+                        f"⚠️ Возможна зона набора лонга!\n\n"
+                        f"#{sym}USDT")
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("CMC", url=cmc_link(slug)),
+                ]])
+                for cid in chat_ids:
+                    try:
+                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    except Exception as e:
+                        log.error(f"Dump alert {cid}: {e}")
+                log.info(f"DUMP alert: {sym} {ch1h:.2f}%")
 
-    return [{"text":"\n".join(t1),"btns":b1}, {"text":"\n".join(t2),"btns":b2}]
+# ═══════════════════════════════════════════
+# АЛЕРТ ВХОДА В ЗОНУ
+# ═══════════════════════════════════════════
+async def check_entry_zones(bot, chat_ids, coins):
+    """Когда цена входит в зону TP/SL — оповещаем"""
+    now_ts = datetime.now(TZ).timestamp()
+    analyzed = [(c, full_analysis(c)) for c in coins if c["quote"]["USDT"].get("price", 0) > 0]
+    signals  = [(c, a) for c, a in analyzed if abs(a["score"]) >= 3]
 
-def build_signals_report(coins: list) -> list:
-    now      = datetime.now(TZ)
-    analyzed = [(c, full_analysis(c)) for c in coins]
-    longs    = sorted([(c,a) for c,a in analyzed if a["score"]>=3],
-                      key=lambda x: x[1]["score"], reverse=True)[:8]
-    shorts   = sorted([(c,a) for c,a in analyzed if a["score"]<=-3],
-                      key=lambda x: x[1]["score"])[:5]
-    results  = []
+    for coin, a in signals:
+        sym   = coin["symbol"]
+        price = a["price"]
+        tp1   = a["tp1"]
+        sl    = a["sl"]
+        is_long = a["is_long"]
 
-    header = (f"🤖 *BEST TRADE — Сигналы*\n"
-              f"🕐 {now.strftime('%d.%m.%Y  %H:%M')} Istanbul\n\n"
-              f"🟢 Лонг: {len(longs)}  |  🔴 Шорт: {len(shorts)}")
-    results.append({"type":"text","text":header,"btns":[]})
+        # Цена подходит к entry zone (в пределах 1%)
+        if is_long:
+            near_entry = price <= a["swing"] * 1.01
+        else:
+            near_entry = price >= a["swing"] * 0.99
 
-    for c, a in longs + shorts:
-        sym  = c["symbol"]
-        slug = c.get("slug", sym.lower())
-        results.append({
-            "type": "coin", "symbol": sym, "slug": slug,
-            "text": build_signal_text(sym, a), "analysis": a,
-            "btns": [InlineKeyboardButton("📈 TradingView", url=tv_link(sym))],
-        })
-
-    results.append({"type":"text",
-                    "text":"⚠️ *Риск:* 2-3% депозита\nСтоп *ВСЕГДА* до входа в сделку!",
-                    "btns":[]})
-    return results
-
-def build_period_report(period: str, coins: list) -> list:
-    fm2 = {"1h":"percent_change_1h","24h":"percent_change_24h","7d":"percent_change_7d"}
-    lm  = {"1h":"1 ЧАС","24h":"24 ЧАСА","7d":"7 ДНЕЙ"}
-    f   = fm2.get(period,"percent_change_24h")
-    l   = lm.get(period,"24 ЧАСА")
-    now = datetime.now(TZ)
-    def ti(ch): return "🟢" if ch>=5 else ("🔵" if ch>=0 else ("🟠" if ch>=-5 else "🔴"))
-    def fc2(ch): return f"+{ch:.2f}%" if ch>=0 else f"{ch:.2f}%"
-    up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get(f,0), reverse=True)
-    dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get(f,0))
-    t1  = f"📊 BEST TRADE — ТОП за {l}\n🕐 {now.strftime('%H:%M')} Istanbul\n\n🚀 ЛИДЕРЫ РОСТА\n{'─'*26}\n"
-    b1  = []
-    for i,c in enumerate(up[:15],1):
-        ch = c["quote"]["USDT"].get(f,0); p = c["quote"]["USDT"].get("price",0)
-        t1 += f"{i:>2}. {c['symbol']:<8} ${fp(p):<14} {ti(ch)} {fc2(ch)}\n"
-    for c in up[:8]:
-        b1.append(InlineKeyboardButton(f"📊 {c['symbol']}", url=cmc_link(c.get("slug",c["symbol"].lower()))))
-    t2 = f"📉 ЛИДЕРЫ ПАДЕНИЯ\n{'─'*26}\n"; b2 = []
-    for i,c in enumerate(dn[:15],1):
-        ch = c["quote"]["USDT"].get(f,0); p = c["quote"]["USDT"].get("price",0)
-        t2 += f"{i:>2}. {c['symbol']:<8} ${fp(p):<14} {ti(ch)} {fc2(ch)}\n"
-    for c in dn[:8]:
-        b2.append(InlineKeyboardButton(f"📊 {c['symbol']}", url=cmc_link(c.get("slug",c["symbol"].lower()))))
-    return [{"text":t1,"btns":b1},{"text":t2,"btns":b2}]
+        if near_entry:
+            last_alert = alerted_zones.get(sym, 0)
+            if now_ts - last_alert > 1800:  # не чаще раза в 30 мин
+                alerted_zones[sym] = now_ts
+                side   = "LONG" if is_long else "SHORT"
+                emoji  = "🟢" if is_long else "🔴"
+                slug   = coin.get("slug", sym.lower())
+                text   = (f"⚡️ *ЗОНА НАБОРА — ВХОДИМ!*\n"
+                          f"🕐 {now_utc3()}\n\n"
+                          f"{emoji} *{sym}USDT  {side}*\n"
+                          f"💰 Цена: `{fp(price)}`\n"
+                          f"🎯 TP1: `{fp(tp1)}`\n"
+                          f"🛑 SL: `{fp(sl)}`\n"
+                          f"📐 R:R: 1:{a['rr']:.1f}\n\n"
+                          f"⚠️ Риск: 2% депозита | SL обязателен\n\n"
+                          f"#{sym}USDT")
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("CMC", url=cmc_link(slug)),
+                ]])
+                for cid in chat_ids:
+                    try:
+                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    except Exception as e:
+                        log.error(f"Zone alert {cid}: {e}")
+                log.info(f"ZONE alert: {sym} {side} price={fp(price)}")
 
 # ═══════════════════════════════════════════
 # ОТПРАВКА
 # ═══════════════════════════════════════════
 def main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Обзор рынка",  callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы",      callback_data="signals")],
-        [InlineKeyboardButton("📊 Рынок",        callback_data="report"),
-         InlineKeyboardButton("⏱ 1ч",           callback_data="period_1h"),
-         InlineKeyboardButton("📅 24ч",          callback_data="period_24h")],
+        [InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+         InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+         InlineKeyboardButton("🚀 /5 Ракеты",  callback_data="rockets")],
+        [InlineKeyboardButton("📊 /4 Топ",     callback_data="report"),
+         InlineKeyboardButton("⏱ 1ч",         callback_data="period_1h"),
+         InlineKeyboardButton("📅 24ч",        callback_data="period_24h")],
     ])
 
-async def send_coin(bot, chat_id, symbol, slug, a, text, extra_btns=[]):
+async def send_coin(bot, chat_id, symbol, slug, a, text):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 TradingView", url=tv_link(symbol))],
         [InlineKeyboardButton("🔄 Обновить", callback_data=f"coin_{symbol}"),
          InlineKeyboardButton("CMC", url=cmc_link(slug))],
-        [InlineKeyboardButton("🌍 Обзор рынка", callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы",     callback_data="signals")],
+        [InlineKeyboardButton("🌍 /1 Обзор", callback_data="market_overview"),
+         InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals")],
     ])
+
+    # Получаем 24h stats для графика
+    stats_24h = get_binance_24h(symbol)
     chart = None
     try:
-        chart = generate_signal_chart(symbol, slug, a)
-        log.info(f"Chart generated for {symbol}, size={chart.getbuffer().nbytes} bytes")
+        chart = generate_signal_chart(symbol, a, stats_24h)
+        log.info(f"Chart OK: {symbol} {chart.getbuffer().nbytes} bytes")
     except Exception as e:
-        log.error(f"Chart generation FAILED {symbol}: {type(e).__name__}: {e}")
+        log.error(f"Chart FAILED {symbol}: {type(e).__name__}: {e}")
 
-    # Telegram caption limit = 1024 chars
     caption = text if len(text) <= 1024 else text[:1020] + "..."
 
     if chart is not None:
         try:
             chart.seek(0)
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=chart,
-                caption=caption,
-                parse_mode="Markdown",
-                reply_markup=kb
-            )
+            await bot.send_photo(chat_id=chat_id, photo=chart,
+                                 caption=caption, parse_mode="Markdown",
+                                 reply_markup=kb)
             log.info(f"send_photo OK: {symbol}")
             return
         except Exception as e:
             log.error(f"send_photo FAILED {symbol}: {type(e).__name__}: {e}")
-            # Retry: send photo without caption, then text separately
             try:
                 chart.seek(0)
                 await bot.send_photo(chat_id=chat_id, photo=chart)
-                await bot.send_message(
-                    chat_id, text,
-                    parse_mode="Markdown",
-                    reply_markup=kb,
-                    disable_web_page_preview=True
-                )
-                log.info(f"send_photo (split) OK: {symbol}")
+                await bot.send_message(chat_id, text, parse_mode="Markdown",
+                                       reply_markup=kb, disable_web_page_preview=True)
                 return
             except Exception as e2:
-                log.error(f"send_photo split FAILED {symbol}: {type(e2).__name__}: {e2}")
+                log.error(f"send_photo split FAILED {symbol}: {e2}")
 
-    # Fallback — только текст
-    await bot.send_message(
-        chat_id, text,
-        parse_mode="Markdown",
-        reply_markup=kb,
-        disable_web_page_preview=True
-    )
+    await bot.send_message(chat_id, text, parse_mode="Markdown",
+                           reply_markup=kb, disable_web_page_preview=True)
 
-async def send_signals(bot, chat_id, coins):
-    parts = build_signals_report(coins)
+async def send_signals_batch(bot, chat_id, coins):
+    analyzed = [(c, full_analysis(c)) for c in coins]
+
+    # Сортировка по Rocket Score — лучшие монеты первыми
+    rockets  = sorted([(c,a) for c,a in analyzed if a["rocket"] >= 65 and a["is_long"]],
+                      key=lambda x: x[1]["rocket"], reverse=True)[:3]
+    longs    = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
+                      key=lambda x: x[1]["score"], reverse=True)[:5]
+    shorts   = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
+                      key=lambda x: x[1]["score"])[:3]
+
+    # Убираем дубликаты (rocket монеты уже могут быть в longs)
+    rocket_syms = {c["symbol"] for c,a in rockets}
+    longs = [(c,a) for c,a in longs if c["symbol"] not in rocket_syms]
+
     nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🌍 Обзор рынка", callback_data="market_overview"),
-        InlineKeyboardButton("🤖 Сигналы",     callback_data="signals"),
+        InlineKeyboardButton("🌍 /1 Обзор",    callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы",  callback_data="signals"),
+        InlineKeyboardButton("🚀 /5 Ракеты",   callback_data="rockets"),
     ]])
-    for part in parts:
-        try:
-            if part["type"] == "text":
-                await bot.send_message(chat_id, part["text"],
-                                       parse_mode="Markdown", reply_markup=nav)
-            elif part["type"] == "coin":
-                await send_coin(bot, chat_id,
-                                part["symbol"], part["slug"],
-                                part["analysis"], part["text"])
-        except Exception as e:
-            log.error(f"send_signals error: {e}")
 
-async def send_parts(bot, chat_id, parts, query=None):
-    nav_rows = [
-        [InlineKeyboardButton("🌍 Обзор рынка",  callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы",      callback_data="signals")],
-        [InlineKeyboardButton("⏱ 1ч",  callback_data="period_1h"),
-         InlineKeyboardButton("📅 24ч", callback_data="period_24h"),
-         InlineKeyboardButton("📆 7д",  callback_data="period_7d")],
+    # ── ЗАГОЛОВОК СИГНАЛОВ ──
+    header_lines = [
+        "🤖 *BEST TRADE — Сигналы*",
+        f"🕐 {now_utc3()}",
+        "",
     ]
-    for i, part in enumerate(parts):
-        rows = [part["btns"][j:j+4] for j in range(0, len(part["btns"]), 4)]
-        if i == len(parts)-1:
-            rows += nav_rows
-        kb = InlineKeyboardMarkup(rows) if rows else None
-        if query and i == 0:
-            await query.edit_message_text(part["text"], parse_mode="Markdown",
-                                          reply_markup=kb, disable_web_page_preview=True)
-        else:
-            await bot.send_message(chat_id, part["text"], parse_mode="Markdown",
-                                   reply_markup=kb, disable_web_page_preview=True)
+    if rockets:
+        header_lines.append("🚀🔥 *ЛУЧШИЕ СЕТАПЫ (Rocket ≥65):*")
+        for c, a in rockets:
+            header_lines.append(f"  • *{c['symbol']}*  Score `{a['rocket']}/100`  {a['rocket_label']}")
+        header_lines.append("")
+    header_lines += [
+        f"🟢 Лонг: {len(longs)+len(rockets)}  |  🔴 Шорт: {len(shorts)}",
+        f"📊 Топ-500 CoinMarketCap",
+    ]
+    await bot.send_message(chat_id, "\n".join(header_lines),
+                           parse_mode="Markdown", reply_markup=nav)
+
+    # ── ROCKET МОНЕТЫ ПЕРВЫМИ ──
+    for coin, a in rockets:
+        sym   = coin["symbol"]
+        slug  = coin.get("slug", sym.lower())
+        stats = get_binance_24h(sym)
+        text  = build_signal_text(sym, a, stats)
+        await send_coin(bot, chat_id, sym, slug, a, text)
+        await asyncio.sleep(1.5)
+
+    # ── ОБЫЧНЫЕ ЛОНГИ ──
+    for coin, a in longs:
+        sym   = coin["symbol"]
+        slug  = coin.get("slug", sym.lower())
+        stats = get_binance_24h(sym)
+        text  = build_signal_text(sym, a, stats)
+        await send_coin(bot, chat_id, sym, slug, a, text)
+        await asyncio.sleep(1.5)
+
+    # ── ШОРТЫ ──
+    for coin, a in shorts:
+        sym   = coin["symbol"]
+        slug  = coin.get("slug", sym.lower())
+        stats = get_binance_24h(sym)
+        text  = build_signal_text(sym, a, stats)
+        await send_coin(bot, chat_id, sym, slug, a, text)
+        await asyncio.sleep(1.5)
+
+    await bot.send_message(chat_id,
+        "⚠️ *Риск:* 2-3% депозита\nСтоп *ВСЕГДА* до входа в сделку!",
+        parse_mode="Markdown")
 
 # ═══════════════════════════════════════════
 # HANDLERS
 # ═══════════════════════════════════════════
 user_chat_ids = set()
 
+def load_chat_ids():
+    try:
+        with open("chat_ids.txt") as f:
+            return set(int(l.strip()) for l in f if l.strip())
+    except:
+        return set()
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cid = update.effective_chat.id
     user_chat_ids.add(cid)
-    with open("chat_ids.txt","a") as f: f.write(f"{cid}\n")
+    with open("chat_ids.txt", "a") as f:
+        f.write(f"{cid}\n")
     await update.message.reply_text(
-        "📊 *BEST TRADE v8.0*\n\n"
-        "Топ-300 • CoinMarketCap\n"
-        "🌍 Рыночный обзор каждые 30 мин\n"
-        "📈 Графики с EMA + уровнями + водяным знаком\n"
-        "RSI • R:R • Объём • EMA позиция\n"
-        "🕐 Стамбул UTC+3\n\n"
-        "/market — обзор рынка\n"
-        "/coin BTC — анализ монеты\n"
-        "/signals — торговые сигналы\n"
-        "/top — топ рынка",
+        "📊 *BEST TRADE v10.0*\n\n"
+        "Топ-500 • CoinMarketCap\n"
+        "🚀 Rocket Score — умный поиск ракет\n"
+        "🧠 SMC + TA + Фундаментал (20+ факторов)\n"
+        "📈 Графики EMA20/50/200 + уровни\n"
+        "⚡️ Pump/Dump + Zone алерты\n"
+        "📅 Min/Max дня + лучший вход\n"
+        "🕐 Время UTC+3\n\n"
+        "/1 — обзор рынка\n"
+        "/2 BTC — анализ монеты\n"
+        "/3 — торговые сигналы\n"
+        "/4 — топ рынка\n"
+        "/5 — 🚀 ракеты (лучшие сетапы)",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Загружаю рыночные данные...")
+    msg = await update.message.reply_text("⏳ Загружаю...")
     try:
-        prices = get_btc_eth_price()
-        gm     = get_global_metrics()
-        coins  = get_top300()
-        ms     = analyze_market(prices.get("BTC",{}), prices.get("ETH",{}), gm, coins)
+        prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top500()
+        ms = analyze_market(prices.get("BTC", {}), prices.get("ETH", {}), gm, coins)
         await msg.edit_text(build_overview_text(ms), parse_mode="Markdown",
                             reply_markup=overview_kb(), disable_web_page_preview=True)
     except Exception as e:
         log.error(f"cmd_market: {e}")
-        await msg.edit_text("❌ Ошибка загрузки данных")
+        await msg.edit_text("❌ Ошибка")
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("Напиши: `/coin BTC`", parse_mode="Markdown")
+        await update.message.reply_text("Напиши: `/2 BTC`", parse_mode="Markdown")
         return
     symbol = ctx.args[0].upper()
     msg    = await update.message.reply_text(f"⏳ Анализирую {symbol}...")
-    coins  = get_top300()
-    coin   = next((c for c in coins if c["symbol"]==symbol), None)
+    coins  = get_top500()
+    coin   = next((c for c in coins if c["symbol"] == symbol), None)
     if not coin:
-        await msg.edit_text(f"❌ {symbol} не найден в топ-300")
+        await msg.edit_text(f"❌ {symbol} не найден в топ-500")
         return
-    a    = full_analysis(coin)
-    slug = coin.get("slug", symbol.lower())
-    text = build_signal_text(symbol, a)
+    a     = full_analysis(coin)
+    slug  = coin.get("slug", symbol.lower())
+    stats = get_binance_24h(symbol)
+    atl   = get_binance_alltime_low(symbol)
+    text  = build_signal_text(symbol, a, stats, atl)
     await msg.delete()
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
 
-async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Загружаю...")
-    coins = get_top300()
-    if not coins:
-        await msg.edit_text("❌ Нет данных"); return
-    await msg.delete()
-    await send_parts(ctx.bot, update.effective_chat.id, build_market_report(coins))
-
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Анализирую топ-300... ~30 сек")
-    coins = get_top300()
+    msg = await update.message.reply_text("⏳ Анализирую топ-500... ~60 сек")
+    coins = get_top500()
     if not coins:
         await msg.edit_text("❌ Нет данных"); return
     await msg.delete()
-    await send_signals(ctx.bot, update.effective_chat.id, coins)
+    await send_signals_batch(ctx.bot, update.effective_chat.id, coins)
+
+async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Топ монет по Rocket Score — самые перспективные"""
+    msg = await update.message.reply_text("🚀 Ищу ракеты в топ-500... ~30 сек")
+    coins = get_top500()
+    if not coins:
+        await msg.edit_text("❌ Нет данных"); return
+
+    analyzed = [(c, full_analysis(c)) for c in coins]
+    rockets  = sorted([(c,a) for c,a in analyzed],
+                      key=lambda x: x[1]["rocket"], reverse=True)[:10]
+
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+    ]])
+
+    lines = [
+        "🚀🔥 *BEST TRADE — РАКЕТЫ*",
+        f"🕐 {now_utc3()}",
+        f"Топ-10 по Rocket Score из 500 монет",
+        "",
+    ]
+    for i, (c, a) in enumerate(rockets, 1):
+        sym  = c["symbol"]
+        r    = a["rocket"]
+        filled = int(r / 10)
+        bar  = "█" * filled + "░" * (10 - filled)
+        side = "🟢L" if a["is_long"] else "🔴S"
+        smc  = " | ".join(a.get("smc_factors", [])[:3]) or "—"
+        lines += [
+            f"{i}. *{sym}*  `{r}/100` {a['rocket_label']}",
+            f"   `{bar}` {side}",
+            f"   💰`{fp(a['price'])}`  24H`{fc(a['ch24h'])}`  RSI`{a['rsi_4h']:.0f}`",
+            f"   🧠 {smc}",
+            "",
+        ]
+    lines.append("⚠️ Риск: 2% депозита | SL обязателен")
+
+    await msg.delete()
+    await ctx.bot.send_message(
+        update.effective_chat.id, "\n".join(lines),
+        parse_mode="Markdown", reply_markup=nav,
+        disable_web_page_preview=True
+    )
+
+    # Отправляем топ-3 с графиком
+    for coin, a in rockets[:3]:
+        sym   = coin["symbol"]
+        slug  = coin.get("slug", sym.lower())
+        stats = get_binance_24h(sym)
+        text  = build_signal_text(sym, a, stats)
+        await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
+        await asyncio.sleep(1.5)
+    msg   = await update.message.reply_text("⏳ Загружаю...")
+    coins = get_top500()
+    if not coins:
+        await msg.edit_text("❌ Нет данных"); return
+    now = datetime.now(TZ).strftime("%d.%m.%Y %H:%M UTC+3")
+    up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
+    dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
+    pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
+
+    def row(i, c):
+        q  = c["quote"]["USDT"]
+        ch = q.get("percent_change_24h", 0)
+        em = "🚀" if ch >= 5 else ("🟢" if ch >= 0 else ("🔴" if ch >= -5 else "💥"))
+        return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
+
+    t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now}",
+          f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
+          "🚀 *ЛИДЕРЫ РОСТА 24ч*"]
+    t1 += [row(i, c) for i, c in enumerate(up[:15], 1)]
+    t2  = ["📉 *ЛИДЕРЫ ПАДЕНИЯ 24ч*"]
+    t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
+
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор", callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+    ]])
+    await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
+    await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
+                               parse_mode="Markdown", reply_markup=nav)
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; data = q.data; await q.answer()
@@ -1002,56 +1331,94 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "market_overview":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
         try:
-            prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top300()
-            ms = analyze_market(prices.get("BTC",{}), prices.get("ETH",{}), gm, coins)
+            prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top500()
+            ms = analyze_market(prices.get("BTC", {}), prices.get("ETH", {}), gm, coins)
             await q.edit_message_text(build_overview_text(ms), parse_mode="Markdown",
                                       reply_markup=overview_kb(), disable_web_page_preview=True)
         except Exception as e:
             log.error(f"overview cb: {e}")
             await q.edit_message_text("❌ Ошибка")
 
-    elif data in ("report","signals") or data.startswith("period_"):
-        await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
-        coins = get_top300()
+    elif data == "signals":
+        await q.edit_message_text("⏳ Загружаю сигналы...", parse_mode="Markdown")
+        coins = get_top500()
         if not coins:
             await q.edit_message_text("❌ Нет данных"); return
-        if data == "report":       parts = build_market_report(coins)
-        elif data == "signals":    parts = build_signals_report(coins)
-        else:                      parts = build_period_report(data.split("_")[1], coins)
-        await send_parts(ctx.bot, q.message.chat_id, parts, query=q)
+        await send_signals_batch(ctx.bot, q.message.chat_id, coins)
+
+    elif data == "rockets":
+        await q.edit_message_text("🚀 Ищу ракеты...", parse_mode="Markdown")
+        coins = get_top500()
+        if not coins:
+            await q.edit_message_text("❌ Нет данных"); return
+        analyzed = [(c, full_analysis(c)) for c in coins]
+        rockets  = sorted([(c,a) for c,a in analyzed],
+                          key=lambda x: x[1]["rocket"], reverse=True)[:10]
+        nav = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+            InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+        ]])
+        lines = ["🚀🔥 *РАКЕТЫ — Rocket Score*", f"🕐 {now_utc3()}", ""]
+        for i, (c, a) in enumerate(rockets, 1):
+            r = a["rocket"]; bar = "█"*int(r/10)+"░"*(10-int(r/10))
+            side = "🟢L" if a["is_long"] else "🔴S"
+            lines.append(f"{i}. *{c['symbol']}* `{r}/100` {side}  `{bar}`")
+        await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
+                                  reply_markup=nav, disable_web_page_preview=True)
+
+    elif data == "report":
+        await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
+        coins = get_top500()
+        if coins:
+            up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
+            txt = "\n".join([f"🚀 *Топ рост 24ч*", f"🕐 {now_utc3()}"] +
+                            [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get('percent_change_24h',0))}"
+                             for i, c in enumerate(up[:20], 1)])
+            await q.edit_message_text(txt, parse_mode="Markdown",
+                                      reply_markup=overview_kb(), disable_web_page_preview=True)
 
     elif data.startswith("coin_"):
-        symbol  = data[5:]; cid = q.message.chat_id
+        symbol = data[5:]; cid = q.message.chat_id
         await q.edit_message_text(f"⏳ Обновляю {symbol}...")
-        coins = get_top300()
-        coin  = next((c for c in coins if c["symbol"]==symbol), None)
+        coins = get_top500()
+        coin  = next((c for c in coins if c["symbol"] == symbol), None)
         if not coin:
             await q.edit_message_text(f"❌ {symbol} не найден"); return
         a    = full_analysis(coin)
         slug = coin.get("slug", symbol.lower())
-        text = build_signal_text(symbol, a)
+        stats = get_binance_24h(symbol)
+        text  = build_signal_text(symbol, a, stats)
         try: await q.message.delete()
         except: pass
         await send_coin(ctx.bot, cid, symbol, slug, a, text)
 
+    elif data.startswith("period_"):
+        period = data.split("_")[1]
+        field  = {"1h": "percent_change_1h", "24h": "percent_change_24h",
+                  "7d": "percent_change_7d"}.get(period, "percent_change_24h")
+        coins  = get_top500()
+        if not coins:
+            await q.edit_message_text("❌ Нет данных"); return
+        up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get(field, 0), reverse=True)
+        lbl = {"1h": "1 ЧАС", "24h": "24 ЧАСА", "7d": "7 ДНЕЙ"}.get(period, "24 ЧАСА")
+        txt = "\n".join([f"📊 *Топ за {lbl}*", f"🕐 {now_utc3()}", ""] +
+                        [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get(field,0))}"
+                         for i, c in enumerate(up[:15], 1)])
+        await q.edit_message_text(txt, parse_mode="Markdown",
+                                  reply_markup=overview_kb(), disable_web_page_preview=True)
+
 # ═══════════════════════════════════════════
 # РАССЫЛКА
 # ═══════════════════════════════════════════
-def load_chat_ids():
-    try:
-        with open("chat_ids.txt") as f:
-            return set(int(l.strip()) for l in f if l.strip())
-    except: return set()
-
 async def send_scheduled(bot: Bot):
     chat_ids = load_chat_ids() | user_chat_ids
     if not chat_ids: return
-    log.info(f"Рассылка {datetime.now(TZ).strftime('%H:%M')} Istanbul")
-    coins  = get_top300()
+    log.info(f"Рассылка {now_utc3()}")
+    coins  = get_top500()
     prices = get_btc_eth_price()
     gm     = get_global_metrics()
     if not coins: return
-    ms   = analyze_market(prices.get("BTC",{}), prices.get("ETH",{}), gm, coins)
+    ms   = analyze_market(prices.get("BTC", {}), prices.get("ETH", {}), gm, coins)
     text = build_overview_text(ms)
     kb   = overview_kb()
     for cid in chat_ids:
@@ -1059,9 +1426,21 @@ async def send_scheduled(bot: Bot):
             await bot.send_message(cid, text, parse_mode="Markdown",
                                    reply_markup=kb, disable_web_page_preview=True)
             await asyncio.sleep(1)
-            await send_signals(bot, cid, coins)
+            await send_signals_batch(bot, cid, coins)
         except Exception as e:
             log.error(f"Рассылка {cid}: {e}")
+
+async def check_alerts(bot: Bot):
+    """Каждые 5 мин: pump/dump + zone alerts"""
+    chat_ids = load_chat_ids() | user_chat_ids
+    if not chat_ids: return
+    try:
+        coins = get_top500()
+        if not coins: return
+        await check_pump_dump(bot, chat_ids, coins)
+        await check_entry_zones(bot, chat_ids, coins)
+    except Exception as e:
+        log.error(f"check_alerts: {e}")
 
 # ═══════════════════════════════════════════
 # MAIN
@@ -1069,18 +1448,30 @@ async def send_scheduled(bot: Bot):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("1",       cmd_market))
+    app.add_handler(CommandHandler("2",       cmd_coin))
+    app.add_handler(CommandHandler("3",       cmd_signals))
+    app.add_handler(CommandHandler("4",       cmd_top))
+    app.add_handler(CommandHandler("5",       cmd_rockets))
+    # обратная совместимость
     app.add_handler(CommandHandler("market",  cmd_market))
     app.add_handler(CommandHandler("coin",    cmd_coin))
-    app.add_handler(CommandHandler("top",     cmd_top))
     app.add_handler(CommandHandler("signals", cmd_signals))
+    app.add_handler(CommandHandler("top",     cmd_top))
+    app.add_handler(CommandHandler("rockets", cmd_rockets))
     app.add_handler(CallbackQueryHandler(callback_handler))
+
     scheduler = AsyncIOScheduler(timezone=TZ)
     scheduler.add_job(
         lambda: asyncio.create_task(send_scheduled(app.bot)),
         "interval", minutes=30
     )
+    scheduler.add_job(
+        lambda: asyncio.create_task(check_alerts(app.bot)),
+        "interval", minutes=5
+    )
     scheduler.start()
-    log.info("✅ BEST TRADE v8.0 | Istanbul UTC+3 | Топ лонги/шорты в обзоре")
+    log.info("✅ BEST TRADE v9.0 | TOP-500 | Pump/Dump | Zone Alerts | UTC+3")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
