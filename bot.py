@@ -383,45 +383,47 @@ def generate_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
 # ТЕКСТ СИГНАЛА (стиль примера)
 # ═══════════════════════════════════════════
 def build_signal_text(symbol: str, coin: dict, a: dict) -> str:
-    now  = datetime.now(TZ)
+    """Формат 1в1 как Kriptano"""
     side_emoji = "🟢" if a["is_long"] else "🔴"
     side_text  = "LONG" if a["is_long"] else "SHORT"
 
-    z1 = a["zone1"].replace("`", "")
-    z2 = a["zone2"].replace("`", "")
-    z3 = a["zone3"].replace("`", "")
+    # Рассчитываем % от точки входа
+    price = a["price"]
+    def pct_from_entry(target_str):
+        try:
+            target = float(str(target_str).replace(",","").replace("$","").strip())
+            if a["is_long"]:
+                return f"+{(target - price) / price * 100:.2f}%"
+            else:
+                return f"+{(price - target) / price * 100:.2f}%"
+        except:
+            return ""
 
-    ch_15m = a["ch1h"] * 0.25
-    ch_4h  = (a["ch1h"] + a["ch24h"]) / 2
+    def sl_pct(stop_str):
+        try:
+            stop = float(str(stop_str).replace(",","").replace("$","").strip())
+            if a["is_long"]:
+                return f"{(stop - price) / price * 100:.2f}%"
+            else:
+                return f"{(price - stop) / price * 100:.2f}%"
+        except:
+            return ""
 
-    def ps(ch): return ("+" if ch >= 0 else "") + f"{ch:.2f}%"
+    swing_label = "Swing High" if not a["is_long"] else "Swing Low"
 
     lines = [
         f"📊 *{symbol}USDT* {side_emoji} *{side_text}*",
         "",
-        f"💰 *Точка входа:* {fp(a['price'])}",
+        f"💰 *Точка входа:* {fp(price)}",
         f"🎯 *Тейк-профит 1:* {a['tp1']}",
+        f"({pct_from_entry(a['tp1'])})",
         f"🎯 *Тейк-профит 2:* {a['tp2']}",
+        f"({pct_from_entry(a['tp2'])})",
         f"🎯 *Тейк-профит 3:* {a['tp3']}",
-        f"🛑 *Стоп лосс:* {a['stop']}",
-        f"📌 *Swing:* {a['swing']}",
-        "",
-        f"📈 *Изменение:* 15м {ps(ch_15m)} | 1ч {ps(a['ch1h'])} | 4ч {ps(ch_4h)} | 1д {ps(a['ch24h'])}",
-        f"📉 *RSI:* 4ч {a['rsi_4h']} | 1ч {a['rsi_1h']}",
-        "",
-        f"🎯 *Зоны набора:*",
-        f"`{z1}`",
-        f"`{z2}`",
-        f"`{z3}`",
-        "",
-        f"💡 Зашли на 1-м уровне → усредняйте на 3-м,",
-        f"зашли на 2-м → усредняйте на 4-м",
-        f"🎲 Тейки устанавливайте на 4-6% чистого движения на откате",
-        f"🛑 Стоп-лосс на 6-9% за уровни после затихания волатильности",
-        "",
-        f"🕐 Отправлено: {now.strftime('%d.%m %H:%M:%S')} UTC+3",
-        "",
-        f"#{symbol}USDT",
+        f"({pct_from_entry(a['tp3'])})",
+        f"🔴 *Стоп лосс:* {a['stop']}",
+        f"({sl_pct(a['stop'])})",
+        f"📌 *{swing_label}:* {a['swing']}",
     ]
     return "\n".join(lines)
 
@@ -691,11 +693,10 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         chart = generate_chart(symbol, slug, a)
         text  = build_signal_text(symbol, coin, a)
         kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📈 CoinMarketCap", url=cmc_link(slug)),
-            InlineKeyboardButton("📊 TradingView",   url=tv_link(symbol)),
+            InlineKeyboardButton("📈 Открыть график на TradingView", url=tv_link(symbol)),
         ],[
             InlineKeyboardButton("🔄 Обновить", callback_data=f"coin_{symbol}"),
-            InlineKeyboardButton("◀️ Назад",     callback_data="report"),
+            InlineKeyboardButton("📈 CMC",      url=cmc_link(slug)),
         ]])
         await msg.delete()
         await update.message.reply_photo(
