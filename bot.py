@@ -1255,18 +1255,18 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
          InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals")],
     ])
 
-    # Supertrend — получаем реальный сигнал
-    try:
-        st_data = get_supertrend_signal(symbol)
-        a["st_label"] = st_data["label"]
-        # Если текст ещё не содержит ST — пересобираем с ST
-        if "Supertrend" not in text:
-            stats_24h_for_text = get_binance_24h(symbol)
-            text = build_signal_text(symbol, a, stats_24h_for_text)
-    except Exception as e:
-        log.error(f"ST fetch {symbol}: {e}")
+    # Supertrend — получаем реальный сигнал только если не заполнен
+    if not a.get("st_label") or a.get("st_label") == "—":
+        try:
+            st_data = get_supertrend_signal(symbol)
+            a["st_label"] = st_data["label"]
+        except Exception as e:
+            log.error(f"ST fetch {symbol}: {e}")
+            a["st_label"] = "—"
 
+    # Пересобираем текст с актуальным ST
     stats_24h = get_binance_24h(symbol)
+    text = build_signal_text(symbol, a, stats_24h)
     chart = None
     try:
         chart = generate_signal_chart(symbol, a, stats_24h)
@@ -1309,7 +1309,7 @@ async def send_signals_batch(bot, chat_id, coins):
     shorts   = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
                       key=lambda x: x[1]["score"])[:3]
 
-    # Убираем дубликаты (rocket монеты уже могут быть в longs)
+    # Убираем дубликаты
     rocket_syms = {c["symbol"] for c,a in rockets}
     longs = [(c,a) for c,a in longs if c["symbol"] not in rocket_syms]
 
@@ -1319,7 +1319,6 @@ async def send_signals_batch(bot, chat_id, coins):
         InlineKeyboardButton("🚀 /5 Ракеты",   callback_data="rockets"),
     ]])
 
-    # ── ЗАГОЛОВОК СИГНАЛОВ ──
     header_lines = [
         "🤖 *BEST TRADE — Сигналы*",
         f"🕐 {now_utc3()}",
@@ -1337,32 +1336,26 @@ async def send_signals_batch(bot, chat_id, coins):
     await bot.send_message(chat_id, "\n".join(header_lines),
                            parse_mode="Markdown", reply_markup=nav)
 
-    # ── ROCKET МОНЕТЫ ПЕРВЫМИ ──
+    async def _send(coin, a):
+        sym  = coin["symbol"]
+        slug = coin.get("slug", sym.lower())
+        # Получаем Supertrend
+        try:
+            st_data = get_supertrend_signal(sym)
+            a["st_label"] = st_data["label"]
+        except:
+            a["st_label"] = "—"
+        stats = get_binance_24h(sym)
+        text  = build_signal_text(sym, a, stats)
+        await send_coin(bot, chat_id, sym, slug, a, text)
+        await asyncio.sleep(1.5)
+
     for coin, a in rockets:
-        sym   = coin["symbol"]
-        slug  = coin.get("slug", sym.lower())
-        stats = get_binance_24h(sym)
-        text  = build_signal_text(sym, a, stats)
-        await send_coin(bot, chat_id, sym, slug, a, text)
-        await asyncio.sleep(1.5)
-
-    # ── ОБЫЧНЫЕ ЛОНГИ ──
+        await _send(coin, a)
     for coin, a in longs:
-        sym   = coin["symbol"]
-        slug  = coin.get("slug", sym.lower())
-        stats = get_binance_24h(sym)
-        text  = build_signal_text(sym, a, stats)
-        await send_coin(bot, chat_id, sym, slug, a, text)
-        await asyncio.sleep(1.5)
-
-    # ── ШОРТЫ ──
+        await _send(coin, a)
     for coin, a in shorts:
-        sym   = coin["symbol"]
-        slug  = coin.get("slug", sym.lower())
-        stats = get_binance_24h(sym)
-        text  = build_signal_text(sym, a, stats)
-        await send_coin(bot, chat_id, sym, slug, a, text)
-        await asyncio.sleep(1.5)
+        await _send(coin, a)
 
     await bot.send_message(chat_id,
         "⚠️ *Риск:* 2-3% депозита\nСтоп *ВСЕГДА* до входа в сделку!",
