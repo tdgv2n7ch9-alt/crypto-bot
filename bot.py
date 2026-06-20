@@ -261,31 +261,25 @@ def full_analysis(coin: dict) -> dict:
 # ГЕНЕРАЦИЯ ГРАФИКА (4ч + 15м рядом)
 # ═══════════════════════════════════════════
 def generate_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
-    """Два графика рядом: 4ч (7 дней) + 15м (1 день)"""
+    """Один большой свечной график в стиле Kriptano"""
 
-    candles_4h = get_coingecko_ohlc(slug, days=7)
-    candles_1d = get_coingecko_ohlc(slug, days=1)
+    candles = get_coingecko_ohlc(slug, days=7)
 
-    fig = plt.figure(figsize=(14, 5), facecolor=BG)
-    gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.04)
-    ax1 = fig.add_subplot(gs[0], facecolor=BG)
-    ax2 = fig.add_subplot(gs[1], facecolor=BG)
+    fig, ax = plt.subplots(figsize=(12, 6), facecolor=BG)
+    ax.set_facecolor(BG)
 
-    def draw_candles(ax, candles, title, show_levels=True):
-        if not candles:
-            ax.text(0.5, 0.5, "Нет данных", ha="center", va="center",
-                    color=GRAY, transform=ax.transAxes, fontsize=10)
-            ax.set_title(title, color=WHITE, fontsize=9, pad=4)
-            return
-
+    if candles and len(candles) >= 5:
         closes = [c["close"] for c in candles]
-        ema4   = calc_ema(closes, min(4,  len(closes)))
-        ema7   = calc_ema(closes, min(7,  len(closes)))
-        ema14  = calc_ema(closes, min(14, len(closes)))
-        ema28  = calc_ema(closes, min(28, len(closes)))
-        rsi_v  = calc_rsi(closes)
+        n = len(candles)
 
-        w = 0.35
+        # EMA линии
+        ema4  = calc_ema(closes, min(4,  len(closes)))
+        ema7  = calc_ema(closes, min(7,  len(closes)))
+        ema14 = calc_ema(closes, min(14, len(closes)))
+        ema28 = calc_ema(closes, min(28, len(closes)))
+
+        # Свечи
+        w = 0.4
         for i, c in enumerate(candles):
             color = GREEN if c["close"] >= c["open"] else RED
             ax.plot([i, i], [c["low"], c["high"]], color=color, lw=0.8, zorder=2)
@@ -296,81 +290,85 @@ def generate_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
             ))
 
         # EMA линии
-        n = len(candles)
         colors_ema = [YELLOW, ORANGE, "#FF6B6B", "#4ECDC4"]
-        for ema_vals, col, lbl in zip(
-            [ema4, ema7, ema14, ema28],
-            colors_ema,
-            ["EMA4", "EMA7", "EMA14", "EMA28"]
-        ):
+        labels_ema = ["EMA4", "EMA7", "EMA14", "EMA28"]
+        for ema_vals, col, lbl in zip([ema4, ema7, ema14, ema28], colors_ema, labels_ema):
             valid = [(i, v) for i, v in enumerate(ema_vals) if v is not None]
             if valid:
                 ax.plot([x[0] for x in valid], [x[1] for x in valid],
-                        color=col, lw=1.0, alpha=0.85, label=lbl)
+                        color=col, lw=1.2, alpha=0.9, label=lbl, zorder=4)
 
-        # Уровни зон если 4ч
-        if show_levels and len(candles) > 5:
-            price = closes[-1]
-            if a["is_long"]:
-                # Зоны набора горизонтальные линии
-                for i, (lo_pct, hi_pct, col, lbl) in enumerate([
-                    (0.97, 1.00, "#4CAF50", "Zone 1"),
-                    (0.93, 0.97, "#FF9800", "Zone 2"),
-                    (0.88, 0.93, "#F44336", "Zone 3"),
-                ]):
-                    ax.axhspan(price * lo_pct, price * hi_pct,
-                               alpha=0.12, color=col, zorder=1)
-                    ax.axhline(y=price * hi_pct, color=col,
-                               lw=0.8, linestyle="--", alpha=0.7)
-                    ax.text(n - 1, price * (lo_pct + hi_pct) / 2,
-                            f" {lbl}", color=col, fontsize=7, va="center")
+        # Уровни входа/ТП/Стоп
+        price = closes[-1]
+        ext   = n * 0.18
 
-        # RSI в углу
-        rsi_color = RED if rsi_v > 70 else (GREEN if rsi_v < 30 else WHITE)
-        ax.text(0.02, 0.96, f"RSI: {rsi_v}",
-                transform=ax.transAxes, color=rsi_color,
-                fontsize=8, va="top", fontweight="bold")
+        def draw_level(val_str, color, label, ls="-", lw=1.2):
+            try:
+                val = float(val_str.replace(",", "").replace("$", "").strip())
+                ax.axhline(y=val, color=color, linestyle=ls,
+                           linewidth=lw, alpha=0.85, zorder=5)
+                ax.text(n - 1 + ext * 0.2, val,
+                        f" {label}: {val_str}",
+                        color=color, fontsize=7.5,
+                        va="center", fontweight="bold", zorder=6)
+            except:
+                pass
 
-        # Легенда EMA (слева вверху)
-        last_emas = []
-        for ema_vals, col, lbl in zip([ema4, ema7, ema14, ema28],
-                                       colors_ema, ["EMA4","EMA7","EMA14","EMA28"]):
-            v = next((x for x in reversed(ema_vals) if x is not None), None)
-            if v:
-                last_emas.append((lbl, v, col))
+        draw_level(a["tp3"],  "#009999", "TP3", "--", 1.0)
+        draw_level(a["tp2"],  "#00BBAA", "TP2", "--", 1.0)
+        draw_level(a["tp1"],  "#00DDAA", "TP1", "--", 1.0)
+        draw_level(fp(a["swing"]), BLUE,  "Swing", ":", 1.0)
+        draw_level(fp(a["price"]), WHITE, "Entry", "-", 1.8)
+        draw_level(a["stop"],  RED,      "SL",    "--", 1.2)
 
-        for j, (lbl, v, col) in enumerate(last_emas):
-            ax.text(0.02, 0.88 - j*0.08, f"{lbl}: {fp(v)}",
-                    transform=ax.transAxes, color=col,
-                    fontsize=6.5, va="top")
+        # Зона стопа
+        try:
+            entry_val = a["price"]
+            stop_val  = float(a["stop"].replace(",","").replace("$","").strip())
+            tp1_val   = float(a["tp1"].replace(",","").replace("$","").strip())
+            ax.axhspan(entry_val, stop_val, alpha=0.08, color=RED,   zorder=1)
+            ax.axhspan(entry_val, tp1_val,  alpha=0.06, color=GREEN, zorder=1)
+        except:
+            pass
+
+        # Легенда EMA
+        ax.legend(loc="upper left", fontsize=7.5,
+                  facecolor="#1A2332", edgecolor=GRAY,
+                  labelcolor=WHITE, framealpha=0.85)
 
         # X метки
-        step = max(len(candles) // 5, 1)
-        ticks = list(range(0, len(candles), step))
+        step = max(n // 7, 1)
+        ticks = list(range(0, n, step))
         ax.set_xticks(ticks)
         ax.set_xticklabels(
             [candles[i]["time"].strftime("%d.%m\n%H:%M") for i in ticks],
-            fontsize=6, color=GRAY
+            fontsize=7, color=GRAY
         )
-        ax.tick_params(colors=GRAY, labelsize=6)
-        ax.spines[:].set_color("#1E2A3A")
-        ax.grid(color="#1A2332", lw=0.4, zorder=0)
-        ax.set_title(title, color=WHITE, fontsize=9, pad=4, fontweight="bold")
-        ax.set_xlim(-1, len(candles) + 1)
+        ax.set_xlim(-1, n + ext)
 
-    draw_candles(ax1, candles_4h,
-                 f"{symbol}USDT • 4h", show_levels=True)
-    draw_candles(ax2, candles_1d,
-                 f"{symbol}USDT • 15m", show_levels=False)
+    else:
+        ax.text(0.5, 0.5, f"Нет данных для {symbol}",
+                ha="center", va="center", color=GRAY,
+                fontsize=14, transform=ax.transAxes)
 
-    # Убираем правые метки у ax1
-    ax1.yaxis.tick_left()
-    ax2.yaxis.tick_right()
+    # Заголовок
+    side = "LONG" if a["is_long"] else "SHORT"
+    side_color = GREEN if a["is_long"] else RED
+    ax.set_title(
+        f"{symbol}USDT  •  1h  •  {side}",
+        color=side_color, fontsize=13, fontweight="bold", pad=10
+    )
 
-    # Водяной знак BEST TRADE
+    # Стиль
+    ax.grid(color="#1A2332", lw=0.4, zorder=0)
+    ax.tick_params(colors=GRAY, labelsize=7)
+    ax.spines[:].set_color("#1E2A3A")
+
+    # Водяной знак
     fig.text(0.5, 0.5, "BEST TRADE",
-             fontsize=40, color="white", alpha=0.04,
-             ha="center", va="center", fontweight="bold", rotation=20)
+             fontsize=55, color="white", alpha=0.04,
+             ha="center", va="center",
+             fontweight="bold", rotation=20, zorder=0)
 
     plt.tight_layout(pad=0.5)
     buf = io.BytesIO()
@@ -380,34 +378,26 @@ def generate_chart(symbol: str, slug: str, a: dict) -> io.BytesIO:
     buf.seek(0)
     return buf
 
+
 # ═══════════════════════════════════════════
 # ТЕКСТ СИГНАЛА (стиль примера)
 # ═══════════════════════════════════════════
 def build_signal_text(symbol: str, coin: dict, a: dict) -> str:
-    """Формат 1в1 как Kriptano — чистый текст под графиком"""
     now  = datetime.now(TZ)
-    name = coin.get("name", symbol)
-    slug = coin.get("slug", symbol.lower())
-    rank = coin.get("cmc_rank", "?")
-
     side_emoji = "🟢" if a["is_long"] else "🔴"
     side_text  = "LONG" if a["is_long"] else "SHORT"
 
-    # Зоны набора — берём zone1 нижнюю и верхнюю границы
     z1 = a["zone1"].replace("`", "")
     z2 = a["zone2"].replace("`", "")
     z3 = a["zone3"].replace("`", "")
 
-    # Изменения по таймфреймам
     ch_15m = a["ch1h"] * 0.25
-    ch_1h  = a["ch1h"]
     ch_4h  = (a["ch1h"] + a["ch24h"]) / 2
-    ch_1d  = a["ch24h"]
 
     def ps(ch): return ("+" if ch >= 0 else "") + f"{ch:.2f}%"
 
     lines = [
-        f"📊 *{symbol}USDT*  {side_emoji} *{side_text}*",
+        f"📊 *{symbol}USDT* {side_emoji} *{side_text}*",
         "",
         f"💰 *Точка входа:* {fp(a['price'])}",
         f"🎯 *Тейк-профит 1:* {a['tp1']}",
@@ -416,22 +406,18 @@ def build_signal_text(symbol: str, coin: dict, a: dict) -> str:
         f"🛑 *Стоп лосс:* {a['stop']}",
         f"📌 *Swing:* {a['swing']}",
         "",
-        f"📈 *Изменение:* 15м {ps(ch_15m)} | 1ч {ps(ch_1h)} | 4ч {ps(ch_4h)} | 1д {ps(ch_1d)}",
+        f"📈 *Изменение:* 15м {ps(ch_15m)} | 1ч {ps(a['ch1h'])} | 4ч {ps(ch_4h)} | 1д {ps(a['ch24h'])}",
         f"📉 *RSI:* 4ч {a['rsi_4h']} | 1ч {a['rsi_1h']}",
         "",
         f"🎯 *Зоны набора:*",
-        z1,
-        z2,
-        z3,
+        f"`{z1}`",
+        f"`{z2}`",
+        f"`{z3}`",
         "",
         f"💡 Зашли на 1-м уровне → усредняйте на 3-м,",
         f"зашли на 2-м → усредняйте на 4-м",
-        f"🎲 Тейки на 4-6% чистого движения на откате",
+        f"🎲 Тейки устанавливайте на 4-6% чистого движения на откате",
         f"🛑 Стоп-лосс на 6-9% за уровни после затихания волатильности",
-        "",
-        f"EMA20: {'✅' if a['ema20'] else '❌'}  EMA50: {'✅' if a['ema50'] else '❌'}  EMA200: {'✅' if a['ema200'] else '❌'}",
-        "",
-        f"⚡ *{a['action']}*",
         "",
         f"🕐 Отправлено: {now.strftime('%d.%m %H:%M:%S')} UTC+3",
         "",
