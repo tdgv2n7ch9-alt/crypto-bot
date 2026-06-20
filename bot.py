@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-📊 BEST TRADE Bot v7.3 — EMA по ТФ + объём в $
-- Новый график: свечи + EMA + уровни + водяной знак BEST TRADE (оранжевый)
+📊 BEST TRADE Bot v8.0
+- Обзор рынка: блок ТОП-5 ЛОНГИ / ТОП-5 ШОРТЫ из топ-300 CMC
+- Сигналы: фикс отправки графика (caption limit guard + split fallback)
 - Рыночный обзор каждые 30 мин
-- Чистый формат сигнала с RSI, R:R, таймфреймом
 """
 
 import asyncio
@@ -534,7 +534,6 @@ def build_signal_text(symbol: str, a: dict) -> str:
     def rsi_icon(r):
         if r < 30:  return "🟢"
         if r > 70:  return "🔴"
-        if r < 45:  return "🔵"
         return "🔵"
 
     # Объём в читаемом формате $
@@ -542,10 +541,22 @@ def build_signal_text(symbol: str, a: dict) -> str:
     elif vol >= 1e6: vol_str = f"${vol/1e6:.1f}M"
     else:            vol_str = f"${vol/1e3:.0f}K"
 
-    # EMA позиция относительно цены по каждому ТФ
-    def ema_tag(ema_val):
-        if price > ema_val: return "▲"
-        return "▼"
+    # % отклонение цены от EMA (+ = цена выше EMA, - = ниже)
+    def ema_pct(ema_val):
+        if ema_val <= 0: return "—"
+        d = (price - ema_val) / ema_val * 100
+        arrow = "▲" if d >= 0 else "▼"
+        return f"{arrow}{abs(d):.1f}%"
+
+    e20_1h  = ema_pct(a["ema20_1h"])
+    e50_1h  = ema_pct(a["ema50_1h"])
+    e200_1h = ema_pct(a["ema200_1h"])
+    e20_4h  = ema_pct(a["ema20_4h"])
+    e50_4h  = ema_pct(a["ema50_4h"])
+    e200_4h = ema_pct(a["ema200_4h"])
+    e20_1d  = ema_pct(a["ema20_1d"])
+    e50_1d  = ema_pct(a["ema50_1d"])
+    e200_1d = ema_pct(a["ema200_1d"])
 
     lines = [
         f"📊 *{symbol}USDT*  {side_emoji} *{side_text}*",
@@ -560,13 +571,12 @@ def build_signal_text(symbol: str, a: dict) -> str:
         f"━━━━━━━━━━━━━━━━━━",
         f"📐 *R:R:* 1:{rr:.1f}  |  💹 *Объём 24H:* {vol_str}",
         "",
-        f"📉 *Скользящие средние:*",
-        f"┌ *1H*  EMA20 `{fp(a['ema20_1h'])}`  EMA50 `{fp(a['ema50_1h'])}`  EMA200 `{fp(a['ema200_1h'])}`",
-        f"├ *4H*  EMA20 `{fp(a['ema20_4h'])}`  EMA50 `{fp(a['ema50_4h'])}`  EMA200 `{fp(a['ema200_4h'])}`",
-        f"└ *1D*  EMA20 `{fp(a['ema20_1d'])}`  EMA50 `{fp(a['ema50_1d'])}`  EMA200 `{fp(a['ema200_1d'])}`",
+        f"📉 *Скользящие (% от цены):*",
+        f"┌ *1H*   EMA20 `{e20_1h}`  EMA50 `{e50_1h}`  EMA200 `{e200_1h}`",
+        f"├ *4H*   EMA20 `{e20_4h}`  EMA50 `{e50_4h}`  EMA200 `{e200_4h}`",
+        f"└ *1D*   EMA20 `{e20_1d}`  EMA50 `{e50_1d}`  EMA200 `{e200_1d}`",
         "",
-        f"📈 *RSI:*",
-        f"  1H {rsi_icon(rsi_1h)} `{rsi_1h:.0f}`  |  4H {rsi_icon(rsi_4h)} `{rsi_4h:.0f}`  |  1D {rsi_icon(rsi_1d)} `{rsi_1d:.0f}`",
+        f"📈 *RSI:*  1H {rsi_icon(rsi_1h)} `{rsi_1h:.0f}`  |  4H {rsi_icon(rsi_4h)} `{rsi_4h:.0f}`  |  1D {rsi_icon(rsi_1d)} `{rsi_1d:.0f}`",
     ]
     return "\n".join(lines)
 
@@ -625,6 +635,13 @@ def analyze_market(btc: dict, eth: dict, gm: dict, coins: list) -> dict:
     elif bulls >= 1: verdict = "🟠 ОСТОРОЖНО — рынок под давлением"
     else:            verdict = "🔴 МЕДВЕЖИЙ — воздерживаемся от лонгов"
 
+    # ── ТОП ЛОНГИ / ШОРТЫ из топ-300 ──
+    analyzed = [(c, full_analysis(c)) for c in coins]
+    top_longs  = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
+                        key=lambda x: x[1]["score"], reverse=True)[:5]
+    top_shorts = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
+                        key=lambda x: x[1]["score"])[:5]
+
     return {
         "btc_price": bp, "btc_ch24h": btc.get("ch24h", 0),
         "eth_price": ep, "eth_ch24h": eth.get("ch24h", 0),
@@ -634,6 +651,7 @@ def analyze_market(btc: dict, eth: dict, gm: dict, coins: list) -> dict:
         "sentiment": sent, "sentiment_pct": sp,
         "dom_signal": dom_sig, "others_signal": others_sig,
         "total_signal": total_sig, "verdict": verdict,
+        "top_longs": top_longs, "top_shorts": top_shorts,
     }
 
 def build_overview_text(ms: dict) -> str:
@@ -642,6 +660,28 @@ def build_overview_text(ms: dict) -> str:
     res = ms["btc_res"]
     s_line = f"  └ 🟢 Поддержка: ${sup['level']:,}  ({sup['label']})  —  {sup['dist']:.1f}% ниже" if sup else ""
     r_line = f"  └ 🔴 Сопротивление: ${res['level']:,}  ({res['label']})  —  {res['dist']:.1f}% выше" if res else ""
+
+    # ── ТОП ЛОНГИ ──
+    long_lines = []
+    for i, (c, a) in enumerate(ms.get("top_longs", []), 1):
+        sym = c["symbol"]
+        p   = a["price"]
+        ch  = a["ch24h"]
+        rsi = a["rsi_4h"]
+        sign = "+" if ch >= 0 else ""
+        long_lines.append(f"  {i}. *{sym}*  ${fp(p)}  {sign}{ch:.1f}%  RSI {rsi:.0f}")
+
+    # ── ТОП ШОРТЫ ──
+    short_lines = []
+    for i, (c, a) in enumerate(ms.get("top_shorts", []), 1):
+        sym = c["symbol"]
+        p   = a["price"]
+        ch  = a["ch24h"]
+        rsi = a["rsi_4h"]
+        short_lines.append(f"  {i}. *{sym}*  ${fp(p)}  {ch:.1f}%  RSI {rsi:.0f}")
+
+    long_block  = "\n".join(long_lines)  if long_lines  else "  Нет сигналов"
+    short_block = "\n".join(short_lines) if short_lines else "  Нет сигналов"
 
     return "\n".join([
         "🌍 *ОБЗОР РЫНКА  —  BEST TRADE*",
@@ -667,6 +707,14 @@ def build_overview_text(ms: dict) -> str:
         f"🧭 *Настроение:* {ms['sentiment']}",
         f"  Растут {ms['sentiment_pct']:.0f}% монет из топ-300",
         "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "🟢 *ТОП ЛОНГИ* (топ-300)",
+        long_block,
+        "",
+        "🔴 *ТОП ШОРТЫ* (топ-300)",
+        short_block,
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
         f"🎯 *ВЕРДИКТ:* {ms['verdict']}",
         "",
         "⚠️ Риск: *2% депозита*  |  SL обязателен",
@@ -794,14 +842,52 @@ async def send_coin(bot, chat_id, symbol, slug, a, text, extra_btns=[]):
         [InlineKeyboardButton("🌍 Обзор рынка", callback_data="market_overview"),
          InlineKeyboardButton("🤖 Сигналы",     callback_data="signals")],
     ])
+    chart = None
     try:
         chart = generate_signal_chart(symbol, slug, a)
-        await bot.send_photo(chat_id=chat_id, photo=chart,
-                             caption=text, parse_mode="Markdown", reply_markup=kb)
+        log.info(f"Chart generated for {symbol}, size={chart.getbuffer().nbytes} bytes")
     except Exception as e:
-        log.error(f"Chart {symbol}: {e}")
-        await bot.send_message(chat_id, text, parse_mode="Markdown",
-                               reply_markup=kb, disable_web_page_preview=True)
+        log.error(f"Chart generation FAILED {symbol}: {type(e).__name__}: {e}")
+
+    # Telegram caption limit = 1024 chars
+    caption = text if len(text) <= 1024 else text[:1020] + "..."
+
+    if chart is not None:
+        try:
+            chart.seek(0)
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=chart,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=kb
+            )
+            log.info(f"send_photo OK: {symbol}")
+            return
+        except Exception as e:
+            log.error(f"send_photo FAILED {symbol}: {type(e).__name__}: {e}")
+            # Retry: send photo without caption, then text separately
+            try:
+                chart.seek(0)
+                await bot.send_photo(chat_id=chat_id, photo=chart)
+                await bot.send_message(
+                    chat_id, text,
+                    parse_mode="Markdown",
+                    reply_markup=kb,
+                    disable_web_page_preview=True
+                )
+                log.info(f"send_photo (split) OK: {symbol}")
+                return
+            except Exception as e2:
+                log.error(f"send_photo split FAILED {symbol}: {type(e2).__name__}: {e2}")
+
+    # Fallback — только текст
+    await bot.send_message(
+        chat_id, text,
+        parse_mode="Markdown",
+        reply_markup=kb,
+        disable_web_page_preview=True
+    )
 
 async def send_signals(bot, chat_id, coins):
     parts = build_signals_report(coins)
@@ -851,7 +937,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_chat_ids.add(cid)
     with open("chat_ids.txt","a") as f: f.write(f"{cid}\n")
     await update.message.reply_text(
-        "📊 *BEST TRADE v7.0*\n\n"
+        "📊 *BEST TRADE v8.0*\n\n"
         "Топ-300 • CoinMarketCap\n"
         "🌍 Рыночный обзор каждые 30 мин\n"
         "📈 Графики с EMA + уровнями + водяным знаком\n"
@@ -994,7 +1080,7 @@ def main():
         "interval", minutes=30
     )
     scheduler.start()
-    log.info("✅ BEST TRADE v7.0 | Istanbul UTC+3")
+    log.info("✅ BEST TRADE v8.0 | Istanbul UTC+3 | Топ лонги/шорты в обзоре")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
