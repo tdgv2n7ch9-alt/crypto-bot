@@ -498,67 +498,47 @@ def build_market_report(coins: list) -> list:
 
 
 def build_signals_report(coins: list) -> list:
+    """Возвращает список сообщений — каждая монета отдельно с графиком"""
     now      = datetime.now(TZ)
     analyzed = [(c, full_analysis(c)) for c in coins]
-    longs  = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
-                    key=lambda x: x[1]["score"], reverse=True)[:12]
-    shorts = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
-                    key=lambda x: x[1]["score"])[:12]
+    longs    = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
+                      key=lambda x: x[1]["score"], reverse=True)[:8]
+    shorts   = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
+                      key=lambda x: x[1]["score"])[:5]
 
-    def ps(ch): return f"+{ch:.2f}%" if ch >= 0 else f"{ch:.2f}%"
-    sep = ""
+    results = []
+
+    # Заголовок
     now_str = now.strftime("%d.%m.%Y  %H:%M")
+    header = (
+        f"🤖 *BEST TRADE — Сигналы*\n"
+        f"🕐 {now_str} Istanbul\n\n"
+        f"🟢 Лонг: {len(longs)} монет  |  🔴 Шорт: {len(shorts)} монет"
+    )
+    results.append({"type": "text", "text": header, "btns": []})
 
-    def blk(c, a):
-        e20 = "✅" if a["ema20"] else "❌"
-        e50 = "✅" if a["ema50"] else "❌"
-        e200= "✅" if a["ema200"] else "❌"
-        side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
-        return [
-            "",
-            f"📊 *{c['symbol']}/USDT*  {side}",
-            f"💰 Цена: ${fp(a['price'])}",
-            f"📈 1ч {ps(a['ch1h'])}  |  24ч {ps(a['ch24h'])}",
-            f"📉 RSI 4ч: {a['rsi_4h']}  |  1ч: {a['rsi_1h']}",
-            f"🎯 Зона: {a['zone1']}",
-            f"EMA20 {e20}  EMA50 {e50}  EMA200 {e200}",
-            f"⚡ {a['action']}",
-            ]
+    # Каждая монета отдельно
+    for c, a in longs + shorts:
+        symbol = c["symbol"]
+        slug   = c.get("slug", symbol.lower())
+        text   = build_signal_text(symbol, c, a)
+        kb = [
+            InlineKeyboardButton("📈 Открыть график на TradingView", url=tv_link(symbol)),
+        ]
+        results.append({
+            "type": "coin",
+            "symbol": symbol,
+            "slug": slug,
+            "text": text,
+            "btns": kb,
+            "analysis": a,
+        })
 
-    lines1 = [
-        "🤖 *BEST TRADE — Сигналы*",
-        f"🕐 {now_str} Istanbul",
-        "",
-        f"🟢 *ЛОНГ ({len(longs)} монет)*",
-    ]
-    b1 = []
-    for c, a in longs:
-        lines1.extend(blk(c, a))
-        b1.append(InlineKeyboardButton(
-            f"📊 {c['symbol']}",
-            url=cmc_link(c.get("slug", c["symbol"].lower()))
-        ))
-    if not longs:
-        lines1.append("Нет явных лонг-сигналов")
+    # Подвал
+    footer = "⚠️ Риск на сделку: *2-3%*\nСтоп *ВСЕГДА* выставляй до входа!"
+    results.append({"type": "text", "text": footer, "btns": []})
 
-    lines2 = [
-        f"🔴 *ШОРТ ({len(shorts)} монет)*",
-    ]
-    b2 = []
-    for c, a in shorts:
-        lines2.extend(blk(c, a))
-        b2.append(InlineKeyboardButton(
-            f"📊 {c['symbol']}",
-            url=cmc_link(c.get("slug", c["symbol"].lower()))
-        ))
-    if not shorts:
-        lines2.append("Нет явных шорт-сигналов")
-    lines2.extend(["", "⚠️ Риск на сделку: 2-3%", "Стоп ВСЕГДА до входа!"])
-
-    return [
-        {"text": "\n".join(lines1), "btns": b1},
-        {"text": "\n".join(lines2), "btns": b2},
-    ]
+    return results
 
 
 def build_period_report(period: str, coins: list) -> list:
@@ -723,16 +703,65 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.delete()
     await send_parts(ctx.bot, update.effective_chat.id, build_market_report(coins))
 
+async def send_signals(bot, chat_id: int, coins: list):
+    """Отправляем каждый сигнал отдельно с графиком"""
+    parts = build_signals_report(coins)
+    nav_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📊 Рынок",    callback_data="report"),
+        InlineKeyboardButton("🤖 Сигналы", callback_data="signals"),
+    ]])
+
+    for part in parts:
+        try:
+            if part["type"] == "text":
+                rows = [part["btns"][i:i+2] for i in range(0, len(part["btns"]), 2)] if part["btns"] else []
+                rows.append([
+                    InlineKeyboardButton("📊 Рынок",    callback_data="report"),
+                    InlineKeyboardButton("🤖 Сигналы", callback_data="signals"),
+                ])
+                await bot.send_message(
+                    chat_id, part["text"],
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(rows)
+                )
+            elif part["type"] == "coin":
+                symbol = part["symbol"]
+                slug   = part["slug"]
+                a      = part["analysis"]
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 Открыть график на TradingView", url=tv_link(symbol)),
+                ],[
+                    InlineKeyboardButton("🔄 Обновить", callback_data=f"coin_{symbol}"),
+                    InlineKeyboardButton("📈 CMC",      url=cmc_link(slug)),
+                ]])
+                try:
+                    chart = generate_chart(symbol, slug, a)
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=chart,
+                        caption=part["text"],
+                        parse_mode="Markdown",
+                        reply_markup=kb
+                    )
+                except Exception as e:
+                    log.error(f"Chart error {symbol}: {e}")
+                    await bot.send_message(
+                        chat_id, part["text"],
+                        parse_mode="Markdown",
+                        reply_markup=kb,
+                        disable_web_page_preview=True
+                    )
+        except Exception as e:
+            log.error(f"Send error: {e}")
+
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Анализирую топ-300...")
+    msg = await update.message.reply_text("⏳ Анализирую топ-300... Это займёт ~30 секунд")
     coins = get_top300()
     if not coins:
         await msg.edit_text("❌ Нет данных")
         return
     await msg.delete()
-    await send_parts(ctx.bot, update.effective_chat.id, build_signals_text(coins))
-
-def build_signals_text(coins): return build_signals_report(coins)
+    await send_signals(ctx.bot, update.effective_chat.id, coins)
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q    = update.callback_query
@@ -810,10 +839,10 @@ async def send_scheduled(bot: Bot):
     coins = get_top300()
     if not coins:
         return
-    parts = build_market_report(coins) + build_signals_report(coins)
     for cid in chat_ids:
         try:
-            await send_parts(bot, cid, parts)
+            await send_parts(bot, cid, build_market_report(coins))
+            await send_signals(bot, cid, coins)
         except Exception as e:
             log.error(f"Ошибка {cid}: {e}")
 
