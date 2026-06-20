@@ -60,14 +60,40 @@ pump_alerted     = {}   # {symbol: timestamp}
 # ═══════════════════════════════════════════
 # DATA FUNCTIONS
 # ═══════════════════════════════════════════
+STABLECOINS = {
+    "USDT","USDC","BUSD","DAI","FDUSD","TUSD","USDP","USDD","FRAX","LUSD",
+    "SUSD","ALUSD","GUSD","HUSD","EURS","XAUT","PAXG","WBTC","WETH","STETH",
+    "WSTETH","RETH","CBETH","SFRXETH","ANKRETH","BETH","BETH","UST","USTC",
+    "MIM","FEI","OUSD","DOLA","CUSD","CEUR","USDX","USDJ","USDN","BITCNY",
+}
+
 def get_top500():
     try:
         url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-        params  = {"limit": 500, "convert": "USDT", "sort": "market_cap"}
+        params  = {"limit": 600, "convert": "USDT", "sort": "market_cap"}
         r = requests.get(url, headers=headers, params=params, timeout=20)
         r.raise_for_status()
-        return r.json().get("data", [])
+        raw = r.json().get("data", [])
+
+        # Фильтруем стейблкоины и дубликаты символов
+        seen_syms = set()
+        result    = []
+        for coin in raw:
+            sym  = coin.get("symbol", "")
+            tags = [t.lower() for t in coin.get("tags", [])]
+            # Пропускаем стейблкоины
+            if sym in STABLECOINS:             continue
+            if "stablecoin" in tags:           continue
+            if "wrapped-tokens" in tags:       continue
+            # Пропускаем дубликаты символов (берём первый = выше по капе)
+            if sym in seen_syms:               continue
+            seen_syms.add(sym)
+            result.append(coin)
+            if len(result) >= 500:             break
+
+        log.info(f"CMC: {len(result)} монет после фильтрации")
+        return result
     except Exception as e:
         log.error(f"CMC error: {e}")
         return []
@@ -306,11 +332,36 @@ def calc_supertrend(candles: list, period: int = 10, multiplier: float = 3.0) ->
 def get_supertrend_signal(symbol: str) -> dict:
     """
     Получает текущий сигнал Supertrend для монеты.
-    Возвращает: direction, last_signal, last_signal_price, last_signal_time, pct_since_signal
+    Пробует USDT, затем BUSD как fallback.
     """
     candles = get_binance_ohlc(symbol, interval="4h", limit=100)
+
+    # Fallback: некоторые монеты торгуются только в паре с BTC или BNB
     if not candles or len(candles) < 20:
-        return {"direction": 1, "last_signal": None, "label": "Нет данных"}
+        try:
+            url    = "https://api.binance.com/api/v3/klines"
+            # Пробуем другие пары
+            for quote in ["BUSD", "BTC", "ETH"]:
+                r = requests.get(url,
+                    params={"symbol": f"{symbol}{quote}", "interval": "4h", "limit": 100},
+                    timeout=8)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data:
+                        candles = [
+                            {"time": datetime.fromtimestamp(d[0]/1000, tz=TZ),
+                             "open": float(d[1]), "high": float(d[2]),
+                             "low": float(d[3]), "close": float(d[4]),
+                             "vol": float(d[5])}
+                            for d in data
+                        ]
+                        break
+        except:
+            pass
+
+    if not candles or len(candles) < 20:
+        log.warning(f"Supertrend: нет данных для {symbol}")
+        return {"direction": 1, "last_signal": None, "label": "—", "current_price": 0}
 
     st = calc_supertrend(candles, period=10, multiplier=3.0)
 
@@ -333,22 +384,23 @@ def get_supertrend_signal(symbol: str) -> dict:
     if last_signal_price and last_signal_price > 0:
         pct = (current_price - last_signal_price) / last_signal_price * 100
         if last_signal == "SELL":
-            pct = -pct  # для шорта инвертируем
+            pct = -pct
 
     label = "🟢 BUY" if current_dir == 1 else "🔴 SELL"
 
     return {
-        "direction":          current_dir,
-        "supertrend_value":   current_val,
-        "label":              label,
-        "last_signal":        last_signal,
-        "last_signal_price":  last_signal_price,
-        "last_signal_time":   last_signal_time,
-        "pct_since_signal":   round(pct, 2),
-        "current_price":      current_price,
-        "st_values":          st,
-        "candles":            candles,
-    }
+        "direction":         current_dir,
+        "supertrend_value":  current_val,
+        "label":             label,
+        "last_signal":       last_signal,
+        "last_signal_price": last_signal_price,
+        "last_signal_time":  last_signal_time,
+        "pct_since_signal":  round(pct, 2),
+        "current_price":     current_price,
+        "st_values":         st,
+        "candles":           candles,
+    }  # для шорта инвертируем
+
 
 def full_analysis(coin: dict) -> dict:
     """
@@ -533,6 +585,14 @@ def full_analysis(coin: dict) -> dict:
     if fund_recovery:   score += 2
 
     is_long = score >= 0
+
+    # Дополнительная проверка: если монета падает по всем TF — это шорт
+    # Независимо от score
+    if ch24h < -5 and ch7d < -10 and ch30d < -15:
+        is_long = False
+    # Если монета растёт по всем TF — это лонг
+    if ch24h > 3 and ch7d > 5 and ch30d > 5:
+        is_long = True
 
     # ── TP/SL динамические (учитываем волатильность) ──
     # Чем выше RSI и объём, тем агрессивнее TP
@@ -1041,10 +1101,20 @@ def analyze_market(btc, eth, gm, coins):
     else:            verdict = "💥 МЕДВЕЖИЙ — воздерживаемся от лонгов"
 
     analyzed   = [(c, full_analysis(c)) for c in coins]
-    top_longs  = sorted([(c,a) for c,a in analyzed if a["score"] >= 3],
-                        key=lambda x: x[1]["score"], reverse=True)[:5]
-    top_shorts = sorted([(c,a) for c,a in analyzed if a["score"] <= -3],
-                        key=lambda x: x[1]["score"])[:5]
+
+    # Топ лонги: score>=3 И ch24h>0 И ch7d>0 (реально растут)
+    top_longs  = sorted(
+        [(c,a) for c,a in analyzed
+         if a["score"] >= 3 and a["ch24h"] > 0 and a["ch7d"] > 0],
+        key=lambda x: (x[1]["score"], x[1]["ch24h"]), reverse=True
+    )[:5]
+
+    # Топ шорты: score<=-3 И ch24h<0
+    top_shorts = sorted(
+        [(c,a) for c,a in analyzed
+         if a["score"] <= -3 and a["ch24h"] < 0],
+        key=lambda x: x[1]["score"]
+    )[:5]
 
     return {
         "btc_price": bp, "btc_ch24h": btc.get("ch24h", 0),
