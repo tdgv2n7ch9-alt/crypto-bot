@@ -1440,6 +1440,37 @@ async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.delete()
     await send_signals_batch(ctx.bot, update.effective_chat.id, coins)
 
+async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    msg   = await update.message.reply_text("⏳ Загружаю...")
+    coins = get_top500()
+    if not coins:
+        await msg.edit_text("❌ Нет данных"); return
+    up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
+    dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
+    pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
+
+    def row(i, c):
+        q  = c["quote"]["USDT"]
+        ch = q.get("percent_change_24h", 0)
+        em = "🚀" if ch >= 5 else ("🟢" if ch >= 0 else ("🔴" if ch >= -5 else "💥"))
+        return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
+
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+        InlineKeyboardButton("🚀 /5 Ракеты",  callback_data="rockets"),
+    ]])
+    t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now_utc3()}",
+          f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
+          "🚀 *ЛИДЕРЫ РОСТА 24ч*"]
+    t1 += [row(i, c) for i, c in enumerate(up[:15], 1)]
+    t2  = ["📉 *ЛИДЕРЫ ПАДЕНИЯ 24ч*"]
+    t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
+
+    await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
+    await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
+                               parse_mode="Markdown", reply_markup=nav)
+
 async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Топ монет по Rocket Score — самые перспективные"""
     msg = await update.message.reply_text("🚀 Ищу ракеты в топ-500... ~30 сек")
