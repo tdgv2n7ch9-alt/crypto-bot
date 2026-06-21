@@ -857,18 +857,40 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
     sl, swing     = a["sl"],  a["swing"]
     rsi           = a["rsi_4h"]
 
-    candles = get_binance_ohlc(symbol, interval="4h", limit=200)
+    # Получаем реальные свечи — несколько попыток с разными тикерами
+    candles = []
+    sym_clean = symbol.upper().replace("USDT","").replace("BUSD","")
+    for ticker_suffix in ["USDT", "BUSD"]:
+        try:
+            url = "https://api.binance.com/api/v3/klines"
+            params = {"symbol": f"{sym_clean}{ticker_suffix}", "interval": "4h", "limit": 200}
+            r = requests.get(url, params=params, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data and isinstance(data, list) and len(data) >= 10:
+                    candles = [
+                        {"time": datetime.fromtimestamp(d[0]/1000, tz=TZ),
+                         "open": float(d[1]), "high": float(d[2]),
+                         "low": float(d[3]),  "close": float(d[4]),
+                         "vol": float(d[5])}
+                        for d in data
+                    ]
+                    log.info(f"Chart candles OK: {sym_clean}{ticker_suffix} n={len(candles)}")
+                    break
+        except Exception as e:
+            log.error(f"Chart candle fetch {sym_clean}{ticker_suffix}: {e}")
+
     if not candles or len(candles) < 20:
-        # fallback: синтетические свечи вокруг текущей цены
-        p = price * 0.9
-        for _ in range(100):
-            ch = random.gauss(0, 0.01)
-            o = p; c = p * (1 + ch)
-            h = max(o, c) * (1 + abs(random.gauss(0, 0.004)))
-            l = min(o, c) * (1 - abs(random.gauss(0, 0.004)))
-            candles.append({"open": o, "high": h, "low": l, "close": c,
+        log.warning(f"Chart FALLBACK synthetic for {symbol}")
+        p = price * 0.88
+        for _ in range(80):
+            ch = random.gauss(0.001, 0.012)
+            o = p; c_v = p * (1 + ch)
+            h = max(o, c_v) * (1 + abs(random.gauss(0, 0.005)))
+            l = min(o, c_v) * (1 - abs(random.gauss(0, 0.005)))
+            candles.append({"open": o, "high": h, "low": l, "close": c_v,
                             "vol": random.uniform(1e5, 1e6), "time": None})
-            p = c
+            p = c_v
         candles[-1]["close"] = price
 
     n_all      = len(candles)
@@ -3929,6 +3951,35 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def _search_coin_by_symbol(symbol: str) -> dict | None:
+    """Ищет монету по символу через CMC API — все монеты с капой от $1M"""
+    try:
+        url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+        params  = {"symbol": symbol.upper(), "convert": "USDT"}
+        r = requests.get(url, headers=headers, params=params, timeout=15)
+        if r.status_code != 200:
+            return None
+        data = r.json().get("data", {})
+        if not data:
+            return None
+        # CMC может вернуть список если несколько монет с одним символом
+        items = list(data.values())
+        if not items:
+            return None
+        # Берём первый (с наибольшей капой обычно)
+        item = items[0] if isinstance(items[0], dict) else items[0][0]
+        mcap = item.get("quote", {}).get("USDT", {}).get("market_cap", 0) or 0
+        if mcap < 1_000_000:  # фильтр $1M минимум
+            return None
+        log.info(f"CMC found by symbol: {symbol} rank={item.get('cmc_rank')}")
+        return item
+    except Exception as e:
+        log.error(f"CMC symbol search {symbol}: {e}")
+        return None
+
+
+
 async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/full SYMBOL — VIP полный анализ монеты"""
     if not ctx.args:
@@ -3955,22 +4006,39 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     coins = get_top500()
     coin  = next((c for c in coins if c["symbol"] == symbol), None)
 
+    # Не нашли в топ-500 — ищем через CMC по символу
     if not coin:
-        test = get_binance_ohlc(symbol, "4h", 5)
+        coin = await _search_coin_by_symbol(symbol)
+
+    # Если CMC тоже не знает — пробуем Binance напрямую
+    if not coin:
+        sym_clean = symbol.upper().replace("USDT","")
+        test = None
+        for suffix in ["USDT", "BUSD"]:
+            try:
+                r = requests.get("https://api.binance.com/api/v3/klines",
+                    params={"symbol": f"{sym_clean}{suffix}", "interval": "4h", "limit": 5},
+                    timeout=10)
+                if r.status_code == 200 and r.json():
+                    test = r.json(); break
+            except: pass
+
         if not test:
             await msg.edit_text(
-                f"❌ *{symbol}* не найден на Binance\n\n"
-                f"Проверь правильность символа (без USDT).\n"
-                f"Пример: `/full BTC` · `/full ETH` · `/full SOL`",
+                f"❌ *{symbol}* не найден\n\n"
+                f"Монета не торгуется на Binance.\n"
+                f"Проверь символ: `/full PIPPIN` · `/full POWER` · `/full BTC`\n\n"
+                f"💡 Монеты с очень малой капой могут отсутствовать на Binance",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
                 ]])
             )
             return
-        price_now = test[-1]["close"]
+        price_now = float(test[-1][4])
         coin = {
-            "symbol": symbol, "slug": symbol.lower(), "cmc_rank": 999,
+            "symbol": sym_clean, "slug": sym_clean.lower(), "cmc_rank": 9999,
+            "tags": [],
             "quote": {"USDT": {
                 "price": price_now, "volume_24h": 0, "market_cap": 0,
                 "percent_change_1h": 0, "percent_change_24h": 0,
@@ -3978,6 +4046,7 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "percent_change_90d": 0,
             }}
         }
+        symbol = sym_clean  # нормализуем
 
     slug      = coin.get("slug", symbol.lower())
     a         = real_full_analysis(coin)
