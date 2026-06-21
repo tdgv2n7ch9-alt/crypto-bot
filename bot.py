@@ -2717,49 +2717,9 @@ async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start",     cmd_start))
-    app.add_handler(CommandHandler("spot",      cmd_top_spot))
-    app.add_handler(CommandHandler("long",      cmd_top_long))
-    app.add_handler(CommandHandler("short",     cmd_top_short))
-    app.add_handler(CommandHandler("full",      cmd_full_v2))
-    app.add_handler(CommandHandler("menu",      lambda u,c: u.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb())))
-    app.add_handler(CommandHandler("1",         cmd_market))
-    app.add_handler(CommandHandler("2",         cmd_coin))
-    app.add_handler(CommandHandler("3",         cmd_signals))
-    app.add_handler(CommandHandler("4",         cmd_top))
-    app.add_handler(CommandHandler("5",         cmd_rockets))
-    app.add_handler(CommandHandler("6",         cmd_watchlist))
-    app.add_handler(CommandHandler("7",         cmd_precision))
-    app.add_handler(CommandHandler("8",         cmd_game))
-    app.add_handler(CommandHandler("game",      cmd_game))
-    app.add_handler(CommandHandler("market",    cmd_market))
-    app.add_handler(CommandHandler("coin",      cmd_coin))
-    app.add_handler(CommandHandler("signals",   cmd_signals))
-    app.add_handler(CommandHandler("top",       cmd_top))
-    app.add_handler(CommandHandler("rockets",   cmd_rockets))
-    app.add_handler(CommandHandler("watchlist", cmd_watchlist))
-    app.add_handler(CommandHandler("precision", cmd_precision))
-    app.add_handler(CallbackQueryHandler(callback_handler))
 
-    scheduler = AsyncIOScheduler(timezone=TZ)
-    scheduler.add_job(
-        lambda: asyncio.create_task(send_scheduled(app.bot)),
-        "interval", minutes=30
-    )
-    scheduler.add_job(
-        lambda: asyncio.create_task(check_alerts(app.bot)),
-        "interval", minutes=5
-    )
-    scheduler.start()
-    log.info("✅ BEST TRADE v9.0 | TOP-500 | Pump/Dump | Zone Alerts | UTC+3")
-    app.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__":
-    main()
+# main() перенесён в конец файла после всех функций
 
 # ═══════════════════════════════════════════════════════════════════
 # РЕАЛЬНЫЙ ТЕХНИЧЕСКИЙ АНАЛИЗ — из свечей Binance (не CMC estimate)
@@ -3622,3 +3582,50 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
+
+# ═══════════════════════════════════════════
+# MAIN — в конце файла после всех функций
+# ═══════════════════════════════════════════
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("spot",      cmd_top_spot))
+    app.add_handler(CommandHandler("long",      cmd_top_long))
+    app.add_handler(CommandHandler("short",     cmd_top_short))
+    app.add_handler(CommandHandler("full",      cmd_full_v2))
+    app.add_handler(CommandHandler("menu",      lambda u,c: u.message.reply_text(
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb())))
+    app.add_handler(CommandHandler("1",         cmd_market))
+    app.add_handler(CommandHandler("2",         cmd_coin))
+    app.add_handler(CommandHandler("3",         cmd_signals))
+    app.add_handler(CommandHandler("4",         cmd_top))
+    app.add_handler(CommandHandler("5",         cmd_rockets))
+    app.add_handler(CommandHandler("6",         cmd_watchlist))
+    app.add_handler(CommandHandler("7",         cmd_precision))
+    app.add_handler(CommandHandler("8",         cmd_game))
+    app.add_handler(CommandHandler("game",      cmd_game))
+    app.add_handler(CommandHandler("market",    cmd_market))
+    app.add_handler(CommandHandler("coin",      cmd_coin))
+    app.add_handler(CommandHandler("signals",   cmd_signals))
+    app.add_handler(CommandHandler("top",       cmd_top))
+    app.add_handler(CommandHandler("rockets",   cmd_rockets))
+    app.add_handler(CommandHandler("watchlist", cmd_watchlist))
+    app.add_handler(CommandHandler("precision", cmd_precision))
+    app.add_handler(CallbackQueryHandler(callback_handler))
+
+    scheduler = AsyncIOScheduler(timezone=TZ)
+    scheduler.add_job(
+        lambda: asyncio.create_task(send_scheduled(app.bot)),
+        "interval", minutes=30
+    )
+    scheduler.add_job(
+        lambda: asyncio.create_task(check_alerts(app.bot)),
+        "interval", minutes=5
+    )
+    scheduler.start()
+    log.info("✅ BEST TRADE v22.0 | TOP-500 | Real TA | Binance Candles | UTC+3")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
