@@ -844,22 +844,30 @@ def detect_order_blocks(candles, is_long):
     return obs[-3:]
 
 def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.BytesIO:
+    """
+    Профессиональный чистый график как в примере KRIPTANO:
+    - Свечи + EMA + уровни (Entry, TP1/2/3, SL, Swing)
+    - Никаких лишних полос и заливок
+    - Объём внизу
+    - Брендинг BEST TRADE
+    """
     is_long       = a["is_long"]
     price         = a["price"]
     tp1, tp2, tp3 = a["tp1"], a["tp2"], a["tp3"]
     sl, swing     = a["sl"],  a["swing"]
     rsi           = a["rsi_4h"]
 
-    # Данные с Binance
     candles = get_binance_ohlc(symbol, interval="4h", limit=200)
     if not candles or len(candles) < 20:
-        p = price * 0.96
-        for _ in range(200):
-            ch = random.gauss(0, 0.008)
+        # fallback: синтетические свечи вокруг текущей цены
+        p = price * 0.9
+        for _ in range(100):
+            ch = random.gauss(0, 0.01)
             o = p; c = p * (1 + ch)
-            h = max(o, c) * (1 + abs(random.gauss(0, 0.003)))
-            l = min(o, c) * (1 - abs(random.gauss(0, 0.003)))
-            candles.append({"open": o, "high": h, "low": l, "close": c, "vol": random.uniform(1e5,1e6), "time": None})
+            h = max(o, c) * (1 + abs(random.gauss(0, 0.004)))
+            l = min(o, c) * (1 - abs(random.gauss(0, 0.004)))
+            candles.append({"open": o, "high": h, "low": l, "close": c,
+                            "vol": random.uniform(1e5, 1e6), "time": None})
             p = c
         candles[-1]["close"] = price
 
@@ -871,183 +879,155 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
     ema50_all  = calc_ema(closes_all, 50)
     ema200_all = calc_ema(closes_all, min(200, n_all))
 
-    # Supertrend по всем данным
+    # Supertrend (только для стрелок BUY/SELL — без заливки)
     st_all = calc_supertrend(candles, period=10, multiplier=3.0)
 
-    # Показываем последние 100
-    display_n = min(100, n_all)
+    # Показываем последние 80 свечей
+    display_n = min(80, n_all)
     start_idx = n_all - display_n
-    candles   = candles[start_idx:]
-    ema20_v   = ema20_all[start_idx:]
-    ema50_v   = ema50_all[start_idx:]
-    ema200_v  = ema200_all[start_idx:]
-    st_v      = st_all[start_idx:]
+    candles  = candles[start_idx:]
+    ema20_v  = ema20_all[start_idx:]
+    ema50_v  = ema50_all[start_idx:]
+    ema200_v = ema200_all[start_idx:]
+    st_v     = st_all[start_idx:]
 
     n    = len(candles)
     vols = [c.get("vol", 0) for c in candles]
-    obs  = detect_order_blocks(candles, is_long)
 
-    fig = plt.figure(figsize=(13, 8.5), facecolor=BG)
-    gs  = fig.add_gridspec(9, 1, hspace=0,
-                            left=0.01, right=0.80,
-                            top=0.995, bottom=0.05)
-    ax_brand = fig.add_subplot(gs[0:1, 0])
-    ax       = fig.add_subplot(gs[1:7, 0])
-    axv      = fig.add_subplot(gs[7:8, 0], sharex=ax)
-    ax_info  = fig.add_subplot(gs[8:,  0])
+    # ── LAYOUT ──
+    fig = plt.figure(figsize=(14, 9), facecolor="#0B1120")
+    gs  = fig.add_gridspec(
+        10, 1, hspace=0,
+        left=0.02, right=0.82,
+        top=0.97, bottom=0.04
+    )
+    ax_brand = fig.add_subplot(gs[0:1,  0])
+    ax       = fig.add_subplot(gs[1:8,  0])
+    axv      = fig.add_subplot(gs[8:10, 0], sharex=ax)
 
-    for a_ in [ax_brand, ax, axv, ax_info]:
-        a_.set_facecolor(BG)
+    for ax_ in [ax_brand, ax, axv]:
+        ax_.set_facecolor("#0B1120")
 
-    # ── БРЕНДИНГ ──
+    # ── БРЕНДИНГ (оранжевая полоса) ──
     ax_brand.set_facecolor(ORANGE)
     ax_brand.set_xlim(0, 1); ax_brand.set_ylim(0, 1); ax_brand.axis("off")
-    ax_brand.text(0.5, 0.55, "B E S T   T R A D E",
-                  fontsize=20, color=WHITE, fontweight="bold",
-                  ha="center", va="center", transform=ax_brand.transAxes)
+    ax_brand.text(0.5, 0.58, "B E S T   T R A D E",
+                  fontsize=18, color=WHITE, fontweight="bold",
+                  ha="center", va="center", transform=ax_brand.transAxes,
+                  family="monospace")
     ax_brand.text(0.5, 0.12, "S  I  G  N  A  L  S",
-                  fontsize=7, color=WHITE, alpha=0.70,
-                  ha="center", va="center", transform=ax_brand.transAxes)
-
-    # ── ORDER BLOCKS ──
-    for ob in obs:
-        ob_color = GREEN if ob["type"] == "bull" else RED
-        ax.axhspan(ob["lo"], ob["hi"],
-                   xmin=ob["idx"] / n, xmax=1.0,
-                   alpha=0.10, color=ob_color, zorder=1)
-
-    # ── SUPERTREND — зелёная/красная зона под/над ценой ──
-    bull_xs, bull_ys = [], []
-    bear_xs, bear_ys = [], []
-    for i, s in enumerate(st_v):
-        if s["value"] > 0:
-            if s["direction"] == 1:
-                bull_xs.append(i); bull_ys.append(s["value"])
-            else:
-                bear_xs.append(i); bear_ys.append(s["value"])
-
-    if bull_xs:
-        ax.fill_between(bull_xs,
-                        [candles[i]["close"] for i in bull_xs],
-                        bull_ys,
-                        alpha=0.12, color=GREEN, zorder=1)
-        ax.scatter(bull_xs, bull_ys, color=GREEN, s=2.5, zorder=4, linewidths=0)
-    if bear_xs:
-        ax.fill_between(bear_xs,
-                        [candles[i]["close"] for i in bear_xs],
-                        bear_ys,
-                        alpha=0.12, color=RED, zorder=1)
-        ax.scatter(bear_xs, bear_ys, color=RED, s=2.5, zorder=4, linewidths=0)
-
-    # ── BUY/SELL стрелки на моментах переключения ──
-    for i, s in enumerate(st_v):
-        if s["signal"] == "BUY":
-            ax.annotate("▲ BUY",
-                        xy=(i, candles[i]["low"] * 0.9985),
-                        fontsize=7.5, color=GREEN, fontweight="bold",
-                        ha="center", va="top", zorder=10,
-                        bbox=dict(boxstyle="round,pad=0.2", facecolor=BG,
-                                  edgecolor=GREEN, alpha=0.85, lw=1.0))
-        elif s["signal"] == "SELL":
-            ax.annotate("▼ SELL",
-                        xy=(i, candles[i]["high"] * 1.0015),
-                        fontsize=7.5, color=RED, fontweight="bold",
-                        ha="center", va="bottom", zorder=10,
-                        bbox=dict(boxstyle="round,pad=0.2", facecolor=BG,
-                                  edgecolor=RED, alpha=0.85, lw=1.0))
+                  fontsize=7, color=WHITE, alpha=0.75,
+                  ha="center", va="center", transform=ax_brand.transAxes,
+                  family="monospace")
 
     # ── СВЕЧИ ──
-    w = 0.4
+    w = 0.42
     for i, c in enumerate(candles):
-        col = GREEN if c["close"] >= c["open"] else RED
-        ax.plot([i, i], [c["low"], c["high"]], color=col, lw=0.65, zorder=2)
-        h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01
+        col = "#26A69A" if c["close"] >= c["open"] else "#EF5350"
+        ax.plot([i, i], [c["low"], c["high"]], color=col, lw=0.7, zorder=2)
+        body_h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.015
         ax.add_patch(patches.Rectangle(
-            (i - w/2, min(c["open"], c["close"])), w, h,
-            linewidth=0, facecolor=col, zorder=3
+            (i - w/2, min(c["open"], c["close"])), w, body_h,
+            linewidth=0, facecolor=col, alpha=0.95, zorder=3
         ))
 
-    # ── EMA — жирные линии с подписями ──
+    # ── EMA — чистые линии ──
     ema_cfg = [
-        (ema20_v,  "#F0B90B", "EMA20",  2.0),
-        (ema50_v,  "#F7931A", "EMA50",  2.2),
-        (ema200_v, "#FF4560", "EMA200", 2.5),
+        (ema20_v,  "#F0B90B", "EMA20",  1.6),
+        (ema50_v,  "#F7931A", "EMA50",  1.8),
+        (ema200_v, "#EF5350", "EMA200", 2.0),
     ]
     for vals, col, lbl, lw in ema_cfg:
         pts = [(i, v) for i, v in enumerate(vals) if v is not None]
         if len(pts) > 1:
-            xs = [p[0] for p in pts]
-            ys = [p[1] for p in pts]
-            ax.plot(xs, ys, color=col, lw=lw, alpha=0.95, label=lbl, zorder=5)
+            ax.plot([p[0] for p in pts], [p[1] for p in pts],
+                    color=col, lw=lw, alpha=0.9, zorder=5)
             lx, ly = pts[-1]
-            ax.text(lx + 0.8, ly, f" {lbl}\n {fp(ly)}",
-                    color=col, fontsize=6.2, va="center", fontweight="bold", zorder=8,
-                    bbox=dict(boxstyle="round,pad=0.15", facecolor=BG,
-                              alpha=0.7, edgecolor=col, lw=0.6))
+            ax.text(lx + 0.5, ly, f" {lbl}",
+                    color=col, fontsize=6.5, va="center",
+                    fontweight="bold", zorder=8)
 
-    # ── SUPERTREND подпись текущего состояния ──
-    current_st = st_v[-1] if st_v else {"direction": 1, "value": price}
-    st_label   = "🟢 SUPERTREND: BUY" if current_st["direction"] == 1 else "🔴 SUPERTREND: SELL"
-    st_color   = GREEN if current_st["direction"] == 1 else RED
-    ax.text(0.012, 0.79, st_label,
-            fontsize=8, color=st_color, fontweight="bold",
-            va="top", ha="left", transform=ax.transAxes, zorder=10,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor=BG, edgecolor=st_color, alpha=0.85, lw=1.2))
+    # ── SUPERTREND — только стрелки BUY/SELL, без заливки ──
+    for i, s in enumerate(st_v):
+        if s["signal"] == "BUY":
+            ax.annotate("▲ BUY",
+                        xy=(i, candles[i]["low"] * 0.9982),
+                        fontsize=7, color="#26A69A", fontweight="bold",
+                        ha="center", va="top", zorder=10,
+                        bbox=dict(boxstyle="round,pad=0.15",
+                                  facecolor="#0B1120", edgecolor="#26A69A",
+                                  alpha=0.9, lw=0.8))
+        elif s["signal"] == "SELL":
+            ax.annotate("▼ SELL",
+                        xy=(i, candles[i]["high"] * 1.0018),
+                        fontsize=7, color="#EF5350", fontweight="bold",
+                        ha="center", va="bottom", zorder=10,
+                        bbox=dict(boxstyle="round,pad=0.15",
+                                  facecolor="#0B1120", edgecolor="#EF5350",
+                                  alpha=0.9, lw=0.8))
 
-    # ── ЗОНЫ SL/TP ──
-    if is_long:
-        ax.axhspan(sl,    price, alpha=0.07, color=RED,   zorder=1)
-        ax.axhspan(price, tp1,   alpha=0.05, color=GREEN, zorder=1)
-    else:
-        ax.axhspan(price, sl,    alpha=0.07, color=RED,   zorder=1)
-        ax.axhspan(tp1,   price, alpha=0.05, color=GREEN, zorder=1)
-
-    # ── УРОВНИ ──
-    ext = n * 0.26
+    # ── УРОВНИ (как в примере KRIPTANO) ──
+    ext = n * 0.28
     ax.set_xlim(-1, n + ext)
 
-    def pct_str(target):
-        d = (target - price) / price * 100
+    def pct_str(t):
+        d = (t - price) / price * 100
         v = d if is_long else -d
-        return f"(+{v:.2f}%)" if v >= 0 else f"({v:.2f}%)"
+        return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
 
-    def draw_lvl(val, color, label, extra="", ls="--", lw=1.2, bold=False):
-        ax.axhline(val, color=color, linestyle=ls, linewidth=lw, alpha=0.92, zorder=6)
-        ax.text(n + ext * 0.04, val,
-                f"  {label}  {fp(val)}  {extra}",
-                color=color, fontsize=7.5, va="center",
-                fontweight="bold" if bold else "normal",
-                fontfamily="monospace", zorder=7)
+    def draw_level(val, color, label, pct="", ls="--", lw=1.3):
+        ax.axhline(val, color=color, linestyle=ls, linewidth=lw,
+                   alpha=0.85, zorder=6, xmax=0.78)
+        label_x = n + ext * 0.04
+        txt = f"{label}: {fp(val)}"
+        if pct: txt += f"  ({pct})"
+        ax.text(label_x, val, txt,
+                color=color, fontsize=7.8, va="center",
+                fontweight="bold", fontfamily="monospace", zorder=7)
 
-    draw_lvl(tp3,   TP3C,   "TP3",   pct_str(tp3),  "--", 1.0)
-    draw_lvl(tp2,   TP2C,   "TP2",   pct_str(tp2),  "--", 1.0)
-    draw_lvl(tp1,   TP1C,   "TP1",   pct_str(tp1),  "--", 1.0)
-    draw_lvl(price, ENTRYC, "Entry", "",             "-",  2.2, True)
-    draw_lvl(swing, SWINGC, "Swing", "",             ":",  1.0)
-    draw_lvl(sl,    SLC,    "SL",    pct_str(sl),    "--", 1.3)
+    # Уровни сверху вниз
+    draw_level(tp3,   "#00C896", "TP3",   pct_str(tp3),   "--", 1.0)
+    draw_level(tp2,   "#00E5A0", "TP2",   pct_str(tp2),   "--", 1.0)
+    draw_level(tp1,   "#26A69A", "TP1",   pct_str(tp1),   "--", 1.0)
+    draw_level(price, "#FFD700", "Entry", "",              "-",  2.0)
+    draw_level(swing, "#64B5F6", "Swing", "",              ":",  1.0)
+    draw_level(sl,    "#EF5350", "SL",    pct_str(sl),    "--", 1.3)
 
-    # 24h min/max линии
-    if stats_24h:
-        h24 = stats_24h.get("high", 0)
-        l24 = stats_24h.get("low",  0)
-        if h24: ax.axhline(h24, color="#AAAAFF", linestyle=":", lw=0.8, alpha=0.6, zorder=4)
-        if l24: ax.axhline(l24, color="#FFAAAA", linestyle=":", lw=0.8, alpha=0.6, zorder=4)
-
+    # Стрелка входа на последней свече
     ax.annotate("▲" if is_long else "▼",
-                xy=(n - 1, price), fontsize=14,
-                color=ENTRYC, ha="center", va="bottom", zorder=9)
+                xy=(n - 1, price), fontsize=16,
+                color="#FFD700", ha="center",
+                va="bottom" if is_long else "top", zorder=9)
 
-    ax.legend(loc="upper left", fontsize=7.5,
-              facecolor="#0D1B2A", edgecolor="#1E2A3A",
-              labelcolor=WHITE, framealpha=0.92,
-              borderpad=0.5, handlelength=1.4)
+    # ── ЗАГОЛОВОК ──
+    side_str = "LONG" if is_long else "SHORT"
+    side_col = "#26A69A" if is_long else "#EF5350"
+    ax.text(0.01, 0.98, f"{symbol}USDT  •  4H  •  {side_str}",
+            fontsize=12, color=WHITE, fontweight="bold",
+            va="top", ha="left", transform=ax.transAxes, zorder=10)
+    rsi_t = "Перепродан" if rsi < 35 else ("Перекуплен" if rsi > 65 else "Нейтральный")
+    rsi_c = "#26A69A" if rsi < 35 else ("#EF5350" if rsi > 65 else GRAY)
+    ax.text(0.01, 0.90, f"RSI {rsi:.0f} — {rsi_t}",
+            fontsize=8, color=rsi_c,
+            va="top", ha="left", transform=ax.transAxes, zorder=10)
+
+    # Supertrend статус
+    cur_st = st_v[-1] if st_v else {"direction": 1}
+    st_lbl = "SUPERTREND: BUY" if cur_st["direction"] == 1 else "SUPERTREND: SELL"
+    st_col = "#26A69A" if cur_st["direction"] == 1 else "#EF5350"
+    ax.text(0.01, 0.82, st_lbl,
+            fontsize=8, color=st_col, fontweight="bold",
+            va="top", ha="left", transform=ax.transAxes, zorder=10,
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="#0B1120",
+                      edgecolor=st_col, alpha=0.85, lw=0.9))
 
     # ── ОБЪЁМ ──
     max_vol = max(vols) if max(vols) > 0 else 1
     for i, c in enumerate(candles):
-        col = GREEN if c["close"] >= c["open"] else RED
-        axv.bar(i, vols[i] / max_vol, width=0.7, color=col, alpha=0.40, zorder=2)
+        col = "#26A69A" if c["close"] >= c["open"] else "#EF5350"
+        axv.bar(i, vols[i] / max_vol, width=0.7, color=col, alpha=0.45, zorder=2)
     axv.set_yticks([])
+    axv.set_ylabel("Vol", color=GRAY, fontsize=7, rotation=0, labelpad=18)
     axv.spines[:].set_visible(False)
 
     # ── X МЕТКИ ──
@@ -1059,38 +1039,17 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
         now_t = datetime.now(timezone.utc)
         xlbls = [(now_t - timedelta(hours=(n - i) * 4)).strftime("%d.%m\n%H:%M") for i in ticks]
     ax.set_xticks(ticks); ax.set_xticklabels(xlbls, fontsize=6.5, color=GRAY)
-    axv.tick_params(axis="x", colors=GRAY, labelsize=6)
+    axv.set_xticks([]); plt.setp(ax.get_xticklabels(), visible=False)
 
-    ax.tick_params(axis="y", colors=GRAY, labelsize=7.5, right=False, left=False)
+    ax.tick_params(axis="y", colors=GRAY, labelsize=7.5, right=True, left=False)
     ax.yaxis.set_label_position("right"); ax.yaxis.tick_right()
-    ax.grid(color="#1A2535", lw=0.3, zorder=0)
-    ax.spines[:].set_color("#1E2A3A")
-
-    # ── ЗАГОЛОВОК ──
-    side_str  = "LONG" if is_long else "SHORT"
-    rsi_color = GREEN if rsi < 35 else (RED if rsi > 65 else GRAY)
-    rsi_tag   = "Перепродан 🟢" if rsi < 35 else ("Перекуплен 🔴" if rsi > 65 else "Нейтральный ⚪")
-    ax.text(0.012, 0.97, f"{symbol}USDT  •  4H  •  {side_str}",
-            fontsize=11, color=WHITE, fontweight="bold",
-            va="top", ha="left", transform=ax.transAxes, zorder=10)
-    ax.text(0.012, 0.89, f"RSI {rsi:.0f}  —  {rsi_tag}",
-            fontsize=8, color=rsi_color,
-            va="top", ha="left", transform=ax.transAxes, zorder=10)
-
-    # ── НИЖНЯЯ ИНФО ПОЛОСА (24h stats) ──
-    ax_info.axis("off")
-    if stats_24h:
-        h24 = stats_24h.get("high", 0)
-        l24 = stats_24h.get("low",  0)
-        best_entry = l24 * 1.005 if l24 else price
-        info_txt = (f"  📅 24H:  🔼 {fp(h24)}   🔽 {fp(l24)}   "
-                    f"🎯 Лучший вход: {fp(best_entry)}")
-        ax_info.text(0.01, 0.5, info_txt,
-                     color=GRAY, fontsize=7.5, va="center",
-                     transform=ax_info.transAxes)
+    ax.grid(color="#151F30", lw=0.3, zorder=0, alpha=0.7)
+    ax.spines[:].set_color("#1A2535")
+    axv.spines[:].set_color("#1A2535")
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=BG)
+    plt.savefig(buf, format="png", dpi=155, bbox_inches="tight",
+                facecolor="#0B1120", edgecolor="none")
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -1269,21 +1228,79 @@ BTC_ZONES = {
 # ── ВОТЧЛИСТ — зоны входа из сигнальных каналов ──
 # Формат: symbol → {"long": [lo, hi], "short": [lo, hi], "note": str, "source": str}
 WATCHLIST_ZONES = {
+    # ── СПОТ ПОРТФЕЛЬ (из таблицы 19.06.2026) ──
+    "LINK": {
+        "long":  [6.70, 7.40],
+        "note":  "Chainlink — DeFi оракул. Зона накопления спот",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "AVAX": {
+        "long":  [4.50, 4.90],
+        "note":  "Avalanche — L1. Спот-накопление у исторических минимумов",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "UNI": {
+        "long":  [2.50, 2.80],
+        "note":  "Uniswap — DEX #1. Зона накопления. Цель при восстановлении рынка $6+",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "DYDX": {
+        "long":  [0.10, 0.12],
+        "note":  "dYdX — перпетуальный DEX. Спот у дна. Recovery потенциал x5+",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "PYTH": {
+        "long":  [0.030, 0.032],
+        "note":  "Pyth Network — оракул. Зона накопления. Конкурент Chainlink",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "ORDI": {
+        "long":  [2.30, 2.57],
+        "note":  "Ordinals — Bitcoin NFT протокол. Зона накопления у дна",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "AAVE": {
+        "long":  [53.50, 63.50],
+        "note":  "Aave — кредитный DeFi. Сильный проект. Зона DCA",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    "BEAT": {
+        "long":  [1.10, 1.30],
+        "note":  "CertiK аудит. Выше EMA200. Сильнейший спот-сетап портфеля",
+        "source": "Аналитика",
+        "bias":  "LONG",
+        "spot":  True,
+    },
+    # ── ФЬЮЧЕРС ВОТЧЛИСТ ──
     "SOL": {
         "long":  [68.28, 69.34],
-        "note":  "3 точки базы сформированы. Глобально не лучшее место, смотреть по факту",
+        "note":  "3 точки базы сформированы. Ключевая зона поддержки",
         "source": "Аналитика",
         "bias":  "LONG",
     },
     "ZK": {
         "short": [0.01278, 0.01314],
-        "note":  "Ближайшая шорт-зона. Работаем",
+        "note":  "Шорт от зоны сопротивления",
         "source": "Аналитика",
         "bias":  "SHORT",
     },
     "ACH": {
         "long":  [0.005030, 0.005138],
-        "note":  "Формируем новую структуру на старшем ТФ. Зона интереса снизу",
+        "note":  "Новая структура на старшем ТФ. Зона накопления",
         "source": "Аналитика",
         "bias":  "LONG",
     },
@@ -1293,54 +1310,47 @@ WATCHLIST_ZONES = {
         "source": "Аналитика",
         "bias":  "LONG",
     },
-    "HYPE": {
-        "long":  [None, None],  # зона по рынку
-        "note":  "Превосходство над альтами. TOTAL3 разворачивается → цель ATH $77, потенциал до $80",
-        "source": "Аналитика",
-        "bias":  "LONG",
-    },
     "ETH": {
         "short": [1710, 1737],
-        "note":  "Imbalance зона. Ретест сверху → шорт. Цели: $1670, при слабости $1504. Рассинхрон с BTC",
+        "note":  "Imbalance зона. Ретест → шорт. Цели: $1670, $1504",
         "source": "Аналитика",
         "bias":  "SHORT",
     },
     "APT": {
         "long":  [0.6300, 0.6397],
-        "note":  "Нижняя граница структуры 4H. Зона интереса. SL за границу старшего ТФ с запасом (проколы возможны)",
+        "note":  "Нижняя граница структуры 4H. SL за старший ТФ",
         "source": "Аналитика",
         "bias":  "LONG",
     },
     "ENA": {
         "long":  [0.0875, 0.0941],
-        "note":  "Зона накопления 4H. Цель $0.106–0.110. Зона подтверждена аналитикой",
+        "note":  "Зона накопления 4H. Цель $0.106–0.110",
         "source": "Аналитика",
         "bias":  "LONG",
     },
     "BTC": {
         "long":  [62000, 63000],
-        "note":  "Откат к $62K = возможность. Сценарий: коррекция → рост к $70K+",
-        "source": "Аналитика",
-        "bias":  "LONG",
-    },
-    "BEAT": {
-        "long":  [1.00, 1.10],
-        "note":  "Лучший сетап вотчлиста. Выше EMA200, CertiK аудит",
+        "note":  "Откат к $62K = зона входа. Цель $70K+",
         "source": "Аналитика",
         "bias":  "LONG",
     },
     "PIPPIN": {
         "long":  [0.0120, 0.0135],
-        "note":  "Вход при RSI < 30. Шорт от EMA200 (~0.0208)",
+        "note":  "Вход при RSI < 30. Мемкоин Solana. Recovery потенциал",
         "source": "Аналитика",
         "bias":  "LONG",
     },
-    "AVAX": {
-        "short": [4.449, 4.90],
-        "note":  "Сильный нисходящий тренд с 2021",
+    "HYPE": {
+        "long":  [None, None],
+        "note":  "Цель ATH $77–80. Превосходство над альтами",
         "source": "Аналитика",
-        "bias":  "SHORT",
+        "bias":  "LONG",
     },
+}
+
+# Монеты спот-портфеля для автоматического ТОП СПОТ
+SPOT_PORTFOLIO = {
+    sym: info for sym, info in WATCHLIST_ZONES.items() if info.get("spot")
 }
 
 def check_watchlist_alerts(coins: list) -> list:
@@ -3226,8 +3236,79 @@ def _signal_kb(symbol: str, msg_id: int = 0, chat_id: int = 0, mode: str = "long
 
 def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
                        mode: str = "long") -> str:
-    """VIP формат сигнала — профессиональный, читабельный"""
-    is_long  = mode in ("long", "spot")
+    """
+    Чистый формат как в примере:
+    SYMBOLUSDT 🟢 LONG
+    💵 Точка входа: X
+    🎯 TP1: X (+%)
+    🎯 TP2: X (+%)
+    🎯 TP3: X (+%)
+    🛑 SL: X (-%)
+    📍 Swing: X
+    + RSI, объём, SMC кратко
+    """
+    is_long = mode in ("long", "spot")
+    price   = a["price"]
+    r       = a["rocket"]
+    rsi_4h  = a["rsi_4h"]
+
+    def pct(t):
+        d = (t - price) / price * 100
+        v = d if is_long else -d
+        return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
+
+    def ri(v): return "🟢" if v < 30 else ("🔴" if v > 70 else "🔵")
+
+    smc = [f for f in a.get("smc_factors", []) if "BB" not in f and "MACD" not in f]
+    macd_t = "▲ Бычий" if a.get("macd_bullish") else ("▼ Медвежий" if a.get("macd_bearish") else "→ Нейт.")
+    vol = a["vol"]
+    vol_s = f"${vol/1e9:.2f}B" if vol>=1e9 else (f"${vol/1e6:.1f}M" if vol>=1e6 else f"${vol/1e3:.0f}K")
+    side_e = "🟢" if is_long else "🔴"
+    side_t = "LONG" if mode == "long" else ("СПОТ" if mode == "spot" else "SHORT")
+    st_t   = a.get("st_label", "—")
+
+    lines = [
+        f"{side_e} *{symbol}USDT*  {side_t}",
+        f"🕐 {now_utc3()}",
+        f"📡 Аналитика BEST TRADE",
+        "",
+    ]
+
+    if mode != "spot":
+        lines += [
+            f"💵 *Точка входа:*  `{fp(price)}`",
+            f"🎯 Тейк-профит 1:  `{fp(a['tp1'])}`  `({pct(a['tp1'])})`",
+            f"🎯 Тейк-профит 2:  `{fp(a['tp2'])}`  `({pct(a['tp2'])})`",
+            f"🎯 Тейк-профит 3:  `{fp(a['tp3'])}`  `({pct(a['tp3'])})`",
+            f"🛑 Стоп лосс:      `{fp(a['sl'])}`",
+            f"📍 {'Swing Low' if is_long else 'Swing High'}:  `{fp(a['swing'])}`",
+            f"📐 R:R             `1:{a['rr']:.1f}`",
+        ]
+    else:
+        lines += [
+            f"💵 *Зона покупки:* `{fp(price)}`",
+            f"🎯 Цель:           `{fp(a['tp2'])}`  `({pct(a['tp2'])})`",
+            f"🛑 Стоп (опцион):  `{fp(a['sl'])}`",
+        ]
+
+    if stats_24h:
+        h24 = stats_24h.get("high", 0); l24 = stats_24h.get("low", 0)
+        if h24 and l24:
+            lines += ["", f"📅 24H:  🔼`{fp(h24)}`  🔽`{fp(l24)}`"]
+
+    lines += [
+        "",
+        f"📊 RSI 4H: {ri(rsi_4h)}`{rsi_4h:.0f}`  ·  MACD: `{macd_t}`  ·  ST: `{st_t}`",
+    ]
+    if smc:
+        lines.append(f"🧠 SMC: `{'  ·  '.join(smc[:3])}`")
+    lines += [
+        f"💹 Объём: `{vol_s}`  ·  Rank `#{a.get('rank','—')}`",
+        "",
+        f"⚠️ Риск: *2% депозита*  ·  SL обязателен",
+        f"#{symbol}USDT",
+    ]
+    return "\n".join(lines)
     side_e   = "🟢" if is_long else "🔴"
     side_t   = "LONG" if mode == "long" else ("СПОТ" if mode == "spot" else "SHORT")
     price    = a["price"]
@@ -3345,30 +3426,85 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
 _old_build_signal_post = _build_signal_post
 
 async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/spot — ТОП СПОТ: полный разбор для долгосрочного инвестора"""
-    msg = await update.message.reply_text("💎 Анализирую спот-возможности... ~60 сек")
+    """/spot — ТОП СПОТ: монеты с максимальным потенциалом иксов"""
+    msg = await update.message.reply_text(
+        "💎 Ищу монеты с максимальным потенциалом...\n"
+        "Анализирую топ-500 по CMC + Binance данные"
+    )
     coins = get_top500()
     if not coins:
         await msg.edit_text("❌ Нет данных"); return
 
+    # ── ФИЛЬТР 1: Качество проекта + падение от ATH ──
+    # Теги которые говорят о реальном проекте
+    QUALITY_TAGS = {
+        "defi", "layer-1", "layer-2", "layer1", "layer2",
+        "dex", "lending-borowing", "yield-farming",
+        "oracle", "infrastructure", "gaming", "web3",
+        "nft", "metaverse", "cross-chain", "payments",
+        "exchange-based-tokens", "governance",
+    }
+
     candidates = []
-    for coin in coins[:200]:
+    for coin in coins:
         q         = coin["quote"]["USDT"]
         ch90d     = q.get("percent_change_90d", 0) or 0
         ch7d      = q.get("percent_change_7d",  0) or 0
         ch30d     = q.get("percent_change_30d", 0) or 0
-        mcap      = q.get("market_cap",  0) or 0
+        ch24h     = q.get("percent_change_24h", 0) or 0
         vol       = q.get("volume_24h",  0) or 0
+        mcap      = q.get("market_cap",  0) or 0
+        price     = q.get("price",       0) or 0
         rank      = coin.get("cmc_rank", 999)
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        if (rank <= 300 and ch90d < -25 and vol_ratio < 50
-                and vol >= 1_000_000 and mcap >= 20_000_000):
-            rec_score = (abs(ch90d) * 1.0 + max(ch7d,0)*3.0
-                         + max(ch30d,0)*1.5 + (300-rank)*0.05)
-            candidates.append((coin, rec_score))
+        tags      = {t.lower() for t in coin.get("tags", [])}
 
+        # Жёсткие фильтры (убираем мусор)
+        if vol_ratio > 60:          continue   # памп/дамп манипуляция
+        if vol < 500_000:           continue   # нет ликвидности
+        if mcap < 10_000_000:       continue   # микрокап — слишком рискованно
+        if "stablecoin" in tags:    continue
+        if ch90d > -20:             continue   # не упала достаточно
+
+        # Скоринг иксового потенциала
+        score = 0.0
+
+        # 1. Падение от пика — основной фактор (чем больше упала = больше иксов)
+        drop_score = abs(ch90d)          # -80% → 80 очков
+        score += drop_score * 1.0
+
+        # 2. Признаки разворота (накопление началось)
+        if ch7d > 0:   score += ch7d * 4.0    # растёт за неделю — приоритет
+        if ch30d > 0:  score += ch30d * 1.5   # месяц в плюсе
+        if ch24h > 0:  score += ch24h * 2.0   # сегодня растёт
+
+        # 3. Качество проекта
+        if rank <= 20:   score += 50
+        elif rank <= 50: score += 35
+        elif rank <= 100: score += 20
+        elif rank <= 200: score += 10
+        elif rank <= 300: score += 5
+
+        # Бонус за качественные теги
+        tag_bonus = len(tags & QUALITY_TAGS) * 8
+        score += min(tag_bonus, 30)
+
+        # 4. Объём тренд (накопление)
+        if 2 <= vol_ratio <= 30:  score += 15   # нормальный объём
+        elif vol_ratio < 2:       score -= 10   # слишком мало активности
+        if vol >= 50_000_000:     score += 15   # высокая ликвидность
+        elif vol >= 10_000_000:   score += 8
+
+        # Потенциал в иксах до ATH (приблизительно)
+        # Если упала -80% → нужно вырасти в 5x до ATH
+        x_to_ath = 1 / (1 + ch90d/100) if ch90d < -5 else 1.0
+        score += min(x_to_ath * 5, 40)   # макс бонус за x-потенциал
+
+        candidates.append((coin, score, x_to_ath, ch90d, ch7d))
+
+    # Сортируем по скору
     candidates.sort(key=lambda x: x[1], reverse=True)
-    top_spot = candidates[:5]
+    top_spot = candidates[:10]
 
     nav = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Обновить",     callback_data="top_spot"),
@@ -3379,172 +3515,210 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not top_spot:
         await msg.edit_text(
-            "😔 *Нет спот-возможностей*\n\n"
-            "Требования: Топ-300 · -25%+ за 90д · $1M+ объём\n"
-            "Рынок в росте — монеты не у дна.",
+            "😔 Нет подходящих монет\n\nРынок в росте — все уже выросли.",
             parse_mode="Markdown", reply_markup=nav)
         return
 
+    # Сводный список
     list_lines = [
         "💎 *BEST TRADE — ТОП СПОТ*",
         f"🕐 {now_utc3()}",
         "📡 Аналитика BEST TRADE",
         "",
-        "📋 Монеты у дна с потенциалом восстановления:",
+        "🎯 *Монеты с максимальным иксовым потенциалом:*",
         "",
     ]
-    for i, (c, score) in enumerate(top_spot, 1):
-        sym = c["symbol"]; q = c["quote"]["USDT"]
-        tv  = tv_link(sym)
-        ch90 = q.get("percent_change_90d", 0) or 0
-        ch7  = q.get("percent_change_7d", 0) or 0
-        prc  = q.get("price", 0) or 0
-        list_lines.append(
-            f"{i}. [{sym}USDT]({tv})\n"
-            f"   💰`{fp(prc)}`  90D`{ch90:.0f}%`  7D`{fc(ch7)}`")
-    list_lines += ["", "📊 Полный разбор каждой монеты ниже ↓"]
+
+    for i, (c, score, x_ath, ch90, ch7) in enumerate(top_spot, 1):
+        sym    = c["symbol"]
+        tv     = tv_link(sym)
+        prc    = c["quote"]["USDT"].get("price", 0)
+        rank   = c.get("cmc_rank", 999)
+        vol    = c["quote"]["USDT"].get("volume_24h", 0) or 0
+        vol_s  = f"${vol/1e9:.1f}B" if vol>=1e9 else f"${vol/1e6:.0f}M"
+
+        # Иконка потенциала
+        if x_ath >= 10:   pot_icon = "🔥🔥🔥"
+        elif x_ath >= 5:  pot_icon = "🔥🔥"
+        elif x_ath >= 3:  pot_icon = "🔥"
+        elif x_ath >= 2:  pot_icon = "⚡️"
+        else:             pot_icon = "📈"
+
+        trend_icon = "🟢" if ch7 > 0 else "🔴"
+
+        list_lines += [
+            f"{i}. [{sym}USDT]({tv})  {pot_icon}",
+            f"   💰 `{fp(prc)}`  ·  Rank #{rank}  ·  Vol {vol_s}",
+            f"   📉 -90д: `{ch90:.0f}%`  ·  Потенциал: `~x{x_ath:.1f}` до ATH",
+            f"   {trend_icon} 7д: `{fc(ch7)}`",
+            "",
+        ]
+
+    list_lines += ["📊 Детальный разбор каждой монеты ниже ↓"]
+
     await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=False)
 
-    for coin, _ in top_spot:
+    # Детальный разбор каждой монеты
+    for coin, score, x_ath, ch90d_v, ch7d_v in top_spot:
         sym  = coin["symbol"]
         slug = coin.get("slug", sym.lower())
         q    = coin["quote"]["USDT"]
         try:
-            prog_msg = await update.message.reply_text(f"⏳ Полный разбор {sym}...")
-            a         = real_full_analysis(coin)
-            stats_24h = get_binance_24h(sym)
-            extras    = get_market_extras(sym)
-            atl       = get_binance_alltime_low(sym)
-            candles_1d = get_binance_ohlc(sym, "1d", 200)
-            candles_1w = get_binance_ohlc(sym, "1w", 100)
+            prog = await update.message.reply_text(f"⏳ Разбор {sym}...")
 
-            price = a["price"]
-            ath = max((c["high"] for c in candles_1w), default=0) if candles_1w else max((c["high"] for c in candles_1d), default=0)
+            a          = real_full_analysis(coin)
+            stats_24h  = get_binance_24h(sym)
+            atl        = get_binance_alltime_low(sym)
+            candles_1d = get_binance_ohlc(sym, "1d", 365)
+            candles_1w = get_binance_ohlc(sym, "1w", 200)
 
-            zone_30d = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
-            zone_60d = min((c["low"] for c in candles_1d[-60:]), default=0) if len(candles_1d)>=60 else 0
-            zone_90d = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
+            price  = a["price"]
+            ath    = max((c["high"] for c in candles_1w), default=0) if candles_1w else max((c["high"] for c in candles_1d), default=0)
+            ch24h  = q.get("percent_change_24h", 0) or 0
+            ch30d  = q.get("percent_change_30d", 0) or 0
+            vol    = q.get("volume_24h", 0) or 0
+            mcap   = q.get("market_cap", 0) or 0
+            rank   = coin.get("cmc_rank", 999)
+            vol_s  = f"${vol/1e9:.2f}B" if vol>=1e9 else f"${vol/1e6:.1f}M"
+            mcap_s = fm(mcap) if mcap>0 else "—"
 
-            closes_1d = [c["close"] for c in candles_1d]
-            ema20_d  = calc_ema(closes_1d, 20)[-1]  if len(closes_1d)>=20  else 0
-            ema50_d  = calc_ema(closes_1d, 50)[-1]  if len(closes_1d)>=50  else 0
-            ema200_d = calc_ema(closes_1d, 200)[-1] if len(closes_1d)>=200 else 0
-            rsi_1d   = calc_rsi(closes_1d, 14)      if len(closes_1d)>=15  else 50.0
+            # Зоны
+            closes_1d = [c["close"] for c in candles_1d] if candles_1d else []
+            zone_30d  = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
+            zone_90d  = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
+            ema200_d  = next((v for v in reversed(calc_ema(closes_1d,200)) if v), 0) if len(closes_1d)>=200 else 0
+            rsi_1d    = calc_rsi(closes_1d,14) if len(closes_1d)>=15 else 50.0
 
-            vol_30d = sum(c["vol"] for c in candles_1d[-30:])/30 if len(candles_1d)>=30 else 0
             vol_7d  = sum(c["vol"] for c in candles_1d[-7:]) /7  if len(candles_1d)>=7  else 0
-            vol_growing = vol_7d > vol_30d * 1.2
+            vol_30d = sum(c["vol"] for c in candles_1d[-30:])/30 if len(candles_1d)>=30 else 0
+            vol_growing = vol_7d > vol_30d * 1.15
 
-            buy_lo  = atl * 1.05 if atl > 0 else (zone_90d or price * 0.8)
-            buy_hi  = (zone_90d * 1.10) if zone_90d > 0 else price * 0.9
-            sell_t  = ath * 0.85 if ath > 0 else price * 2.0
-            from_atl = ((price-atl)/atl*100) if atl>0 else 0
-            from_ath = ((price-ath)/ath*100) if ath>0 else 0
-            to_ath   = ((ath-price)/price*100) if ath>price>0 else 0
+            from_atl = ((price-atl)/atl*100)    if atl>0 else 0
+            from_ath = ((price-ath)/ath*100)     if ath>0 else 0
+            to_ath   = ((ath-price)/price*100)   if ath>price>0 else 0
 
-            ch1h  = q.get("percent_change_1h",  0) or 0
-            ch24h = q.get("percent_change_24h", 0) or 0
-            ch7d  = q.get("percent_change_7d",  0) or 0
-            ch30d = q.get("percent_change_30d", 0) or 0
-            ch90d = q.get("percent_change_90d", 0) or 0
-            vol24 = q.get("volume_24h", 0) or 0
-            mcap  = q.get("market_cap", 0) or 0
-            rank  = coin.get("cmc_rank", 999)
-            vol_str  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else (f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"${vol24/1e3:.0f}K")
-            mcap_str = fm(mcap) if mcap>0 else "—"
+            # Зоны покупки DCA
+            buy1 = zone_90d if zone_90d>0 else price*0.85   # агрессивный
+            buy2 = (zone_30d or price*0.92)                  # средний
+            buy3 = atl*1.03 if atl>0 else price*0.75        # у ATL
 
             def ri(v): return "🟢" if v<30 else ("🔴" if v>70 else "🔵")
 
+            smc = [f for f in a.get("smc_factors",[]) if "BB" not in f]
+
+            # Потенциал иксов
+            if x_ath >= 10:   pot_str = f"🔥🔥🔥 ~x{x_ath:.0f} до ATH"
+            elif x_ath >= 5:  pot_str = f"🔥🔥 ~x{x_ath:.1f} до ATH"
+            elif x_ath >= 3:  pot_str = f"🔥 ~x{x_ath:.1f} до ATH"
+            elif x_ath >= 2:  pot_str = f"⚡️ ~x{x_ath:.1f} до ATH"
+            else:             pot_str = f"📈 ~x{x_ath:.1f} до ATH"
+
+            tags_str = ", ".join(list({t for t in coin.get("tags",[]) if t.lower() in {"defi","layer-1","layer-2","dex","oracle","gaming","nft","payments","infrastructure","web3"}})[:3])
+
             lines = [
                 f"💎 *{sym}USDT — СПОТ РАЗБОР*",
-                f"🕐 {now_utc3()}",
-                f"📡 Аналитика BEST TRADE  |  Rank #{rank}",
+                f"🕐 {now_utc3()}  ·  Rank #{rank}",
+                f"📡 Аналитика BEST TRADE",
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                "💰 *ЦЕНЫ И ИСТОРИЯ*",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                f"📍 Текущая:  `{fp(price)}`",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
+                f"🎯 *ИКСОВЫЙ ПОТЕНЦИАЛ:*  {pot_str}",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                f"💰 Сейчас:   `{fp(price)}`",
             ]
-            if ath>0: lines += [f"🔺 ATH (макс): `{fp(ath)}`", f"   От ATH: `{from_ath:.1f}%`  |  До ATH: `+{to_ath:.0f}%`"]
-            if atl>0: lines += [f"🔻 ATL (мин):  `{fp(atl)}`", f"   От ATL: `+{from_atl:.0f}%`"]
+            if ath>0:
+                lines += [
+                    f"🔺 ATH:      `{fp(ath)}`   *(до ATH: +{to_ath:.0f}%)*",
+                ]
+            if atl>0:
+                lines += [
+                    f"🔻 ATL:      `{fp(atl)}`   *(от ATL: +{from_atl:.0f}%)*",
+                ]
             lines += [
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                "📊 *ИЗМЕНЕНИЯ ЦЕНЫ*",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                f"1H:`{fc(ch1h)}`  24H:`{fc(ch24h)}`  7D:`{fc(ch7d)}`",
-                f"30D:`{fc(ch30d)}`  90D:`{fc(ch90d)}`",
+                f"📊 90д: `{fc(ch90d_v)}`  30д: `{fc(ch30d)}`",
+                f"   7д: `{fc(ch7d_v)}`   24ч: `{fc(ch24h)}`",
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                "📈 *EMA (ДНЕВНОЙ ТФ)*",
-                "━━━━━━━━━━━━━━━━━━━━━━",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
+                f"📈 *ТЕХНИЧЕСКИЙ АНАЛИЗ (1D):*",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
+                "",
             ]
-            if ema20_d:  lines.append(f"EMA20D:  `{fp(ema20_d)}`  {'✅' if price>ema20_d else '❌'}")
-            if ema50_d:  lines.append(f"EMA50D:  `{fp(ema50_d)}`  {'✅' if price>ema50_d else '❌'}")
-            if ema200_d: lines.append(f"EMA200D: `{fp(ema200_d)}`  {'✅ бычий тренд!' if price>ema200_d else '❌ медвежий'}")
-            lines.append(f"RSI(1D): {ri(rsi_1d)}`{rsi_1d:.1f}` {'— ЗОНА ПОКУПКИ!' if rsi_1d<30 else ('— перекуплен' if rsi_1d>70 else '')}")
+            if ema200_d:
+                lines.append(f"EMA200(1D): `{fp(ema200_d)}`  {'✅ выше — бычий' if price>ema200_d else '❌ ниже — медвежий'}")
+            lines += [
+                f"RSI(1D):    {ri(rsi_1d)}`{rsi_1d:.0f}`  {'← перепродан! 🟢' if rsi_1d<30 else ('← перекуплен ⚠️' if rsi_1d>70 else '')}",
+                f"Объём:      `{vol_s}`  {' 📈 накопление!' if vol_growing else ''}",
+                f"Мкап:       `{mcap_s}`",
+            ]
+            if tags_str:
+                lines.append(f"Категория:  `{tags_str}`")
+            if smc:
+                lines.append(f"SMC:        `{'  ·  '.join(smc[:3])}`")
             lines += [
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                "🧠 *ЗОНЫ НАКОПЛЕНИЯ*",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-            ]
-            if zone_30d: lines.append(f"Мин 30д: `{fp(zone_30d)}`  {'⚡️ В ЗОНЕ!' if price<=zone_30d*1.05 else ''}")
-            if zone_60d: lines.append(f"Мин 60д: `{fp(zone_60d)}`  {'⚡️ В ЗОНЕ!' if price<=zone_60d*1.05 else ''}")
-            if zone_90d: lines.append(f"Мин 90д: `{fp(zone_90d)}`  {'⚡️ В ЗОНЕ!' if price<=zone_90d*1.05 else ''}")
-            smc = [f for f in a.get("smc_factors",[]) if "BB" not in f]
-            if smc: lines.append(f"SMC: `{'  •  '.join(smc[:4])}`")
-            lines += [
+                f"━━━━━━━━━━━━━━━━━━━━━━",
+                f"🎯 *СТРАТЕГИЯ DCA — 3 ВХОДА:*",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                "🎯 *ТОЧКИ ВХОДА И ВЫХОДА*",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                f"🟢 Зона покупки: `{fp(buy_lo)}` — `{fp(buy_hi)}`",
-                f"   {'⚡️ ЦЕНА В ЗОНЕ ПОКУПКИ!' if buy_lo<=price<=buy_hi*1.1 else ('📍 Ждём снижения' if price>buy_hi else '✅ Ниже зоны — вход!')}",
-                f"🔴 Цель продажи: `{fp(sell_t)}`  (`+{(sell_t-price)/price*100:.0f}%`)",
-                f"📦 Объём 24H: `{vol_str}`  |  MCap: `{mcap_str}`",
-                f"Объём тренд: {'📈 Растёт — накопление!' if vol_growing else '📉 Снижается'}",
+                f"  1️⃣  `{fp(buy2)}`  —  40% позиции  *(сейчас или на откате)*",
+                f"  2️⃣  `{fp(buy1)}`  —  40% позиции  *(зона мин 90д)*",
+                f"  3️⃣  `{fp(buy3)}`  —  20% позиции  *(у ATL)*",
+                "",
             ]
-            if extras:
-                fr = extras.get("funding",{}); oi = extras.get("oi",{})
-                if fr.get("ok"):
-                    lines += ["","⚡️ *Фандинг (фон):*", f"`{fr['rate']:+.4f}%`  {fr['signal']}"]
-                if oi.get("ok") and oi.get("oi",0)>0:
-                    lines.append(f"OI: `{oi.get('change',0):+.1f}%`  {oi['signal']}")
+            if ath>0:
+                lines += [
+                    f"━━━━━━━━━━━━━━━━━━━━━━",
+                    f"🏆 *ЦЕЛИ ВЫХОДА:*",
+                    f"━━━━━━━━━━━━━━━━━━━━━━",
+                    "",
+                    f"  🥉 Цель 1:  `{fp(ath*0.33)}`   *(33% ATH  ·  ~x{ath*0.33/price:.1f})*",
+                    f"  🥈 Цель 2:  `{fp(ath*0.60)}`   *(60% ATH  ·  ~x{ath*0.60/price:.1f})*",
+                    f"  🥇 Цель 3:  `{fp(ath*0.90)}`   *(90% ATH  ·  ~x{ath*0.90/price:.1f})*",
+                    "",
+                ]
 
-            spot_score = sum([rsi_1d<35, ch90d<-50, ch7d>0, vol_growing, buy_lo<=price<=buy_hi*1.1, bool(a.get("smc_smart_accum"))])
-            if spot_score>=5: v="🔥 ОТЛИЧНАЯ возможность для спот-покупки — DCA вход"; ve="🔥"
-            elif spot_score>=3: v="✅ Хорошая зона накопления"; ve="✅"
-            elif spot_score>=2: v="🟡 Ждать более низких цен"; ve="🟡"
-            else: v="⚠️ Рано входить — возможно дальнейшее падение"; ve="⚠️"
+            # Вердикт
+            spot_score = sum([
+                rsi_1d < 35,
+                ch90d_v < -60,
+                ch7d_v > 0,
+                vol_growing,
+                x_ath >= 3,
+                price <= buy2 * 1.1,
+                bool(smc),
+            ])
+            if spot_score >= 6:   v="🔥 ЛУЧШИЙ МОМЕНТ для входа"; ve="🔥"
+            elif spot_score >= 4: v="✅ Хорошая зона накопления"; ve="✅"
+            elif spot_score >= 2: v="🟡 Можно начинать DCA";     ve="🟡"
+            else:                 v="⚠️ Ждать лучшей цены";       ve="⚠️"
 
             lines += [
+                f"━━━━━━━━━━━━━━━━━━━━━━",
+                f"🏁 *ВЕРДИКТ:*  {ve} {v}",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
                 "",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                "🏁 *СПОТ ВЕРДИКТ*",
-                "━━━━━━━━━━━━━━━━━━━━━━",
-                f"{ve} *{v}*",
-                "",
-                "💡 *Стратегия DCA (3 части):*",
-                f"  1й вход: `{fp(buy_hi)}`  — 30% позиции",
-                f"  2й вход: `{fp(buy_lo*1.02)}`  — 40% позиции",
-                f"  3й вход: `{fp(atl*1.02) if atl>0 else fp(buy_lo)}`  — 30% у ATL",
-                f"  🎯 Цель:  `{fp(sell_t)}`",
-                "",
-                "⚠️ Спот: SL необязателен. Позиция: 5-10% портфеля",
+                f"⚠️ Спот: позиция не более *5–10% портфеля*",
+                f"   Горизонт: *от 3 месяцев*",
                 f"#{sym}USDT  #СПОТТРЕЙДИНГ",
             ]
 
+            # Добавляем в TOP SPOT для алертов
             TOP_SPOT_SIGNALS[sym] = {
-                "time": datetime.now(TZ), "entry": price,
-                "buy_zone_lo": buy_lo, "buy_zone_hi": buy_hi,
-                "atl": atl, "sell_target": sell_t, "status": "watching",
+                "time":        datetime.now(TZ),
+                "entry":       price,
+                "buy_zone_lo": buy1,
+                "buy_zone_hi": buy2,
+                "atl":         atl,
+                "sell_target": ath * 0.9 if ath > 0 else price * 5,
+                "status":      "watching",
             }
 
-            await prog_msg.delete()
+            await prog.delete()
             await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, "\n".join(lines))
             await asyncio.sleep(2.0)
+
         except Exception as e:
             log.error(f"top_spot {sym}: {e}")
 
@@ -3608,17 +3782,23 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🕐 {now_utc3()}",
         f"📡 Аналитика BEST TRADE",
         "",
+        "📋 *Лучшие лонг-сетапы прямо сейчас:*",
+        "",
     ]
     for i, (c, a) in enumerate(top_long, 1):
         sym   = c["symbol"]
         tv    = tv_link(sym)
-        rocket_icon = "🚀🔥" if a["rocket"] >= 80 else ("🚀" if a["rocket"] >= 68 else "✅")
-        list_lines.append(
-            f"{rocket_icon} {i}. [{sym}USDT]({tv})\n"
-            f"   💰`{fp(a['price'])}`  Score`{a['rocket']}`  RSI`{a['rsi_4h']:.0f}`"
-            f"  {'EMA200✅' if a.get('above_ema200') else ''}"
-        )
-    list_lines += ["", "📊 Подробные сетапы ниже ↓"]
+        rocket_lbl = "🚀🔥" if a["rocket"] >= 80 else ("🚀" if a["rocket"] >= 68 else "✅")
+        rsi_t  = "перепродан 🟢" if a["rsi_4h"] < 30 else ("нейтр." if a["rsi_4h"] < 60 else "перекуплен ⚠️")
+        trend_t = "↑ бычий" if a.get("trend_4h") == "bullish" else ("↓ медвежий" if a.get("trend_4h") == "bearish" else "→ нейтр.")
+        ema_t  = "выше EMA200 ✅" if a.get("above_ema200") else "ниже EMA200"
+        list_lines += [
+            f"🟢 {i}. [{sym}USDT]({tv})  {rocket_lbl}",
+            f"   💰 `{fp(a['price'])}`  ·  Score `{a['rocket']}`  ·  RSI `{a['rsi_4h']:.0f}` {rsi_t}",
+            f"   📈 Тренд: {trend_t}  ·  {ema_t}",
+            "",
+        ]
+    list_lines += ["📊 Подробные сетапы ниже ↓"]
 
     await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=False)
@@ -3703,17 +3883,22 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🕐 {now_utc3()}",
         f"📡 Аналитика BEST TRADE",
         "",
+        "📋 *Лучшие шорт-сетапы прямо сейчас:*",
+        "",
     ]
     for i, (c, a) in enumerate(top_short, 1):
         sym  = c["symbol"]
         tv   = tv_link(sym)
-        rocket_icon = "🚀🔥" if a["rocket"] >= 80 else ("🚀" if a["rocket"] >= 68 else "✅")
-        list_lines.append(
-            f"{rocket_icon} {i}. [{sym}USDT]({tv})\n"
-            f"   💰`{fp(a['price'])}`  Score`{a['rocket']}`  RSI`{a['rsi_4h']:.0f}`"
-            f"  {'EMA200❌' if not a.get('above_ema200') else ''}"
-        )
-    list_lines += ["", "📊 Подробные сетапы ниже ↓"]
+        rsi_t = "перекуплен 🔴" if a["rsi_4h"] > 70 else ("нейтр." if a["rsi_4h"] > 45 else "перепродан 🟢")
+        trend_t = "↓ медвежий" if a.get("trend_4h") == "bearish" else ("↑ бычий" if a.get("trend_4h") == "bullish" else "→ нейтр.")
+        ema_t = "выше EMA200 ⚠️" if a.get("above_ema200") else "ниже EMA200 ✅"
+        list_lines += [
+            f"🔴 {i}. [{sym}USDT]({tv})",
+            f"   💰 `{fp(a['price'])}`  ·  Score `{a['rocket']}`  ·  RSI `{a['rsi_4h']:.0f}` {rsi_t}",
+            f"   📈 Тренд: {trend_t}  ·  {ema_t}",
+            "",
+        ]
+    list_lines += ["📊 Подробные сетапы ниже ↓"]
 
     await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=False)
