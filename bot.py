@@ -2517,7 +2517,7 @@ async def check_watchlist(bot, chat_ids, coins):
             except Exception as e:
                 log.error(f"Watchlist alert {cid}: {e}")
         add_to_game(sym, "watchlist", al["price"])
-        log.info(f"Watchlist ALERT: {sym} @ {fp(al["price"])}")
+        log.info(f"Watchlist ALERT: {sym} @ {fp(al['price'])}")
 
 async def check_alerts(bot: Bot):
     """Каждые 5 мин: pump/dump + zone + supertrend + watchlist alerts"""
