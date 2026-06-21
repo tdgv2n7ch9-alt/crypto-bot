@@ -1197,9 +1197,27 @@ WATCHLIST_ZONES = {
         "source": "Аналитика",
         "bias":  "LONG",
     },
+    "ETH": {
+        "short": [1710, 1737],
+        "note":  "Imbalance зона. Ретест сверху → шорт. Цели: $1670, при слабости $1504. Рассинхрон с BTC",
+        "source": "Аналитика",
+        "bias":  "SHORT",
+    },
+    "APT": {
+        "long":  [0.6300, 0.6397],
+        "note":  "Нижняя граница структуры 4H. Зона интереса. SL за границу старшего ТФ с запасом (проколы возможны)",
+        "source": "Королёв",
+        "bias":  "LONG",
+    },
+    "ENA": {
+        "long":  [0.0875, 0.0941],
+        "note":  "Зона накопления 4H. Цель $0.106–0.110. Сигнал Джо подтверждает",
+        "source": "Джо + График",
+        "bias":  "LONG",
+    },
     "BTC": {
-        "long":  [62300, 63000],
-        "note":  "Удержать $63K = бычья структура. Цель $65K",
+        "long":  [62000, 63000],
+        "note":  "Откат к $62K = возможность. Сценарий: коррекция → рост к $70K+",
         "source": "BIG TRADER",
         "bias":  "LONG",
     },
@@ -1685,15 +1703,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📊 *BEST TRADE v15.0*\n\n"
         "Топ-500 • Фандинг • OI • Supertrend\n"
         "🚀 Rocket Score + SMC + Фундаментал\n"
-        "📍 Вотчлист с зонами (SOL, ZK, ACH, EIGEN, HYPE...)\n"
-        "⚡️ Алерты: Pump/Dump + Зона входа + ST смена\n"
+        "📍 Вотчлист с зонами\n"
+        "⚡️ Алерты: Pump/Dump + Зоны + ST\n"
         "🕐 Время UTC+3\n\n"
         "/1 — обзор рынка\n"
         "/2 BTC — анализ монеты\n"
         "/3 — торговые сигналы\n"
         "/4 — топ рынка\n"
         "/5 — 🚀 ракеты\n"
-        "/6 — 👁 вотчлист + зоны",
+        "/6 — 👁 вотчлист + зоны\n"
+        "/7 — 🎯 PRECISION SHOTS (x5-x10)",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
@@ -1908,6 +1927,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
                                   reply_markup=nav, disable_web_page_preview=True)
 
+    elif data == "precision":
+        # Перенаправляем на команду через fake update
+        await q.answer("🎯 Открываю Precision Shots...")
+        await q.edit_message_text("🎯 Используй команду /7 для Precision Shots", parse_mode="Markdown")
+
     elif data == "report":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
         coins = get_top500()
@@ -2045,6 +2069,319 @@ async def check_supertrend_signals(bot, chat_ids, coins):
 
 watchlist_alerted = {}  # {symbol: timestamp}
 
+# ═══════════════════════════════════════════
+# PRECISION SHOTS — глубокий анализ x10 сетапов
+# ═══════════════════════════════════════════
+
+def precision_shot_analysis(coin: dict, a: dict) -> dict:
+    """
+    Ищет монеты с потенциалом x5-x10.
+    Три типа сетапа:
+    1. RECOVERY  — упала -70%+ от ATH, начинает восстановление
+    2. BREAKOUT  — пробой после долгого боковика с объёмом
+    3. ACCUMULATION — Smart Money тихо накапливают
+    Возвращает score 0-100 и тип сетапа.
+    """
+    ch1h  = a["ch1h"]
+    ch24h = a["ch24h"]
+    ch7d  = a["ch7d"]
+    ch30d = a["ch30d"]
+    ch90d = a["ch90d"]
+    vol_ratio = a["vol_ratio"]
+    rsi_4h    = a["rsi_4h"]
+    rank      = a["rank"]
+    vol       = a["vol"]
+    mcap      = a["mcap"]
+    price     = a["price"]
+    suspicious = a.get("suspicious", False)
+
+    # Базовые фильтры — если не проходит, сетап не рассматриваем
+    if suspicious:            return {"type": None, "ps": 0, "factors": []}
+    if vol < 2_000_000:       return {"type": None, "ps": 0, "factors": []}  # мин ликвидность $2M
+    if rank > 400:            return {"type": None, "ps": 0, "factors": []}  # не полный шлак
+    if price <= 0:            return {"type": None, "ps": 0, "factors": []}
+
+    ps      = 0  # precision score
+    factors = []
+    setup   = None
+
+    # ══════════════════════════════════
+    # ТИП 1: RECOVERY (упала -70%+, разворот)
+    # Логика: монета обвалилась, умные деньги накапливают на дне
+    # Потенциал: x3-x10 при восстановлении к ATH
+    # ══════════════════════════════════
+    deep_dump  = ch90d < -60    # упала >60% за 3 месяца
+    recovering = ch7d > 3       # но за неделю +3%
+    accum_vol  = 5 <= vol_ratio <= 40  # объём есть но не аномальный
+
+    if deep_dump and recovering and accum_vol:
+        setup = "RECOVERY"
+        ps += 30
+        factors.append(f"🔄 Дно -{ abs(ch90d):.0f}% за 90д")
+
+        # Дополнительные подтверждения
+        if rsi_4h < 40:
+            ps += 15; factors.append("🟢 RSI перепродан")
+        if ch7d > 8:
+            ps += 10; factors.append(f"📈 Сильное восстановление +{ch7d:.0f}% 7д")
+        if ch24h > 3:
+            ps += 8; factors.append(f"⚡️ Ускорение сегодня +{ch24h:.1f}%")
+        if ch1h > 0 and ch24h > 0:
+            ps += 5; factors.append("✅ Импульс по всем TF")
+        if rank <= 100:
+            ps += 10; factors.append(f"🏆 Топ-100 (rank #{rank})")
+        elif rank <= 200:
+            ps += 5
+        if vol_ratio >= 15:
+            ps += 8; factors.append("📊 Повышенный объём")
+        if ch30d > -20:  # не продолжает падать на 30д
+            ps += 7; factors.append("🛡 Стабилизация 30д")
+
+        # Потенциал x роста (грубая оценка от текущего дна)
+        potential_x = max(1.0, abs(ch90d) / 30)
+
+    # ══════════════════════════════════
+    # ТИП 2: BREAKOUT (пробой после боковика)
+    # Логика: долгий боковик + резкий пробой с объёмом
+    # Потенциал: x2-x5 за 2-4 недели
+    # ══════════════════════════════════
+    elif (abs(ch30d) < 15        # 30д боковик (цена почти не двигалась)
+          and ch7d > 5            # но за неделю +5% (начало движения)
+          and ch24h > 5           # сегодня +5%
+          and vol_ratio >= 10):   # с объёмом
+
+        setup = "BREAKOUT"
+        ps += 25
+        factors.append(f"💥 Пробой после боковика 30д")
+
+        if ch24h > 15:
+            ps += 15; factors.append(f"🚀 Сильный импульс +{ch24h:.0f}% 24ч")
+        elif ch24h > 10:
+            ps += 10; factors.append(f"📈 Импульс +{ch24h:.0f}% 24ч")
+        if vol_ratio >= 20:
+            ps += 12; factors.append(f"📊 Аномальный объём {vol_ratio:.0f}%")
+        elif vol_ratio >= 15:
+            ps += 7
+        if rsi_4h < 65:  # не перекуплен при пробое
+            ps += 8; factors.append("✅ RSI есть куда расти")
+        if ch1h > 2:
+            ps += 5; factors.append("⚡️ Ускорение прямо сейчас")
+        if rank <= 50:
+            ps += 10; factors.append(f"🏆 Голубая фишка #{rank}")
+        elif rank <= 150:
+            ps += 5
+
+        potential_x = 2.0 + (ch24h / 20)
+
+    # ══════════════════════════════════
+    # ТИП 3: ACCUMULATION (тихое накопление)
+    # Логика: цена стоит, но объём большой = умные деньги набирают
+    # Потенциал: x3-x8 когда выстрелит
+    # ══════════════════════════════════
+    elif (abs(ch24h) < 3         # цена почти не движется
+          and abs(ch7d) < 10     # неделю в боковике
+          and vol_ratio >= 12    # но объём высокий
+          and rsi_4h < 55):      # RSI нейтральный/низкий
+
+        setup = "ACCUMULATION"
+        ps += 20
+        factors.append("💎 Тихое накопление (цена стоит, объём высокий)")
+
+        if vol_ratio >= 20:
+            ps += 15; factors.append(f"🔥 Объём {vol_ratio:.0f}% — Smart Money активны")
+        elif vol_ratio >= 15:
+            ps += 8
+        if rsi_4h < 35:
+            ps += 12; factors.append("🟢 RSI перепродан — идеальная зона")
+        elif rsi_4h < 45:
+            ps += 6
+        if ch90d < -40:  # до этого сильно упала
+            ps += 10; factors.append(f"📉 До этого упала -{abs(ch90d):.0f}% (дно?)")
+        if rank <= 100:
+            ps += 10; factors.append(f"🏆 Топ-100 (#{rank}) — надёжность")
+        elif rank <= 200:
+            ps += 5
+        if abs(ch30d) < 5:  # идеальная консолидация
+            ps += 8; factors.append("📊 Плотная консолидация 30д")
+
+        potential_x = 3.0 + (abs(ch90d) / 25)
+
+    else:
+        return {"type": None, "ps": 0, "factors": []}
+
+    ps = min(100, ps)
+
+    # Итоговая оценка потенциала
+    if ps >= 75:   quality = "🔥🔥 МАКСИМАЛЬНЫЙ ПОТЕНЦИАЛ"
+    elif ps >= 60: quality = "🔥 ВЫСОКИЙ ПОТЕНЦИАЛ"
+    elif ps >= 45: quality = "✅ ХОРОШИЙ СЕТАП"
+    else:          quality = "📊 СЛЕДИМ"
+
+    return {
+        "type":       setup,
+        "ps":         ps,
+        "factors":    factors,
+        "quality":    quality,
+        "potential_x": round(potential_x, 1),
+    }
+
+
+async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /7 — PRECISION SHOTS
+    1-3 монеты с максимальным потенциалом x5-x10
+    Только когда сходятся 5+ факторов
+    """
+    msg = await update.message.reply_text(
+        "🎯 *PRECISION SHOTS*\nГлубокий анализ топ-500...\n~45 сек",
+        parse_mode="Markdown"
+    )
+    coins = get_top500()
+    if not coins:
+        await msg.edit_text("❌ Нет данных"); return
+
+    results = []
+    for coin in coins:
+        a  = full_analysis(coin)
+        ps = precision_shot_analysis(coin, a)
+        if ps["type"] and ps["ps"] >= 45:
+            results.append((coin, a, ps))
+
+    # Сортируем по Precision Score
+    results.sort(key=lambda x: x[2]["ps"], reverse=True)
+    top = results[:5]  # показываем топ-5
+
+    if not top:
+        await msg.edit_text(
+            "🎯 *PRECISION SHOTS*\n\n"
+            "❌ Сейчас нет монет с достаточным набором факторов.\n"
+            "Рынок не даёт чёткого сетапа — лучше подождать.\n\n"
+            "_Повтори через 30 минут_",
+            parse_mode="Markdown"
+        )
+        return
+
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+        InlineKeyboardButton("🚀 /5 Ракеты",  callback_data="rockets"),
+        InlineKeyboardButton("🔄 Обновить",   callback_data="precision"),
+    ]])
+
+    # Заголовок
+    header = [
+        "🎯 *PRECISION SHOTS — BEST TRADE*",
+        f"🕐 {now_utc3()}",
+        f"Найдено сетапов: {len(results)} из 500 монет",
+        "",
+        "─── *Отфильтровано: 5+ факторов* ───",
+        "",
+    ]
+    await msg.edit_text("\n".join(header), parse_mode="Markdown")
+
+    # Отправляем каждый сетап отдельным постом с графиком
+    for coin, a, ps_data in top:
+        sym   = coin["symbol"]
+        slug  = coin.get("slug", sym.lower())
+        setup = ps_data["type"]
+        score = ps_data["ps"]
+        qual  = ps_data["quality"]
+        px    = ps_data["potential_x"]
+        facts = ps_data["factors"]
+
+        # Иконка типа
+        type_icon = {"RECOVERY": "🔄", "BREAKOUT": "💥", "ACCUMULATION": "💎"}.get(setup, "📊")
+        type_name = {"RECOVERY": "RECOVERY", "BREAKOUT": "BREAKOUT", "ACCUMULATION": "НАКОПЛЕНИЕ"}.get(setup, setup)
+
+        # Supertrend
+        try:
+            st_data = get_supertrend_signal(sym)
+            a["st_label"] = st_data["label"]
+        except:
+            a["st_label"] = "—"
+
+        stats  = get_binance_24h(sym)
+        extras = get_market_extras(sym)
+
+        # Строим пост
+        is_long = a["is_long"]
+        side_e  = "🟢" if is_long else "🔴"
+        side_t  = "LONG" if is_long else "SHORT"
+
+        def pct(t, p=a["price"]):
+            d = (t - p) / p * 100
+            v = d if is_long else -d
+            return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
+
+        vol_str = (f"${a['vol']/1e9:.2f}B" if a['vol'] >= 1e9 else
+                   f"${a['vol']/1e6:.1f}M" if a['vol'] >= 1e6 else f"${a['vol']/1e3:.0f}K")
+
+        filled = int(score / 10)
+        bar = "█" * filled + "░" * (10 - filled)
+
+        lines = [
+            f"🎯 *{sym}USDT*  {side_e} *{side_t}*",
+            f"🕐 {now_utc3()}",
+            "",
+            f"{type_icon} *{type_name}*  |  Precision: `{score}/100`",
+            f"`{bar}`",
+            f"{qual}",
+            f"📈 Потенциал: *~x{px}*",
+            "",
+            "📋 *Почему этот сетап:*",
+        ]
+        for f_ in facts:
+            lines.append(f"  {f_}")
+
+        lines += [
+            "",
+            f"💰 Вход:  `{fp(a['price'])}`",
+            f"🎯 TP1:  `{fp(a['tp1'])}`  ({pct(a['tp1'])})",
+            f"🎯 TP2:  `{fp(a['tp2'])}`  ({pct(a['tp2'])})",
+            f"🎯 TP3:  `{fp(a['tp3'])}`  ({pct(a['tp3'])})",
+            f"🛑 SL:   `{fp(a['sl'])}`",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            f"📐 R:R `1:{a['rr']:.1f}`  |  💹 {vol_str}  |  Rank `#{a['rank']}`",
+            f"📈 RSI 4H `{a['rsi_4h']:.0f}`  |  ST: `{a['st_label']}`",
+            f"📊 1H`{fc(a['ch1h'])}`  24H`{fc(a['ch24h'])}`  7D`{fc(a['ch7d'])}`  90D`{fc(a['ch90d'])}`",
+        ]
+
+        if extras:
+            fr = extras.get("funding", {})
+            oi = extras.get("oi", {})
+            if fr.get("ok"):
+                lines.append(f"💸 Фандинг: `{fr['rate']:+.4f}%`  {fr['signal']}")
+            if oi.get("ok") and oi.get("change", 0) != 0:
+                lines.append(f"📊 OI: `{oi['change']:+.1f}%`  {oi['signal']}")
+
+        if stats:
+            h24 = stats.get("high", 0); l24 = stats.get("low", 0)
+            if h24 and l24:
+                best = l24 * 1.005 if is_long else h24 * 0.995
+                lines.append(f"📅 24H: 🔼`{fp(h24)}` 🔽`{fp(l24)}`  🎯Вход: `{fp(best)}`")
+
+        lines += ["", f"⚠️ Риск: *2% депозита* | SL обязателен", f"#{sym}USDT"]
+
+        text = "\n".join(lines)
+        await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
+        await asyncio.sleep(2.0)
+
+    # Итог
+    await ctx.bot.send_message(
+        update.effective_chat.id,
+        f"🎯 *Precision анализ завершён*\n"
+        f"Показано: {len(top)} лучших сетапов\n\n"
+        f"💡 *Как использовать:*\n"
+        f"• RECOVERY — DCA вход, держать 2-8 недель\n"
+        f"• BREAKOUT — вход сейчас, стоп за боковик\n"
+        f"• НАКОПЛЕНИЕ — ждать пробоя, тогда входить\n\n"
+        f"⚠️ Это анализ, не гарантия. Всегда SL!",
+        parse_mode="Markdown",
+        reply_markup=nav
+    )
+
+
+
 async def check_watchlist(bot, chat_ids, coins):
     """Проверяет попадание цены в зоны вотчлиста каждые 5 мин"""
     now_ts   = datetime.now(TZ).timestamp()
@@ -2152,13 +2489,14 @@ def main():
     app.add_handler(CommandHandler("4",         cmd_top))
     app.add_handler(CommandHandler("5",         cmd_rockets))
     app.add_handler(CommandHandler("6",         cmd_watchlist))
-    # обратная совместимость
+    app.add_handler(CommandHandler("7",         cmd_precision))
     app.add_handler(CommandHandler("market",    cmd_market))
     app.add_handler(CommandHandler("coin",      cmd_coin))
     app.add_handler(CommandHandler("signals",   cmd_signals))
     app.add_handler(CommandHandler("top",       cmd_top))
     app.add_handler(CommandHandler("rockets",   cmd_rockets))
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
+    app.add_handler(CommandHandler("precision", cmd_precision))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     scheduler = AsyncIOScheduler(timezone=TZ)
