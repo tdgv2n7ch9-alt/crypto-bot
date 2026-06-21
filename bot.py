@@ -57,93 +57,123 @@ price_cache      = {}   # {symbol: [price1, price2, ...]} последние ц�
 alerted_zones    = {}   # {symbol: timestamp} чтобы не спамить
 pump_alerted     = {}   # {symbol: timestamp}
 
-# ── ЖУРНАЛ АКТИВНЫХ АЛЕРТОВ (как "Монеты в игре") ──
-# {symbol: {"type": str, "time": datetime, "price": float, "status": "active"/"done"}}
-active_game: dict = {}   # {symbol: {"type", "time", "price", "status", "done_time"}}
-done_game:   list = []   # последние отработавшие (макс 20)
-MAX_GAME_HISTORY = 100
+# ── TOP — Активные сделки ──
+# {symbol: {"type": "long"/"short", "entry": float, "tp1/tp2/tp3": float, "sl": float,
+#           "time": datetime, "status": "waiting"/"active"/"done", "result": str}}
+top_trades: dict = {}   # активные и ожидающие
+top_done:   list = []   # завершённые (макс 30)
 
-def add_to_game(symbol: str, alert_type: str, price: float):
-    """Добавляет монету в журнал алертов"""
-    # Если уже есть — не перезаписываем (оставляем первое время)
-    if symbol not in active_game:
-        active_game[symbol] = {
-            "type":      alert_type,
-            "time":      datetime.now(TZ),
-            "price":     price,
-            "status":    "active",
-            "done_time": None,
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # @channelname или -100xxx — задать в Railway env
+
+def top_add(symbol: str, direction: str, price: float,
+            tp1=None, tp2=None, tp3=None, sl=None,
+            source: str = "bot", note: str = ""):
+    """Добавляет или обновляет монету в TOP (ожидает входа или уже в позиции)"""
+    if symbol not in top_trades:
+        top_trades[symbol] = {
+            "direction": direction,   # "long" / "short"
+            "entry":     price,
+            "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl,
+            "time":   datetime.now(TZ),
+            "status": "waiting",      # waiting → active → done
+            "source": source,
+            "note":   note,
+            "result": None,
+            "entry_time": None,
         }
-    # Чистим старые (>48ч активные)
-    cutoff = datetime.now(TZ).timestamp() - 48 * 3600
-    to_del = [s for s, v in active_game.items()
-              if v["time"].timestamp() < cutoff]
+    # Очищаем старые завершённые (>72ч)
+    cutoff = datetime.now(TZ).timestamp() - 72 * 3600
+    to_del = [s for s, v in top_trades.items()
+              if v["status"] == "done" and v["time"].timestamp() < cutoff]
     for s in to_del:
-        del active_game[s]
+        del top_trades[s]
 
-def mark_done(symbol: str, result: str = "выросла"):
-    """Отмечает монету как отработавшую"""
-    if symbol in active_game:
-        active_game[symbol]["status"]    = "done"
-        active_game[symbol]["done_time"] = datetime.now(TZ)
-        active_game[symbol]["result"]    = result
-        # Добавляем в done_game список
-        done_game.insert(0, {
-            "symbol":    symbol,
-            "result":    result,
-            "done_time": datetime.now(TZ),
+def top_activate(symbol: str, price: float):
+    """Цена зашла в зону — сделка стала активной"""
+    if symbol in top_trades and top_trades[symbol]["status"] == "waiting":
+        top_trades[symbol]["status"]     = "active"
+        top_trades[symbol]["entry"]      = price
+        top_trades[symbol]["entry_time"] = datetime.now(TZ)
+
+def top_close(symbol: str, result: str, exit_price: float = 0):
+    """Закрывает сделку (TP/SL/ручное)"""
+    if symbol in top_trades:
+        top_trades[symbol]["status"] = "done"
+        top_trades[symbol]["result"] = result
+        top_trades[symbol]["exit_price"] = exit_price
+        top_done.insert(0, {
+            "symbol": symbol,
+            "direction": top_trades[symbol]["direction"],
+            "result": result,
+            "exit_price": exit_price,
+            "time": datetime.now(TZ),
         })
-        if len(done_game) > 20:
-            done_game.pop()
+        if len(top_done) > 30:
+            top_done.pop()
 
-def build_game_digest() -> str:
-    """
-    Строит дайджест в формате VANGA:
-    • SYMBOLUSDT — 🚀 памп
-      ⏰ 21.06 16:19 UTC+3
-    """
-    # Активные — сортируем по времени (новые сверху)
-    actives = [(s, v) for s, v in active_game.items()
-               if v["status"] == "active"]
-    actives.sort(key=lambda x: x[1]["time"].timestamp(), reverse=True)
-
-    type_labels = {
-        "pump":        "🚀 памп",
-        "dump":        "💥 дамп",
-        "level":       "📍 коснулась уровня",
-        "watchlist":   "📍 коснулась уровня",
-        "supertrend":  "⚡️ смена тренда",
-        "precision":   "🎯 precision сетап",
-        "zone":        "📍 коснулась уровня",
-    }
+def build_top_digest() -> str:
+    """Строит дайджест TOP — активные сделки"""
+    waiting = [(s, v) for s, v in top_trades.items() if v["status"] == "waiting"]
+    active  = [(s, v) for s, v in top_trades.items() if v["status"] == "active"]
+    waiting.sort(key=lambda x: x[1]["time"].timestamp(), reverse=True)
+    active.sort(key=lambda x: x[1]["time"].timestamp(), reverse=True)
 
     lines = []
-    if actives:
-        lines.append(f"🔥 *Монет в игре: {len(actives)}*\n")
-        for sym, v in actives:
-            lbl      = type_labels.get(v["type"], v["type"])
-            t        = v["time"].strftime("%d.%m %H:%M")
-            tv_url   = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
-            lines.append(f"• [{sym}USDT]({tv_url}) — {lbl}")
-            lines.append(f"  ⏰ {t} UTC+3")
-    else:
-        lines.append("🔥 *Монет в игре: 0*\n")
-        lines.append("_Алертов пока нет_")
 
-    # Отработавшие
-    if done_game:
-        lines.append("")
-        lines.append("✅ *Отработали:*")
-        for d in done_game[:10]:
+    if active:
+        lines.append(f"⚡️ *В ПОЗИЦИИ — {len(active)} сделок*\n")
+        for sym, v in active:
+            d      = "🟢 LONG" if v["direction"] == "long" else "🔴 SHORT"
+            t      = v["entry_time"].strftime("%d.%m %H:%M") if v.get("entry_time") else "—"
+            tv     = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+            lines.append(f"{d} [{sym}USDT]({tv})")
+            lines.append(f"  💰 Вход: `{fp(v['entry'])}`  ⏰ {t}")
+            if v.get("tp1"): lines.append(f"  🎯 TP1: `{fp(v['tp1'])}` · TP2: `{fp(v['tp2'])}` · TP3: `{fp(v['tp3'])}`")
+            if v.get("sl"):  lines.append(f"  🛑 SL: `{fp(v['sl'])}`")
+            lines.append("")
+    else:
+        lines.append("⚡️ *В ПОЗИЦИИ: 0*\n")
+
+    if waiting:
+        lines.append(f"⏳ *ЖДЁМ ВХОДА — {len(waiting)} монет*\n")
+        for sym, v in waiting:
+            d  = "🟢 LONG" if v["direction"] == "long" else "🔴 SHORT"
+            t  = v["time"].strftime("%d.%m %H:%M")
+            tv = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+            lines.append(f"{d} [{sym}USDT]({tv})")
+            lines.append(f"  📊 Зона: `{fp(v['entry'])}`  ⏰ {t}")
+            if v.get("note"): lines.append(f"  💡 {v['note'][:50]}")
+            lines.append("")
+    else:
+        lines.append("⏳ *ЖДЁМ ВХОДА: 0*\n")
+
+    if top_done:
+        lines.append("✅ *ЗАКРЫТЫЕ СДЕЛКИ:*\n")
+        for d in top_done[:8]:
             sym    = d["symbol"]
-            result = d["result"]
-            t      = d["done_time"].strftime("%d.%m %H:%M")
-            tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
-            emoji  = "📈" if "вырос" in result else ("📉" if "упал" in result else "✅")
-            lines.append(f"• [{sym}USDT]({tv_url}) — {emoji} {result}")
-            lines.append(f"  ⏰ {t} UTC+3")
+            tv     = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+            direct = "🟢" if d["direction"] == "long" else "🔴"
+            res    = d["result"]
+            t      = d["time"].strftime("%d.%m %H:%M")
+            emoji  = "✅" if "TP" in res or "профит" in res.lower() else "❌"
+            lines.append(f"{emoji} {direct} [{sym}USDT]({tv}) — {res}  ⏰ {t}")
 
     return "\n".join(lines)
+
+# ── Обратная совместимость — старые функции ──
+def add_to_game(symbol: str, alert_type: str, price: float):
+    pass  # заменено top_add
+
+def mark_done(symbol: str, result: str = "выросла"):
+    top_close(symbol, result)
+
+# Алиас для старого build_game_digest
+active_game: dict = {}
+done_game:   list = []
+MAX_GAME_HISTORY = 100
+
+def build_game_digest() -> str:
+    return build_top_digest()
 
 # ═══════════════════════════════════════════
 # DATA FUNCTIONS
@@ -1490,13 +1520,12 @@ def build_overview_text(ms: dict) -> str:
 
 def overview_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("₿ BTC",    url=tv_link("BTC")),
-         InlineKeyboardButton("Ξ ETH",    url=tv_link("ETH"))],
-        [InlineKeyboardButton("BTC.D",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
-         InlineKeyboardButton("TOTAL",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL"),
-         InlineKeyboardButton("OTHERS.D", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:OTHERS.D")],
-        [InlineKeyboardButton("🔄 Обновить", callback_data="market_overview"),
-         InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
+        [InlineKeyboardButton("₿  BTC на TradingView",  url=tv_link("BTC")),
+         InlineKeyboardButton("Ξ  ETH на TradingView",  url=tv_link("ETH"))],
+        [InlineKeyboardButton("📊 BTC Dominance",       url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
+         InlineKeyboardButton("📈 TOTAL Market Cap",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
+        [InlineKeyboardButton("🔄  Обновить обзор",     callback_data="market_overview"),
+         InlineKeyboardButton("🏠  Главное меню",       callback_data="show_menu")],
     ])
 
 # ═══════════════════════════════════════════
@@ -1619,31 +1648,30 @@ async def check_entry_zones(bot, chat_ids, coins):
 # ОТПРАВКА
 # ═══════════════════════════════════════════
 def main_kb():
-    """Главное меню — все разделы по названию, без цифр"""
+    """Главное меню — 2 кнопки в ряд, полные названия"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Обзор рынка",     callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы",         callback_data="signals"),
-         InlineKeyboardButton("🚀 Ракеты",          callback_data="rockets")],
-        [InlineKeyboardButton("📊 Топ рынка",       callback_data="report"),
-         InlineKeyboardButton("🎯 Precision Shots", callback_data="precision"),
-         InlineKeyboardButton("🔥 В игре",          callback_data="game")],
-        [InlineKeyboardButton("👁 Вотчлист",        callback_data="watchlist"),
-         InlineKeyboardButton("📈 Анализ монеты",   callback_data="menu_coin")],
+        [InlineKeyboardButton("🌍  Обзор рынка",        callback_data="market_overview"),
+         InlineKeyboardButton("🤖  Торговые сигналы",   callback_data="signals")],
+        [InlineKeyboardButton("🚀  Ракеты (Rocket Score)", callback_data="rockets"),
+         InlineKeyboardButton("📊  Топ рынка 24ч",     callback_data="report")],
+        [InlineKeyboardButton("🎯  Precision Shots x5–x10", callback_data="precision"),
+         InlineKeyboardButton("👁  Вотчлист + зоны",   callback_data="watchlist")],
+        [InlineKeyboardButton("🔥  TOP — Активные сделки", callback_data="top_trades"),
+         InlineKeyboardButton("📈  Анализ монеты /2",  callback_data="menu_coin")],
     ])
 
-def back_to_menu_kb():
-    """Кнопка возврата в меню — добавляется после каждой команды"""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
-    ])
+def back_kb():
+    """Кнопка возврата в меню"""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu"),
+    ]])
 
 async def send_coin(bot, chat_id, symbol, slug, a, text):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 TradingView", url=tv_link(symbol))],
-        [InlineKeyboardButton("🔄 Обновить", callback_data=f"coin_{symbol}"),
-         InlineKeyboardButton("CMC", url=cmc_link(slug))],
-        [InlineKeyboardButton("🌍 /1 Обзор", callback_data="market_overview"),
-         InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals")],
+        [InlineKeyboardButton("📈  TradingView",       url=tv_link(symbol)),
+         InlineKeyboardButton("📊  CoinMarketCap",     url=cmc_link(slug))],
+        [InlineKeyboardButton("🔄  Обновить анализ",  callback_data=f"coin_{symbol}"),
+         InlineKeyboardButton("🏠  Главное меню",     callback_data="show_menu")],
     ])
 
     # Если текст уже содержит Supertrend — используем как есть
@@ -1801,9 +1829,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f.write(f"{cid}\n")
     await update.message.reply_text(
         "📊 *BEST TRADE v15.0*\n\n"
-        "Топ-500 • Фандинг • OI • Supertrend\n"
+        "Топ-500 · Фандинг · OI · Supertrend\n"
         "🚀 Rocket Score + SMC + Фундаментал\n"
-        "📍 Вотчлист с зонами\n"
+        "📍 Вотчлист с зонами входа\n"
         "⚡️ Алерты: Pump/Dump + Зоны + ST\n"
         "🕐 Время UTC+3\n\n"
         "👇 Выбери раздел:",
@@ -1811,11 +1839,65 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Повторно показывает главное меню"""
+    """Показывает главное меню"""
     await update.message.reply_text(
-        "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
+
+async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/top — TOP активных сделок"""
+    nav = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄  Обновить TOP",   callback_data="top_trades"),
+         InlineKeyboardButton("🏠  Главное меню",  callback_data="show_menu")],
+    ])
+    text = f"🕐 {now_utc3()}\n\n" + build_top_digest()
+    await update.message.reply_text(
+        text, parse_mode="Markdown",
+        reply_markup=nav, disable_web_page_preview=False
+    )
+    await update.message.reply_text(
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
+
+async def publish_signal_to_channel(bot, symbol: str, direction: str, price: float,
+                                     tp1=None, tp2=None, tp3=None, sl=None,
+                                     rr: float = 0, note: str = "", source: str = "bot"):
+    """Публикует сигнал в Telegram-канал и добавляет в TOP"""
+    if not CHANNEL_ID:
+        return
+
+    d_str  = "🟢 LONG" if direction == "long" else "🔴 SHORT"
+    tv_url = tv_link(symbol)
+    lines  = [
+        f"{'🟢' if direction == 'long' else '🔴'} *{symbol}USDT  {d_str.split()[1]}*",
+        f"🕐 {now_utc3()}",
+        "",
+        f"💰 Зона входа:  `{fp(price)}`",
+    ]
+    if tp1: lines.append(f"🎯 TP1: `{fp(tp1)}`")
+    if tp2: lines.append(f"🎯 TP2: `{fp(tp2)}`")
+    if tp3: lines.append(f"🎯 TP3: `{fp(tp3)}`")
+    if sl:  lines.append(f"🛑 SL:  `{fp(sl)}`")
+    if rr:  lines.append(f"📐 R:R  `1:{rr:.1f}`")
+    if note: lines.append(f"\n💡 {note}")
+    lines += ["", f"⚠️ Риск: 2% депозита | SL обязателен", f"#{symbol}USDT"]
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("📈 TradingView", url=tv_url),
+    ]])
+    try:
+        await bot.send_message(CHANNEL_ID, "\n".join(lines),
+                               parse_mode="Markdown", reply_markup=kb,
+                               disable_web_page_preview=True)
+        log.info(f"✅ Сигнал в канал: {symbol} {direction} @ {price}")
+    except Exception as e:
+        log.error(f"Канал {CHANNEL_ID}: {e}")
+
+    # Добавляем в TOP
+    top_add(symbol, direction, price, tp1=tp1, tp2=tp2, tp3=tp3, sl=sl,
+            source=source, note=note)
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю...")
@@ -1827,19 +1909,22 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"cmd_market: {e}")
         await msg.edit_text("❌ Ошибка")
-    await update.message.reply_text("📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                                    parse_mode="Markdown", reply_markup=main_kb())
+    await update.message.reply_text(
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("Напиши: `/2 BTC`", parse_mode="Markdown")
+        await update.message.reply_text("Напиши: `/2 BTC`", parse_mode="Markdown",
+                                        reply_markup=back_kb())
         return
     symbol = ctx.args[0].upper()
     msg    = await update.message.reply_text(f"⏳ Анализирую {symbol}...")
     coins  = get_top500()
     coin   = next((c for c in coins if c["symbol"] == symbol), None)
     if not coin:
-        await msg.edit_text(f"❌ {symbol} не найден в топ-500")
+        await msg.edit_text(f"❌ {symbol} не найден в топ-500", reply_markup=back_kb())
         return
     a      = full_analysis(coin)
     slug   = coin.get("slug", symbol.lower())
@@ -1854,9 +1939,11 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text   = build_signal_text(symbol, a, stats, atl, extras)
     await msg.delete()
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
-    await ctx.bot.send_message(update.effective_chat.id,
-                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                               parse_mode="Markdown", reply_markup=main_kb())
+    await ctx.bot.send_message(
+        update.effective_chat.id,
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Анализирую топ-500... ~60 сек")
@@ -1865,11 +1952,13 @@ async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Нет данных"); return
     await msg.delete()
     await send_signals_batch(ctx.bot, update.effective_chat.id, coins)
-    await ctx.bot.send_message(update.effective_chat.id,
-                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                               parse_mode="Markdown", reply_markup=main_kb())
+    await ctx.bot.send_message(
+        update.effective_chat.id,
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
-async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_market_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg   = await update.message.reply_text("⏳ Загружаю...")
     coins = get_top500()
     if not coins:
@@ -1884,23 +1973,25 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         em = "🚀" if ch >= 5 else ("🟢" if ch >= 0 else ("🔴" if ch >= -5 else "💥"))
         return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
 
-    nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Обновить",  callback_data="report"),
-        InlineKeyboardButton("🏠 Меню",      callback_data="show_menu"),
-    ]])
-    t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now_utc3()}",
+    nav = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄  Обновить",     callback_data="report"),
+         InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+    ])
+    t1 = [f"📊 *Топ-500 — BEST TRADE*", f"🕐 {now_utc3()}",
           f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
           "🚀 *ЛИДЕРЫ РОСТА 24ч*"]
-    t1 += [row(i, c) for i, c in enumerate(up[:15], 1)]
+    t1 += [row(i, c) for i, c in enumerate(up[:20], 1)]
     t2  = ["📉 *ЛИДЕРЫ ПАДЕНИЯ 24ч*"]
     t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
 
     await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
     await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
-    await ctx.bot.send_message(update.effective_chat.id,
-                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                               parse_mode="Markdown", reply_markup=main_kb())
+    await ctx.bot.send_message(
+        update.effective_chat.id,
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
 async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Топ монет по Rocket Score — самые перспективные"""
@@ -1921,10 +2012,10 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         key=lambda x: x[1]["rocket"], reverse=True
     )[:10]
 
-    nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Обновить", callback_data="rockets"),
-        InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-    ]])
+    nav = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄  Обновить ракеты",  callback_data="rockets"),
+         InlineKeyboardButton("🏠  Главное меню",     callback_data="show_menu")],
+    ])
 
     lines = [
         "🚀🔥 *BEST TRADE — РАКЕТЫ*",
@@ -1966,17 +2057,19 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
         await asyncio.sleep(1.5)
 
-    await ctx.bot.send_message(update.effective_chat.id,
-                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                               parse_mode="Markdown", reply_markup=main_kb())
+    await ctx.bot.send_message(
+        update.effective_chat.id,
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; data = q.data; await q.answer()
 
-    # ── Показать главное меню ──
+    # ── Главное меню ──
     if data == "show_menu":
         await q.edit_message_text(
-            "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+            "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
             parse_mode="Markdown", reply_markup=main_kb()
         )
 
@@ -1998,7 +2091,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ Нет данных"); return
         await send_signals_batch(ctx.bot, q.message.chat_id, coins)
         await ctx.bot.send_message(q.message.chat_id,
-                                   "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                   "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
                                    parse_mode="Markdown", reply_markup=main_kb())
 
     elif data == "rockets":
@@ -2007,37 +2100,38 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not coins:
             await q.edit_message_text("❌ Нет данных"); return
         analyzed = [(c, full_analysis(c)) for c in coins]
-        rockets  = sorted([(c,a) for c,a in analyzed
+        rockets  = sorted([(c, a) for c, a in analyzed
                            if not a.get("suspicious", False)],
                           key=lambda x: x[1]["rocket"], reverse=True)[:10]
-        nav = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Обновить", callback_data="rockets"),
-            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-        ]])
+        nav = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄  Обновить",    callback_data="rockets"),
+             InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+        ])
         lines = ["🚀🔥 *РАКЕТЫ — Rocket Score*", f"🕐 {now_utc3()}", ""]
         for i, (c, a) in enumerate(rockets, 1):
             r = a["rocket"]; bar = "█"*int(r/10)+"░"*(10-int(r/10))
-            side = "🟢L" if a["is_long"] else "🔴S"
-            lines.append(f"{i}. *{c['symbol']}* `{r}/100` {side}  `{bar}`")
+            side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
+            lines.append(f"{i}. *{c['symbol']}*  `{r}/100`  {side}")
+            lines.append(f"   `{bar}`")
         await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
                                   reply_markup=nav, disable_web_page_preview=True)
 
     elif data == "precision":
         await q.edit_message_text(
-            "🎯 *Precision Shots*\n\n"
-            "Нажми /7 в чате или выбери другой раздел:",
+            "🎯 *Precision Shots x5–x10*\n\n"
+            "Напиши `/7` в чате для запуска полного анализа.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 Меню", callback_data="show_menu"),
+                InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu"),
             ]])
         )
 
-    elif data == "game":
-        text = f"🕐 {now_utc3()}\n\n" + build_game_digest()
-        nav  = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Обновить",  callback_data="game"),
-            InlineKeyboardButton("🏠 Меню",      callback_data="show_menu"),
-        ]])
+    elif data in ("game", "top_trades"):
+        nav = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄  Обновить TOP",   callback_data="top_trades"),
+             InlineKeyboardButton("🏠  Главное меню",  callback_data="show_menu")],
+        ])
+        text = f"🔥 *BEST TRADE — TOP Активные сделки*\n🕐 {now_utc3()}\n\n" + build_top_digest()
         try:
             await q.edit_message_text(text, parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=False)
@@ -2049,13 +2143,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         coins = get_top500()
         if coins:
             up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
-            txt = "\n".join([f"🚀 *Топ рост 24ч*", f"🕐 {now_utc3()}"] +
-                            [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get('percent_change_24h',0))}"
-                             for i, c in enumerate(up[:20], 1)])
-            nav = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Обновить", callback_data="report"),
-                InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-            ]])
+            dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
+            txt = "\n".join(
+                [f"📊 *Топ рост 24ч*", f"🕐 {now_utc3()}", ""] +
+                [f"🚀 {i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get('percent_change_24h',0))}"
+                 for i, c in enumerate(up[:20], 1)]
+            )
+            nav = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄  Обновить",    callback_data="report"),
+                 InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+            ])
             await q.edit_message_text(txt, parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=True)
 
@@ -2082,13 +2179,13 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{emoji} *{sym}*  {price_str}{in_zone_str}")
             if zone and zone[0] is not None:
                 lines.append(f"   📊 Зона: `{fp(zone[0])} — {fp(zone[1])}`")
-            lines.append(f"   💡 {note[:60]}...")
+            lines.append(f"   💡 {note[:55]}...")
             lines.append(f"   📡 {src}")
             lines.append("")
-        nav = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Обновить", callback_data="watchlist"),
-            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-        ]])
+        nav = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄  Обновить",     callback_data="watchlist"),
+             InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+        ])
         try:
             await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=True)
@@ -2102,11 +2199,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "`/2 BTC` — Bitcoin\n"
             "`/2 ETH` — Ethereum\n"
             "`/2 SOL` — Solana\n"
-            "`/2 [любой символ]`\n\n"
-            "Символ из топ-500 CMC",
+            "`/2 [символ]` — любая монета из топ-500",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 Меню", callback_data="show_menu"),
+                InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu"),
             ]])
         )
 
@@ -2125,7 +2221,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except: pass
         await send_coin(ctx.bot, cid, symbol, slug, a, text)
         await ctx.bot.send_message(cid,
-                                   "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                   "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
                                    parse_mode="Markdown", reply_markup=main_kb())
 
     elif data.startswith("period_"):
@@ -2140,10 +2236,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         txt = "\n".join([f"📊 *Топ за {lbl}*", f"🕐 {now_utc3()}", ""] +
                         [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get(field,0))}"
                          for i, c in enumerate(up[:15], 1)])
-        nav = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Обновить", callback_data=f"period_{period}"),
-            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-        ]])
+        nav = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄  Обновить",    callback_data=f"period_{period}"),
+             InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+        ])
         await q.edit_message_text(txt, parse_mode="Markdown",
                                   reply_markup=nav, disable_web_page_preview=True)
 
@@ -2553,14 +2649,8 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• НАКОПЛЕНИЕ — ждать пробоя, тогда входить\n\n"
         f"⚠️ Это анализ, не гарантия. Всегда SL!",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Обновить", callback_data="precision"),
-            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-        ]])
+        reply_markup=nav
     )
-    await ctx.bot.send_message(update.effective_chat.id,
-                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                               parse_mode="Markdown", reply_markup=main_kb())
 
 
 
@@ -2574,27 +2664,44 @@ async def check_watchlist(bot, chat_ids, coins):
         if now_ts - last < 1800:  # не чаще раза в 30 мин
             continue
         watchlist_alerted[sym] = now_ts
+
+        direction = "long" if al["bias"] == "LONG" else "short"
+        price     = al["price"]
+
         text = (
-            f"📍 *ВОТЧЛИСТ — ЗОНА ВХОДА!*\n"
+            f"{'🟢' if direction == 'long' else '🔴'} *ВОТЧЛИСТ — ЗОНА ВХОДА!*\n"
             f"🕐 {now_utc3()}\n\n"
             f"{al['emoji']} *{sym}USDT  {al['bias']}*\n"
-            f"💰 Цена: `{fp(al['price'])}`\n"
+            f"💰 Цена: `{fp(price)}`\n"
             f"📊 Зона: `{fp(al['lo'])} — {fp(al['hi'])}`\n\n"
             f"💡 {al['note']}\n"
             f"📡 Источник: {al['source']}\n\n"
             f"⚠️ Риск: 2% депозита | SL обязателен\n\n"
             f"#{sym}USDT"
         )
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
-        ]])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📈  TradingView", url=tv_link(sym)),
+             InlineKeyboardButton("🔥  Открыть TOP", callback_data="top_trades")],
+        ])
         for cid in chat_ids:
             try:
                 await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
             except Exception as e:
                 log.error(f"Watchlist alert {cid}: {e}")
-        add_to_game(sym, "watchlist", al["price"])
-        log.info(f"Watchlist ALERT: {sym} @ {fp(al['price'])}")
+
+        # Добавляем в TOP как активную сделку
+        top_activate(sym, price)
+        if sym not in top_trades:
+            top_add(sym, direction, price, note=al['note'], source=al['source'])
+            top_activate(sym, price)
+
+        # Публикуем в канал
+        if CHANNEL_ID:
+            await publish_signal_to_channel(
+                bot, sym, direction, price,
+                note=al['note'], source=al['source']
+            )
+        log.info(f"Watchlist ALERT → TOP: {sym} {direction} @ {fp(price)}")
 
 async def check_alerts(bot: Bot):
     """Каждые 5 мин: pump/dump + zone + supertrend + watchlist alerts"""
@@ -2612,38 +2719,29 @@ async def check_alerts(bot: Bot):
 
 async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Показывает вотчлист с зонами и текущими ценами"""
-    msg   = await update.message.reply_text("⏳ Загружаю вотчлист...")
-    coins = get_top500()
+    msg      = await update.message.reply_text("⏳ Загружаю вотчлист...")
+    coins    = get_top500()
     coin_map = {c["symbol"]: c for c in coins}
 
-    lines = [
-        "👁 *ВОТЧЛИСТ — BEST TRADE*",
-        f"🕐 {now_utc3()}",
-        "",
-    ]
+    lines = ["👁 *ВОТЧЛИСТ — BEST TRADE*", f"🕐 {now_utc3()}", ""]
 
     for sym, info in WATCHLIST_ZONES.items():
-        coin  = coin_map.get(sym)
-        bias  = info.get("bias", "LONG")
-        note  = info.get("note", "")
-        src   = info.get("source", "")
+        coin     = coin_map.get(sym)
+        bias     = info.get("bias", "LONG")
+        note     = info.get("note", "")
+        src      = info.get("source", "")
         zone_key = "long" if bias == "LONG" else "short"
-        zone  = info.get(zone_key, [None, None])
+        zone     = info.get(zone_key, [None, None])
 
         if coin:
-            price = coin["quote"]["USDT"].get("price", 0)
-            ch24h = coin["quote"]["USDT"].get("percent_change_24h", 0)
+            price     = coin["quote"]["USDT"].get("price", 0)
+            ch24h     = coin["quote"]["USDT"].get("percent_change_24h", 0)
             price_str = f"`{fp(price)}`  {fc(ch24h)}"
         else:
-            price = 0
-            price_str = "`—`"
+            price = 0; price_str = "`—`"
 
-        emoji = "🟢" if bias == "LONG" else "🔴"
-
-        # Проверяем попадание в зону
-        in_zone = False
-        if zone and zone[0] is not None and price > 0:
-            in_zone = zone[0] <= price <= zone[1]
+        emoji   = "🟢" if bias == "LONG" else "🔴"
+        in_zone = zone and zone[0] is not None and price > 0 and zone[0] <= price <= zone[1]
         in_zone_str = " ⚡️ В ЗОНЕ!" if in_zone else ""
 
         lines.append(f"{emoji} *{sym}*  {price_str}{in_zone_str}")
@@ -2653,32 +2751,32 @@ async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"   📡 {src}")
         lines.append("")
 
-    nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Обновить", callback_data="watchlist"),
-        InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-    ]])
+    nav = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄  Обновить",     callback_data="watchlist"),
+         InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+    ])
     await msg.edit_text("\n".join(lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=True)
-    await update.message.reply_text("📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                                    parse_mode="Markdown", reply_markup=main_kb())
+    await update.message.reply_text(
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
 async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """
-    /8 — Монеты в игре
-    Дайджест всех активных алертов за 48ч + отработавшие
-    """
-    nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Обновить", callback_data="game"),
-        InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
-    ]])
-    text = f"🕐 {now_utc3()}\n\n" + build_game_digest()
+    """TOP — активные сделки"""
+    nav = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄  Обновить TOP",   callback_data="top_trades"),
+         InlineKeyboardButton("🏠  Главное меню",  callback_data="show_menu")],
+    ])
+    text = f"🔥 *BEST TRADE — TOP Активные сделки*\n🕐 {now_utc3()}\n\n" + build_top_digest()
     await update.message.reply_text(
         text, parse_mode="Markdown",
-        reply_markup=nav,
-        disable_web_page_preview=False
+        reply_markup=nav, disable_web_page_preview=False
     )
-    await update.message.reply_text("📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
-                                    parse_mode="Markdown", reply_markup=main_kb())
+    await update.message.reply_text(
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
 
 # ═══════════════════════════════════════════
 # MAIN
@@ -2690,16 +2788,16 @@ def main():
     app.add_handler(CommandHandler("1",         cmd_market))
     app.add_handler(CommandHandler("2",         cmd_coin))
     app.add_handler(CommandHandler("3",         cmd_signals))
-    app.add_handler(CommandHandler("4",         cmd_top))
+    app.add_handler(CommandHandler("4",         cmd_market_top))
     app.add_handler(CommandHandler("5",         cmd_rockets))
     app.add_handler(CommandHandler("6",         cmd_watchlist))
     app.add_handler(CommandHandler("7",         cmd_precision))
     app.add_handler(CommandHandler("8",         cmd_game))
+    app.add_handler(CommandHandler("top",       cmd_top))
     app.add_handler(CommandHandler("game",      cmd_game))
     app.add_handler(CommandHandler("market",    cmd_market))
     app.add_handler(CommandHandler("coin",      cmd_coin))
     app.add_handler(CommandHandler("signals",   cmd_signals))
-    app.add_handler(CommandHandler("top",       cmd_top))
     app.add_handler(CommandHandler("rockets",   cmd_rockets))
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("precision", cmd_precision))
