@@ -228,25 +228,39 @@ def get_btc_eth_price() -> dict:
         return {}
 
 def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
-    try:
-        url    = "https://api.binance.com/api/v3/klines"
-        params = {"symbol": f"{symbol}USDT", "interval": interval, "limit": limit}
-        r      = requests.get(url, params=params, timeout=12)
-        r.raise_for_status()
-        return [
-            {
-                "time":  datetime.fromtimestamp(d[0] / 1000, tz=TZ),
-                "open":  float(d[1]),
-                "high":  float(d[2]),
-                "low":   float(d[3]),
-                "close": float(d[4]),
-                "vol":   float(d[5]),
-            }
-            for d in r.json()
-        ]
-    except Exception as e:
-        log.error(f"Binance OHLC error {symbol}: {e}")
-        return []
+    """Получает свечи с Binance. Пробует несколько вариантов тикера."""
+    def _fetch(ticker):
+        try:
+            url    = "https://api.binance.com/api/v3/klines"
+            params = {"symbol": ticker, "interval": interval, "limit": limit}
+            r      = requests.get(url, params=params, timeout=12)
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            if not data or isinstance(data, dict):
+                return []
+            return [
+                {
+                    "time":  datetime.fromtimestamp(d[0] / 1000, tz=TZ),
+                    "open":  float(d[1]),
+                    "high":  float(d[2]),
+                    "low":   float(d[3]),
+                    "close": float(d[4]),
+                    "vol":   float(d[5]),
+                }
+                for d in data
+            ]
+        except:
+            return []
+
+    # Пробуем разные варианты тикера
+    sym_upper = symbol.upper().replace("USDT", "")
+    for ticker in [f"{sym_upper}USDT", f"{sym_upper}BUSD", f"{sym_upper}BTC"]:
+        result = _fetch(ticker)
+        if result and len(result) >= 10:
+            return result
+    log.warning(f"Binance OHLC not found: {symbol} ({interval})")
+    return []
 
 def get_binance_24h(symbol: str) -> dict:
     """24h stats: high, low, open"""
@@ -2899,9 +2913,12 @@ def real_ta(symbol: str) -> dict:
         price     = closes_4h[-1]
 
         # ── EMA (4H свечи) ──
-        ema20_v  = calc_ema(closes_4h, 20)[-1]  or price
-        ema50_v  = calc_ema(closes_4h, 50)[-1]  or price
-        ema200_v = calc_ema(closes_4h, 200)[-1] or price
+        _ema20  = calc_ema(closes_4h, 20)
+        _ema50  = calc_ema(closes_4h, 50)
+        _ema200 = calc_ema(closes_4h, 200)
+        ema20_v  = next((v for v in reversed(_ema20)  if v is not None), price)
+        ema50_v  = next((v for v in reversed(_ema50)  if v is not None), price)
+        ema200_v = next((v for v in reversed(_ema200) if v is not None), price)
 
         # ── RSI ──
         rsi_4h = calc_rsi(closes_4h, 14)
@@ -3209,108 +3226,123 @@ def _signal_kb(symbol: str, msg_id: int = 0, chat_id: int = 0, mode: str = "long
 
 def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
                        mode: str = "long") -> str:
-    """Форматирование поста сигнала"""
-    is_long = mode in ("long", "spot")
-    side_e  = "🟢" if is_long else "🔴"
-    side_t  = "LONG" if mode == "long" else ("СПОТ" if mode == "spot" else "SHORT")
-    price   = a["price"]
+    """VIP формат сигнала — профессиональный, читабельный"""
+    is_long  = mode in ("long", "spot")
+    side_e   = "🟢" if is_long else "🔴"
+    side_t   = "LONG" if mode == "long" else ("СПОТ" if mode == "spot" else "SHORT")
+    price    = a["price"]
+    r        = a["rocket"]
+    rsi_4h   = a["rsi_4h"]
+    trend_4h = a.get("trend_4h", "neutral")
 
     def pct(t):
         d = (t - price) / price * 100
-        return (f"+{d:.2f}%" if d >= 0 else f"{d:.2f}%")
+        return f"+{d:.2f}%" if d >= 0 else f"{d:.2f}%"
 
-    def ri(v):
-        return "🟢" if v < 30 else ("🔴" if v > 70 else "🔵")
+    def ri(v): return "🟢" if v < 30 else ("🔴" if v > 70 else "🔵")
 
-    r    = a["rocket"]
-    bar  = "█" * int(r/10) + "░" * (10 - int(r/10))
+    bar = "▓" * int(r/10) + "░" * (10 - int(r/10))
 
-    ema_parts = []
-    if a.get("above_ema200"): ema_parts.append("EMA200✅")
-    if a.get("above_ema50"):  ema_parts.append("EMA50✅")
-    if a.get("above_ema20"):  ema_parts.append("EMA20✅")
-    if not ema_parts: ema_parts = ["Ниже EMA ⚠️"]
+    # EMA строка
+    ema_tags = []
+    if a.get("above_ema200"): ema_tags.append("EMA200 ✅")
+    if a.get("above_ema50"):  ema_tags.append("EMA50 ✅")
+    if a.get("above_ema20"):  ema_tags.append("EMA20 ✅")
+    if not ema_tags: ema_tags = ["Ниже всех EMA ⚠️"]
 
-    smc_raw = [f for f in a.get("smc_factors", []) if "BB" not in f and "MACD" not in f]
-    smc_str = "  •  ".join(smc_raw[:3]) or "—"
-
-    st_str   = a.get("st_label", "—")
-    trend_str = {"bullish": "↑ Бычий", "bearish": "↓ Медвежий", "neutral": "→ Нейтральный"}.get(a.get("trend_4h",""), "—")
-    macd_str = "▲ Бычий" if a.get("macd_bullish") else ("▼ Медвежий" if a.get("macd_bearish") else "Нейтральный")
-
-    vol_str = (f"${a['vol']/1e9:.2f}B" if a['vol']>=1e9 else
-               f"${a['vol']/1e6:.1f}M"  if a['vol']>=1e6 else f"${a['vol']/1e3:.0f}K")
+    # MACD
+    macd_t = "▲ Бычий" if a.get("macd_bullish") else ("▼ Медвежий" if a.get("macd_bearish") else "→ Нейт.")
+    # Trend
+    trend_t = {"bullish": "↑ Бычий", "bearish": "↓ Медвежий", "neutral": "→ Нейтральный"}.get(trend_4h, "—")
+    # ST
+    st_t = a.get("st_label", "—")
+    # Vol
+    vol = a["vol"]
+    vol_s = f"${vol/1e9:.2f}B" if vol>=1e9 else (f"${vol/1e6:.1f}M" if vol>=1e6 else f"${vol/1e3:.0f}K")
+    # SMC
+    smc = [f for f in a.get("smc_factors",[]) if "BB" not in f and "MACD" not in f][:3]
 
     # Conclusion
-    rsi_4h = a["rsi_4h"]
-    if a.get("suspicious"):
-        conclusion = "⚠️ Аномальный объём — высокий риск"
-    elif is_long and rsi_4h > 75:
-        conclusion = "🟡 Перекуплен — ждать отката для входа"
-    elif is_long and rsi_4h < 30 and r >= 70:
-        conclusion = "🔥 Перепродан + сильный сигнал — лучший вход!"
-    elif is_long and r >= 75:
-        conclusion = "🔥 Высокий потенциал — приоритет"
-    elif is_long and r >= 60:
-        conclusion = "✅ Хороший сетап — входить"
-    elif not is_long and r >= 70:
-        conclusion = "📉 Сильный шорт-сетап"
-    elif mode == "spot" and a.get("fund_recovery"):
-        conclusion = "🔄 Recovery — DCA спот-позиция"
-    else:
-        conclusion = "⚠️ Ждём подтверждения"
+    if a.get("suspicious"):          conclusion = "⚠️ Аномальный объём — высокий риск"
+    elif is_long and rsi_4h > 75:    conclusion = "⏳ Перекуплен — ждать отката"
+    elif is_long and rsi_4h < 30 and r >= 70: conclusion = "🔥 RSI у дна + сильный сигнал — идеальный вход!"
+    elif is_long and r >= 80:        conclusion = "🚀 Приоритетный сетап — высокий потенциал"
+    elif is_long and r >= 65:        conclusion = "✅ Сильный лонг-сетап"
+    elif not is_long and r >= 70:    conclusion = "📉 Сильный шорт-сетап"
+    elif mode == "spot" and a.get("fund_recovery"): conclusion = "🔄 Recovery — DCA зона накопления"
+    else:                            conclusion = "⏳ Умеренный сигнал — ждём подтверждения"
+
+    # Header
+    if mode == "long":   header_line = f"🟢 *ЛОНГ СИГНАЛ*"
+    elif mode == "short": header_line = f"🔴 *ШОРТ СИГНАЛ*"
+    else:                 header_line = f"💎 *СПОТ НАКОПЛЕНИЕ*"
 
     lines = [
-        f"{'📊' if mode=='spot' else (side_e)} *{symbol}USDT*  {side_e} *{side_t}*",
-        f"🕐 {now_utc3()}",
-        f"📡 Аналитика BEST TRADE",
+        f"{'─'*28}",
+        f"{side_e} *{symbol}USDT*  ·  {header_line}",
+        f"🕐 {now_utc3()}  ·  📡 Аналитика BEST TRADE",
+        f"{'─'*28}",
         "",
-        f"🚀 *{r}/100* {a['rocket_label']}  `{bar}`",
-        f"📍 {' | '.join(ema_parts)}",
+        f"⚡️ *Сила сигнала:*  `{r}/100`  {a['rocket_label']}",
+        f"  `{bar}`",
+        "",
+        f"📍 *Позиция по EMA:*  {' · '.join(ema_tags)}",
         f"💡 {conclusion}",
         "",
-        f"💰 Вход:   `{fp(price)}`",
+        f"{'─'*28}",
+        f"💰 *ТОЧКИ СДЕЛКИ*",
+        f"{'─'*28}",
+        "",
+        f"  Вход:    `{fp(price)}`",
     ]
+
     if mode != "spot":
         lines += [
-            f"🎯 TP1:   `{fp(a['tp1'])}`  ({pct(a['tp1'])})",
-            f"🎯 TP2:   `{fp(a['tp2'])}`  ({pct(a['tp2'])})",
-            f"🎯 TP3:   `{fp(a['tp3'])}`  ({pct(a['tp3'])})",
-            f"🛑 SL:    `{fp(a['sl'])}`",
+            f"  TP1:    `{fp(a['tp1'])}`  *({pct(a['tp1'])})*",
+            f"  TP2:    `{fp(a['tp2'])}`  *({pct(a['tp2'])})*",
+            f"  TP3:    `{fp(a['tp3'])}`  *({pct(a['tp3'])})*",
+            f"  SL:     `{fp(a['sl'])}`",
+            f"  R:R     `1:{a['rr']:.1f}`",
         ]
     else:
         lines += [
-            f"🎯 Цель:  `{fp(a['tp2'])}`  ({pct(a['tp2'])})",
-            f"🛑 Стоп:  `{fp(a['sl'])}`",
+            f"  Цель:   `{fp(a['tp2'])}`  *({pct(a['tp2'])})*",
+            f"  Стоп:   `{fp(a['sl'])}`  *(—SL для спота необязателен)*",
         ]
-
-    lines += [
-        "",
-        "━━━━━━━━━━━━━━━━━━",
-        f"📐 R:R `1:{a['rr']:.1f}`  |  💹 {vol_str}  |  Rank `#{a.get('rank','—')}`",
-        f"📊 RSI 4H {ri(rsi_4h)}`{rsi_4h:.0f}`  |  MACD `{macd_str}`",
-        f"⚡️ Supertrend: `{st_str}`  |  Тренд: `{trend_str}`",
-        f"🧠 SMC: `{smc_str}`",
-    ]
 
     if stats_24h:
         h24 = stats_24h.get("high", 0); l24 = stats_24h.get("low", 0)
         if h24 and l24:
-            best = l24 * 1.005 if is_long else h24 * 0.995
-            lines += [
-                "",
-                f"📅 24H:  🔼`{fp(h24)}`  🔽`{fp(l24)}`  🎯`{fp(best)}`",
-            ]
+            best = l24*1.005 if is_long else h24*0.995
+            lines += ["", f"  📅 24H:  🔼`{fp(h24)}`  🔽`{fp(l24)}`  🎯`{fp(best)}`"]
 
     lines += [
         "",
-        f"📈 1H`{fc(a['ch1h'])}`  24H`{fc(a['ch24h'])}`  7D`{fc(a['ch7d'])}`",
+        f"{'─'*28}",
+        f"📊 *ИНДИКАТОРЫ*",
+        f"{'─'*28}",
         "",
-        "⚠️ Риск: *2% депозита* | SL обязателен",
+        f"  RSI 4H:    {ri(rsi_4h)} `{rsi_4h:.0f}`  {'← перепродан!' if rsi_4h<30 else ('← перекуплен!' if rsi_4h>70 else '')}",
+        f"  MACD:      `{macd_t}`",
+        f"  Тренд 4H:  `{trend_t}`",
+        f"  Supertrend:`{st_t}`",
+    ]
+    if smc:
+        lines.append(f"  SMC:       `{'  ·  '.join(smc)}`")
+    lines += [
+        "",
+        f"  Объём:     `{vol_s}`  ·  Rank `#{a.get('rank','—')}`",
+        f"  Изм:  1H`{fc(a['ch1h'])}`  24H`{fc(a['ch24h'])}`  7D`{fc(a['ch7d'])}`",
+        "",
+        f"{'─'*28}",
+        f"⚠️  Риск: *2% депозита*  ·  SL обязателен",
         f"#{symbol}USDT",
     ]
     return "\n".join(lines)
 
+
+# BACKWARD COMPAT alias
+_old_build_signal_post = _build_signal_post
 
 async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/spot — ТОП СПОТ: полный разбор для долгосрочного инвестора"""
@@ -3626,21 +3658,25 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Нет данных"); return
 
     pre = []
-    for coin in coins[:300]:
+    for coin in coins[:400]:
         q = coin["quote"]["USDT"]
         vol      = q.get("volume_24h",  0) or 0
         mcap     = q.get("market_cap",  0) or 0
-        ch24h    = q.get("percent_change_24h", 0) or 0
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        if vol >= 3_000_000 and vol_ratio < 50 and ch24h < 8:
+        if vol >= 1_000_000 and vol_ratio < 60:
             pre.append(coin)
 
     scored = []
-    for coin in pre[:60]:
+    for coin in pre[:80]:
         try:
             a = real_full_analysis(coin)
-            if not a["is_long"] and not a.get("suspicious") and a["rocket"] >= 50:
+            # Более мягкий фильтр для шортов
+            if not a["is_long"] and not a.get("suspicious") and a["rocket"] >= 40:
                 scored.append((coin, a))
+            elif a.get("rsi_4h", 50) > 72 and a["vol"] >= 2_000_000:
+                # Перекупленные монеты — кандидаты на шорт независимо от is_long
+                a_short = dict(a); a_short["is_long"] = False
+                scored.append((coin, a_short))
         except: pass
 
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
@@ -3709,20 +3745,16 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/full SYMBOL — полный анализ с реальными индикаторами"""
+    """/full SYMBOL — VIP полный анализ монеты"""
     if not ctx.args:
         await update.message.reply_text(
-            "🔬 *Полный анализ монеты*\n\n"
+            "🔬 *Полный анализ — /full*\n\n"
             "Использование: `/full BTC`\n"
-            "Пример: `/full ETH` · `/full SOL` · `/full DYDX`\n\n"
-            "Включает:\n"
-            "📈 ТА: EMA 20/50/200, RSI, MACD, Supertrend (реальные свечи Binance)\n"
-            "🧠 SMC: BOS, OB, FVG, Liquidity, AMD\n"
-            "📋 Фундаментал: капа, объём, ликвидность\n"
-            "📅 История: ATL, recovery-потенциал\n"
-            "💡 Спот vs Фьючерс\n"
-            "🎯 Вход / TP1-3 / SL / R:R из ATR\n"
-            "🏁 Финальный вердикт",
+            "Пример: `/full ETH` · `/full SOL` · `/full RIVER`\n\n"
+            "Включает реальные данные Binance:\n"
+            "· EMA 20/50/200 · RSI · MACD · Supertrend\n"
+            "· ATH / ATL · Зоны входа · DCA стратегия\n"
+            "· Фандинг · OI · Спот vs Фьючерс · Вердикт",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
@@ -3730,119 +3762,272 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    symbol = ctx.args[0].upper().replace("USDT", "")
-    msg    = await update.message.reply_text(f"🔍 Полный анализ *{symbol}*... ~25 сек", parse_mode="Markdown")
+    symbol = ctx.args[0].upper().replace("USDT","").replace("BUSD","")
+    msg    = await update.message.reply_text(
+        f"🔍 Анализирую *{symbol}USDT*...", parse_mode="Markdown"
+    )
 
     coins = get_top500()
     coin  = next((c for c in coins if c["symbol"] == symbol), None)
+
     if not coin:
-        await msg.edit_text(f"❌ *{symbol}* не найден в топ-500\n\nПример: `/full BTC`", parse_mode="Markdown")
-        return
+        test = get_binance_ohlc(symbol, "4h", 5)
+        if not test:
+            await msg.edit_text(
+                f"❌ *{symbol}* не найден на Binance\n\n"
+                f"Проверь правильность символа (без USDT).\n"
+                f"Пример: `/full BTC` · `/full ETH` · `/full SOL`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
+                ]])
+            )
+            return
+        price_now = test[-1]["close"]
+        coin = {
+            "symbol": symbol, "slug": symbol.lower(), "cmc_rank": 999,
+            "quote": {"USDT": {
+                "price": price_now, "volume_24h": 0, "market_cap": 0,
+                "percent_change_1h": 0, "percent_change_24h": 0,
+                "percent_change_7d": 0, "percent_change_30d": 0,
+                "percent_change_90d": 0,
+            }}
+        }
 
     slug      = coin.get("slug", symbol.lower())
     a         = real_full_analysis(coin)
+    price     = a["price"]
     stats_24h = get_binance_24h(symbol)
     atl       = get_binance_alltime_low(symbol)
     extras    = get_market_extras(symbol)
 
-    # Основной пост (идёт как caption к графику)
-    text_main = _build_signal_post(symbol, a, stats_24h,
-                                   mode="long" if a["is_long"] else "short")
+    candles_1d = get_binance_ohlc(symbol, "1d", 365)
+    candles_1w = get_binance_ohlc(symbol, "1w", 200)
 
-    # Расширенный пост
-    rsi_4h = a["rsi_4h"]
-    def ri(v): return "🟢" if v < 30 else ("🔴" if v > 70 else "🔵")
+    # ATH
+    ath = 0.0
+    if candles_1w: ath = max(c["high"] for c in candles_1w)
+    elif candles_1d: ath = max(c["high"] for c in candles_1d)
 
-    lines2 = [
-        f"🔬 *{symbol}USDT — РАСШИРЕННЫЙ АНАЛИЗ*",
-        f"📡 Аналитика BEST TRADE  |  🕐 {now_utc3()}",
+    # Зоны накопления
+    closes_1d = [c["close"] for c in candles_1d] if candles_1d else []
+    zone_30d = min(c["low"] for c in candles_1d[-30:]) if len(candles_1d)>=30 else 0
+    zone_60d = min(c["low"] for c in candles_1d[-60:]) if len(candles_1d)>=60 else 0
+    zone_90d = min(c["low"] for c in candles_1d[-90:]) if len(candles_1d)>=90 else 0
+
+    ema20_d  = next((v for v in reversed(calc_ema(closes_1d,20))  if v), 0) if len(closes_1d)>=20  else 0
+    ema50_d  = next((v for v in reversed(calc_ema(closes_1d,50))  if v), 0) if len(closes_1d)>=50  else 0
+    ema200_d = next((v for v in reversed(calc_ema(closes_1d,200)) if v), 0) if len(closes_1d)>=200 else 0
+    rsi_1d   = calc_rsi(closes_1d, 14) if len(closes_1d)>=15 else 50.0
+
+    vol_30d = sum(c["vol"] for c in candles_1d[-30:])/30 if len(candles_1d)>=30 else 0
+    vol_7d  = sum(c["vol"] for c in candles_1d[-7:]) /7  if len(candles_1d)>=7  else 0
+    vol_growing = vol_7d > vol_30d * 1.2
+
+    q     = coin["quote"]["USDT"]
+    ch1h  = q.get("percent_change_1h",  0) or 0
+    ch24h = q.get("percent_change_24h", 0) or 0
+    ch7d  = q.get("percent_change_7d",  0) or 0
+    ch30d = q.get("percent_change_30d", 0) or 0
+    ch90d = q.get("percent_change_90d", 0) or 0
+    vol24 = q.get("volume_24h", 0) or 0
+    mcap  = q.get("market_cap", 0) or 0
+    rank  = coin.get("cmc_rank", 999)
+
+    from_atl = ((price-atl)/atl*100) if atl>0 else 0
+    from_ath = ((price-ath)/ath*100) if ath>0 else 0
+    to_ath   = ((ath-price)/price*100) if ath>price>0 else 0
+
+    buy_lo  = atl*1.05 if atl>0 else (zone_90d or price*0.7)
+    buy_hi  = zone_60d*1.05 if zone_60d>0 else price*0.85
+    sell_t  = ath*0.9  if ath>0 else price*3.0
+
+    rsi_4h  = a["rsi_4h"]
+    r       = a["rocket"]
+    bar     = "▓"*int(r/10) + "░"*(10-int(r/10))
+    trend_t = {"bullish":"↑ Бычий","bearish":"↓ Медвежий","neutral":"→ Нейтральный"}.get(a.get("trend_4h",""), "—")
+    macd_t  = "▲ Бычий" if a.get("macd_bullish") else ("▼ Медвежий" if a.get("macd_bearish") else "→ Нейтр.")
+
+    def ri(v): return "🟢" if v<30 else ("🔴" if v>70 else "🔵")
+    def pct_chg(t, p=price): return f"+{(t-p)/p*100:.0f}%" if t>p else f"{(t-p)/p*100:.0f}%"
+
+    vol_s  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else (f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"—")
+    mcap_s = fm(mcap) if mcap>0 else "—"
+
+    side_e = "🟢" if a["is_long"] else "🔴"
+    side_t = "LONG" if a["is_long"] else "SHORT"
+
+    # ──────────────────────────────────────────
+    # СООБЩЕНИЕ 1 — ШАПКА + ЦЕНЫ + EMA
+    # ──────────────────────────────────────────
+    p1 = [
+        f"{'─'*30}",
+        f"🔬 *{symbol}USDT  ·  ПОЛНЫЙ АНАЛИЗ*",
+        f"📡 Аналитика BEST TRADE  ·  Rank #{rank}",
+        f"🕐 {now_utc3()}",
+        f"{'─'*30}",
         "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "📊 *РЕАЛЬНЫЕ ИНДИКАТОРЫ (Binance 4H)*",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "",
-        f"EMA20:  `{fp(a['ema20_4h'])}`  {'✅ выше' if a['above_ema20'] else '❌ ниже'}",
-        f"EMA50:  `{fp(a['ema50_4h'])}`  {'✅ выше' if a['above_ema50'] else '❌ ниже'}",
-        f"EMA200: `{fp(a['ema200_4h'])}`  {'✅ выше' if a['above_ema200'] else '❌ ниже'}",
-        "",
-        f"RSI 1H:  {ri(a['rsi_1h'])}`{a['rsi_1h']:.1f}`   "
-        f"RSI 4H:  {ri(rsi_4h)}`{rsi_4h:.1f}`   "
-        f"RSI 1D:  {ri(a['rsi_1d'])}`{a['rsi_1d']:.1f}`",
-        f"{'🟢 Перепродан — зона покупки!' if rsi_4h<30 else ('🔴 Перекуплен — зона продажи!' if rsi_4h>70 else '🔵 RSI нейтральный')}",
+        f"💰 *Цена сейчас:*   `{fp(price)}`",
+        f"{'─'*30}",
+        f"📉 *Исторические данные:*",
         "",
     ]
-    trend_labels = {"bullish": "↑ Бычий", "bearish": "↓ Медвежий", "neutral": "→ Нейтральный"}
-    lines2 += [
-        f"Тренд 4H:  `{trend_labels.get(a.get('trend_4h',''), '—')}`",
-        f"ATR (14):  `{fp(a.get('atr', 0))}` — волатильность",
-        f"Поддержка: `{fp(a.get('support', 0))}`",
-        f"Сопротивл: `{fp(a.get('resistance', 0))}`",
+    if ath>0: p1.append(f"  🔺 ATH:  `{fp(ath)}`   |   До ATH:  `+{to_ath:.0f}%`")
+    if atl>0: p1.append(f"  🔻 ATL:  `{fp(atl)}`   |   От ATL:  `+{from_atl:.0f}%`")
+    p1 += [
+        "",
+        f"  1H:  `{fc(ch1h)}`    24H: `{fc(ch24h)}`",
+        f"  7D:  `{fc(ch7d)}`    30D: `{fc(ch30d)}`",
+        f"  90D: `{fc(ch90d)}`",
+        "",
+        f"{'─'*30}",
+        f"📈 *EMA (Дневной ТФ):*",
+        "",
+    ]
+    if ema200_d: p1.append(f"  EMA200:  `{fp(ema200_d)}`   {'🟢 выше — бычий тренд' if price>ema200_d else '🔴 ниже — медвежий'}")
+    if ema50_d:  p1.append(f"  EMA50:   `{fp(ema50_d)}`   {'✅ выше' if price>ema50_d else '❌ ниже'}")
+    if ema20_d:  p1.append(f"  EMA20:   `{fp(ema20_d)}`   {'✅ выше' if price>ema20_d else '❌ ниже'}")
+    p1 += [
+        "",
+        f"  RSI(1D):  {ri(rsi_1d)}`{rsi_1d:.1f}`  {'— зона покупки!' if rsi_1d<30 else ('— перекуплен!' if rsi_1d>70 else '')}",
+    ]
+
+    # ──────────────────────────────────────────
+    # СООБЩЕНИЕ 2 — TA 4H + SMC
+    # ──────────────────────────────────────────
+    smc = [f for f in a.get("smc_factors",[]) if "BB" not in f]
+    p2 = [
+        f"{'─'*30}",
+        f"📊 *ТЕХНИЧЕСКИЙ АНАЛИЗ (4H)*",
+        f"{'─'*30}",
+        "",
+        f"  ⚡️ Сила сигнала:   `{r}/100`  {a['rocket_label']}",
+        f"  `{bar}`",
+        "",
+        f"  EMA20(4H):  `{fp(a.get('ema20_4h',0))}`   {'✅' if a.get('above_ema20') else '❌'}",
+        f"  EMA50(4H):  `{fp(a.get('ema50_4h',0))}`   {'✅' if a.get('above_ema50') else '❌'}",
+        f"  EMA200(4H): `{fp(a.get('ema200_4h',0))}`   {'✅' if a.get('above_ema200') else '❌'}",
+        "",
+        f"  RSI(4H):    {ri(rsi_4h)}`{rsi_4h:.0f}`",
+        f"  RSI(1H):    {ri(a.get('rsi_1h',50))}`{a.get('rsi_1h',50):.0f}`",
+        "",
+        f"  MACD:       `{macd_t}`",
+        f"  Тренд 4H:   `{trend_t}`",
+        f"  Supertrend: `{a.get('st_label','—')}`",
+        f"  ATR(14):    `{fp(a.get('atr',0))}`",
+        "",
+        f"{'─'*30}",
+        f"🧠 *SMART MONEY (SMC/ICT):*",
+        "",
+    ]
+    if smc:
+        for s in smc[:6]:
+            p2.append(f"  · {s}")
+    else:
+        p2.append("  · SMC-сигналы не обнаружены")
+
+    # Зоны накопления
+    p2 += ["", f"{'─'*30}", f"🔎 *ЗОНЫ НАКОПЛЕНИЯ:*", ""]
+    if zone_30d: p2.append(f"  Мин 30д:  `{fp(zone_30d)}`  {'⚡️ ЦЕНА В ЗОНЕ!' if price<=zone_30d*1.06 else ''}")
+    if zone_60d: p2.append(f"  Мин 60д:  `{fp(zone_60d)}`  {'⚡️ ЦЕНА В ЗОНЕ!' if price<=zone_60d*1.06 else ''}")
+    if zone_90d: p2.append(f"  Мин 90д:  `{fp(zone_90d)}`  {'⚡️ ЦЕНА В ЗОНЕ!' if price<=zone_90d*1.06 else ''}")
+    if stats_24h:
+        h24=stats_24h.get("high",0); l24=stats_24h.get("low",0)
+        if h24 and l24:
+            p2.append(f"  24H High:  `{fp(h24)}`   Low: `{fp(l24)}`")
+
+    # ──────────────────────────────────────────
+    # СООБЩЕНИЕ 3 — ФУНДАМЕНТАЛ + СДЕЛКА + ВЕРДИКТ
+    # ──────────────────────────────────────────
+    p3 = [
+        f"{'─'*30}",
+        f"📦 *ФУНДАМЕНТАЛ:*",
+        f"{'─'*30}",
+        "",
+        f"  Объём 24H:  `{vol_s}`",
+        f"  Market Cap: `{mcap_s}`",
+        f"  Объём тренд: {'📈 Накопление' if vol_growing else '📉 Снижение'}",
     ]
 
     if extras:
-        fr = extras.get("funding", {}); oi = extras.get("oi", {})
-        lines2 += ["", "━━━━━━━━━━━━━━━━━━━━━━",
-                   "⚡️ *ФЬЮЧЕРСНЫЕ ДАННЫЕ*", "━━━━━━━━━━━━━━━━━━━━━━"]
+        fr=extras.get("funding",{}); oi=extras.get("oi",{})
         if fr.get("ok"):
-            rate = fr["rate"]
-            lines2 += [
-                f"💸 Funding: `{rate:+.4f}%`  {fr['signal']}",
-                f"{'🔴 Лонги перегреты' if rate>0.1 else ('🟢 Шорт-сквиз возможен' if rate<-0.05 else '🟡 Нейтрально')}",
-            ]
-        if oi.get("ok") and oi.get("oi", 0) > 0:
-            lines2.append(f"📊 OI: `{oi.get('change',0):+.1f}%` за 24ч  {oi['signal']}")
-
-    q = coin["quote"]["USDT"]
-    ch90d = q.get("percent_change_90d", 0) or 0
-    lines2 += [
-        "", "━━━━━━━━━━━━━━━━━━━━━━",
-        "📅 *ИСТОРИЯ*", "━━━━━━━━━━━━━━━━━━━━━━",
-        f"90D: `{ch90d:+.1f}%`  {'🔄 Recovery-потенциал' if ch90d < -30 else ''}",
-    ]
-    if atl and atl > 0:
-        price = a["price"]
-        from_atl = (price - atl) / atl * 100
-        lines2.append(f"ATL: `{fp(atl)}`  |  Текущая выше ATL: `+{from_atl:.0f}%`")
+            rate=fr["rate"]
+            p3 += ["", f"  💸 Funding:  `{rate:+.4f}%`  {fr['signal']}"]
+        if oi.get("ok") and oi.get("oi",0)>0:
+            p3.append(f"  📊 OI:       `{oi.get('change',0):+.1f}%` за 24ч")
 
     # Спот vs Фьючерс
-    lines2 += ["", "━━━━━━━━━━━━━━━━━━━━━━", "💡 *СПОТ vs ФЬЮЧЕРС*", "━━━━━━━━━━━━━━━━━━━━━━", ""]
-    if a["is_long"] and rsi_4h < 35 and ch90d < -50:
-        lines2 += ["💎 *СПОТ — приоритет*", f"  Монета у дна, RSI перепродан. DCA: 3-5 частей.", f"  Фьючерс: плечо макс 3x, SL `{fp(a['sl'])}`"]
+    p3 += [
+        "",
+        f"{'─'*30}",
+        f"🎯 *ТОЧКИ ВХОДА И ВЫХОДА:*",
+        f"{'─'*30}",
+        "",
+        f"  {side_e} Вход:        `{fp(price)}`",
+        f"  🎯 TP1:        `{fp(a['tp1'])}`  `({pct_chg(a['tp1'])})`",
+        f"  🎯 TP2:        `{fp(a['tp2'])}`  `({pct_chg(a['tp2'])})`",
+        f"  🎯 TP3:        `{fp(a['tp3'])}`  `({pct_chg(a['tp3'])})`",
+        f"  🛑 SL:         `{fp(a['sl'])}`",
+        f"  📐 R:R:        `1:{a['rr']:.1f}`",
+        "",
+        f"  💎 Спот-зона:  `{fp(buy_lo)}` — `{fp(buy_hi)}`",
+        f"  🔴 Спот-цель:  `{fp(sell_t)}`  `({pct_chg(sell_t)})`",
+        "",
+        f"{'─'*30}",
+        f"💡 *СТРАТЕГИЯ:*",
+        "",
+    ]
+
+    if a["is_long"] and rsi_1d < 35 and ch90d < -40:
+        p3 += [
+            "  💎 СПОТ — приоритет",
+            "  Монета у исторического дна. Стратегия DCA:",
+            f"  1й вход: `{fp(buy_hi)}`   — 30% позиции",
+            f"  2й вход: `{fp((buy_lo+buy_hi)/2)}`   — 40% позиции",
+            f"  3й вход: `{fp(buy_lo)}`   — 30% у ATL",
+            "",
+            "  ⚡️ ФЬЮЧЕРС — возможен параллельно",
+            f"  Плечо макс 3x  ·  SL: `{fp(a['sl'])}`",
+        ]
     elif a["is_long"]:
-        lines2 += [f"⚡️ *ФЬЮЧЕРС ЛОНГ* — плечо 2-5x", f"  Вход: `{fp(a['price'])}`  SL: `{fp(a['sl'])}`"]
+        p3 += [
+            "  ⚡️ ФЬЮЧЕРС ЛОНГ — основной инструмент",
+            f"  Плечо 2-5x  ·  Вход: `{fp(price)}`  ·  SL: `{fp(a['sl'])}`",
+            "",
+            "  💎 СПОТ — DCA в зоне:",
+            f"  `{fp(buy_lo)}` — `{fp(buy_hi)}`  ·  Цель: `{fp(sell_t)}`",
+        ]
     else:
-        lines2 += [f"⚡️ *ФЬЮЧЕРС ШОРТ* — плечо 2-5x", f"  Вход: `{fp(a['price'])}`  SL: `{fp(a['sl'])}`", "  На спот — не применимо."]
+        p3 += [
+            "  ⚡️ ФЬЮЧЕРС ШОРТ",
+            f"  Плечо 2-5x  ·  Вход: `{fp(price)}`  ·  SL: `{fp(a['sl'])}`",
+            "  (Спот-шорт недоступен)",
+        ]
 
     # Вердикт
-    score = 0
-    vf = []
-    if a["rocket"] >= 75:         score += 3; vf.append("🚀 Rocket Score высокий")
-    elif a["rocket"] >= 60:       score += 2; vf.append("✅ Rocket Score хороший")
-    if a.get("macd_bullish") and a["is_long"]:  score += 2; vf.append("📉 MACD подтверждает")
-    if a.get("macd_bearish") and not a["is_long"]: score += 2; vf.append("📉 MACD подтверждает")
-    if rsi_4h < 35 and a["is_long"]:  score += 2; vf.append("🟢 RSI перепродан")
-    if rsi_4h > 65 and not a["is_long"]: score += 2; vf.append("🔴 RSI перекуплен")
-    if a.get("supertrend_bull") is True and a["is_long"]: score += 2; vf.append("⚡️ Supertrend BUY")
-    if a.get("supertrend_bull") is False and not a["is_long"]: score += 2; vf.append("⚡️ Supertrend SELL")
+    vscore = sum([r>=75, a.get("macd_bullish") and a["is_long"] or a.get("macd_bearish") and not a["is_long"],
+                  rsi_4h<35 and a["is_long"] or rsi_4h>65 and not a["is_long"],
+                  a.get("supertrend_bull") is (True if a["is_long"] else False),
+                  vol_growing, bool(smc)])
+    if vscore>=5: v="🔥 ОЧЕНЬ СИЛЬНЫЙ — входить"; ve="🔥"
+    elif vscore>=3: v="✅ СИЛЬНЫЙ — хороший момент"; ve="✅"
+    elif vscore>=2: v="🟡 УМЕРЕННЫЙ — ждать подтверждения"; ve="🟡"
+    else: v="⚠️ СЛАБЫЙ — воздержаться"; ve="⚠️"
 
-    v_e = "🔥🚀" if score>=7 else ("✅" if score>=5 else ("🟡" if score>=3 else "⚠️"))
-    v_t = ("ОЧЕНЬ СИЛЬНЫЙ СИГНАЛ" if score>=7 else
-           "ХОРОШИЙ СИГНАЛ" if score>=5 else
-           "УМЕРЕННЫЙ СИГНАЛ — ждать" if score>=3 else "СЛАБЫЙ — воздержаться")
-
-    lines2 += [
-        "", "━━━━━━━━━━━━━━━━━━━━━━",
-        "🏁 *ВЕРДИКТ*", "━━━━━━━━━━━━━━━━━━━━━━",
-        f"{v_e} *{v_t}*", "",
-    ]
-    for f_ in vf: lines2.append(f"  • {f_}")
-    lines2 += [
-        "", "━━━━━━━━━━━━━━━━━━━━━━",
-        "⚠️ *РИСК-МЕНЕДЖМЕНТ:*",
-        "  • Риск на сделку: *1-2% депозита*",
-        "  • Минимальный R:R: *1:3*",
-        "  • SL ОБЯЗАТЕЛЕН до открытия позиции",
-        "  • Макс. плечо на альтах: *5x*",
+    p3 += [
+        "",
+        f"{'─'*30}",
+        f"🏁 *ИТОГОВЫЙ ВЕРДИКТ:*",
+        "",
+        f"  {ve} *{v}*",
+        "",
+        f"{'─'*30}",
+        f"⚠️  *Риск-менеджмент:*",
+        f"  · Риск на сделку: *1-2% депозита*",
+        f"  · Минимальный R:R: *1:3*",
+        f"  · SL ОБЯЗАТЕЛЕН до открытия",
+        f"  · Макс. плечо альты: *5x*",
         "",
         f"#{symbol}USDT  #BESTTRADE",
     ]
@@ -3850,22 +4035,33 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 TradingView",    url=tv_link(symbol)),
          InlineKeyboardButton("📊 CoinMarketCap",  url=cmc_link(slug))],
-        [InlineKeyboardButton("🔄 Обновить /full", callback_data=f"full_{symbol}"),
+        [InlineKeyboardButton("🔄 Обновить",       callback_data=f"full_{symbol}"),
          InlineKeyboardButton("🏠 Главное меню",   callback_data="show_menu")],
     ])
 
     await msg.delete()
-    await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text_main)
-    await ctx.bot.send_message(
-        update.effective_chat.id, "\n".join(lines2),
-        parse_mode="Markdown", reply_markup=kb,
-        disable_web_page_preview=True
-    )
+
+    # График + первый пост
+    text_for_chart = _build_signal_post(symbol, a, stats_24h,
+                                        mode="long" if a["is_long"] else "short")
+    await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text_for_chart)
+    await asyncio.sleep(0.5)
+
+    await ctx.bot.send_message(update.effective_chat.id, "\n".join(p1),
+                               parse_mode="Markdown", disable_web_page_preview=True)
+    await asyncio.sleep(0.3)
+    await ctx.bot.send_message(update.effective_chat.id, "\n".join(p2),
+                               parse_mode="Markdown", disable_web_page_preview=True)
+    await asyncio.sleep(0.3)
+    await ctx.bot.send_message(update.effective_chat.id, "\n".join(p3),
+                               parse_mode="Markdown", reply_markup=kb,
+                               disable_web_page_preview=True)
     await ctx.bot.send_message(
         update.effective_chat.id,
         "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
+
 
 # ═══════════════════════════════════════════
 # MAIN — в конце файла после всех функций
