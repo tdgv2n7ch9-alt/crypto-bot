@@ -2027,30 +2027,120 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔄 Обновить",     callback_data="top_trades"),
              InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
         ])
-        # Показываем активные лонги и шорты из TOP
-        lines = ["🔥 *TOP — Активные сделки*", f"🕐 {now_utc3()}", ""]
-        if TOP_LONG_SIGNALS:
-            lines.append("🟢 *ЛОНГИ:*")
-            for sym, v in TOP_LONG_SIGNALS.items():
-                tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M")
-                lines.append(f"• [{sym}USDT]({tv})  вход `{fp(v['entry'])}`  ⏰ {t}")
-            lines.append("")
-        if TOP_SHORT_SIGNALS:
-            lines.append("🔴 *ШОРТЫ:*")
-            for sym, v in TOP_SHORT_SIGNALS.items():
-                tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M")
-                lines.append(f"• [{sym}USDT]({tv})  вход `{fp(v['entry'])}`  ⏰ {t}")
-            lines.append("")
+
+        # Получаем текущие цены для проверки движения
+        lines = ["🔥 *BEST TRADE — TOP Активные сделки*", f"🕐 {now_utc3()}", ""]
+        has_any = False
+
+        # ЛОНГИ — показываем только если цена ВЫШЕ зоны входа (начали отрабатывать)
+        active_longs = []
+        for sym, v in TOP_LONG_SIGNALS.items():
+            if v.get("status") == "done": continue
+            try:
+                stats = get_binance_24h(sym)
+                cur_price = stats.get("high", v["entry"]) if stats else v["entry"]
+                entry = v["entry"]
+                move_pct = (cur_price - entry) / entry * 100 if entry > 0 else 0
+                tp1 = v.get("tp1", entry * 1.04)
+                tp2 = v.get("tp2", entry * 1.08)
+                sl  = v.get("sl",  entry * 0.85)
+                active_longs.append((sym, v, cur_price, move_pct, tp1, tp2, sl))
+            except:
+                active_longs.append((sym, v, v["entry"], 0, v.get("tp1",0), v.get("tp2",0), v.get("sl",0)))
+
+        if active_longs:
+            has_any = True
+            lines.append("🟢 *ЛОНГИ В РАБОТЕ:*\n")
+            for sym, v, cur, move, tp1, tp2, sl in active_longs:
+                tv    = tv_link(sym)
+                t     = v["time"].strftime("%d.%m %H:%M")
+                entry = v["entry"]
+                # Статус по движению
+                if cur >= tp2:
+                    status = "✅✅ TP2 достигнут!"
+                elif cur >= tp1:
+                    status = "✅ TP1 достигнут — двигаем стоп"
+                elif cur > entry * 1.01:
+                    status = "📈 Начала отработку"
+                elif cur < sl * 1.02:
+                    status = "⚠️ Близко к SL!"
+                else:
+                    status = "⏳ В зоне входа"
+                lines += [
+                    f"🟢 [{sym}USDT]({tv})",
+                    f"  💰 Вход: `{fp(entry)}`  →  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
+                    f"  🎯 TP1:`{fp(tp1)}`  TP2:`{fp(tp2)}`  SL:`{fp(sl)}`",
+                    f"  {status}  ⏰ {t}",
+                    "",
+                ]
+
+        # ШОРТЫ
+        active_shorts = []
+        for sym, v in TOP_SHORT_SIGNALS.items():
+            if v.get("status") == "done": continue
+            try:
+                stats = get_binance_24h(sym)
+                cur_price = stats.get("low", v["entry"]) if stats else v["entry"]
+                entry = v["entry"]
+                move_pct = (entry - cur_price) / entry * 100 if entry > 0 else 0
+                tp1 = v.get("tp1", entry * 0.96)
+                tp2 = v.get("tp2", entry * 0.92)
+                sl  = v.get("sl",  entry * 1.15)
+                active_shorts.append((sym, v, cur_price, move_pct, tp1, tp2, sl))
+            except:
+                active_shorts.append((sym, v, v["entry"], 0, v.get("tp1",0), v.get("tp2",0), v.get("sl",0)))
+
+        if active_shorts:
+            has_any = True
+            lines.append("🔴 *ШОРТЫ В РАБОТЕ:*\n")
+            for sym, v, cur, move, tp1, tp2, sl in active_shorts:
+                tv    = tv_link(sym)
+                t     = v["time"].strftime("%d.%m %H:%M")
+                entry = v["entry"]
+                if cur <= tp2:
+                    status = "✅✅ TP2 достигнут!"
+                elif cur <= tp1:
+                    status = "✅ TP1 достигнут — двигаем стоп"
+                elif cur < entry * 0.99:
+                    status = "📉 Начала отработку"
+                elif cur > sl * 0.98:
+                    status = "⚠️ Близко к SL!"
+                else:
+                    status = "⏳ В зоне входа"
+                lines += [
+                    f"🔴 [{sym}USDT]({tv})",
+                    f"  💰 Вход: `{fp(entry)}`  →  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
+                    f"  🎯 TP1:`{fp(tp1)}`  TP2:`{fp(tp2)}`  SL:`{fp(sl)}`",
+                    f"  {status}  ⏰ {t}",
+                    "",
+                ]
+
+        # СПОТ наблюдение
         if TOP_SPOT_SIGNALS:
-            lines.append("💎 *СПОТ:*")
+            has_any = True
+            lines.append("💎 *СПОТ — НАБЛЮДЕНИЕ:*\n")
             for sym, v in TOP_SPOT_SIGNALS.items():
-                tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M")
-                lines.append(f"• [{sym}USDT]({tv})  вход `{fp(v['entry'])}`  ⏰ {t}")
-        if not TOP_LONG_SIGNALS and not TOP_SHORT_SIGNALS and not TOP_SPOT_SIGNALS:
-            lines.append("_Сделок нет. Используй ТОП СПОТ / ЛОНГ / ШОРТ для открытия_")
+                tv    = tv_link(sym)
+                t     = v["time"].strftime("%d.%m %H:%M")
+                buy_lo = v.get("buy_zone_lo", v["entry"])
+                buy_hi = v.get("buy_zone_hi", v["entry"])
+                sell_t = v.get("sell_target",  0)
+                lines += [
+                    f"💎 [{sym}USDT]({tv})",
+                    f"  🟢 Зона: `{fp(buy_lo)}` — `{fp(buy_hi)}`",
+                    f"  🔴 Цель: `{fp(sell_t)}`  ⏰ {t}",
+                    "",
+                ]
+
+        if not has_any:
+            lines += [
+                "📭 *Активных сделок нет*\n",
+                "Нажми для открытия позиций:",
+                "• 💎 ТОП СПОТ — долгосрочные покупки",
+                "• 🟢 ТОП ЛОНГ — фьючерс лонг",
+                "• 🔴 ТОП ШОРТ — фьючерс шорт",
+            ]
+
         try:
             await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=False)
@@ -2629,8 +2719,61 @@ async def check_watchlist(bot, chat_ids, coins):
         add_to_game(sym, "watchlist", al["price"])
         log.info(f"Watchlist ALERT: {sym} @ {fp(al['price'])}")
 
+async def check_spot_alerts(bot: Bot, chat_ids: set):
+    """Алерт когда спот-монета подходит к зоне покупки (ATL/мин)"""
+    if not TOP_SPOT_SIGNALS: return
+    now_ts = datetime.now(TZ).timestamp()
+    alerted_key = "_spot_alert"
+
+    for sym, v in TOP_SPOT_SIGNALS.items():
+        if v.get("status") == "done": continue
+        buy_lo = v.get("buy_zone_lo", 0)
+        buy_hi = v.get("buy_zone_hi", 0)
+        if not buy_lo: continue
+
+        # Не спамим чаще раза в 2 часа
+        last_alert = pump_alerted.get(f"{alerted_key}_{sym}", 0)
+        if now_ts - last_alert < 7200: continue
+
+        try:
+            stats = get_binance_24h(sym)
+            if not stats: continue
+            cur_price = stats.get("low", 0) or stats.get("high", 0)
+            if not cur_price: continue
+
+            in_zone = buy_lo * 0.98 <= cur_price <= buy_hi * 1.05
+            near_zone = cur_price <= buy_hi * 1.10  # в 10% от зоны
+
+            if in_zone or near_zone:
+                pump_alerted[f"{alerted_key}_{sym}"] = now_ts
+                status_str = "⚡️ ЦЕНА В ЗОНЕ ПОКУПКИ!" if in_zone else "📍 Цена приближается к зоне"
+                text = (
+                    f"💎 *СПОТ АЛЕРТ — {sym}USDT*\n"
+                    f"🕐 {now_utc3()}\n\n"
+                    f"{status_str}\n\n"
+                    f"💰 Текущая цена: `{fp(cur_price)}`\n"
+                    f"🟢 Зона покупки: `{fp(buy_lo)}` — `{fp(buy_hi)}`\n"
+                    f"🔴 Цель продажи: `{fp(v.get('sell_target', 0))}`\n\n"
+                    f"💡 Стратегия DCA — входить частями\n"
+                    f"⚠️ Позиция: не более 5-10% портфеля\n\n"
+                    f"#{sym}USDT  #СПОТТРЕЙДИНГ"
+                )
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("🔥 TOP Сделки",  callback_data="top_trades"),
+                ]])
+                for cid in chat_ids:
+                    try:
+                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    except Exception as e:
+                        log.error(f"Spot alert {cid}: {e}")
+                log.info(f"SPOT ALERT: {sym} @ {fp(cur_price)} | зона {fp(buy_lo)}-{fp(buy_hi)}")
+        except Exception as e:
+            log.error(f"check_spot_alerts {sym}: {e}")
+
+
 async def check_alerts(bot: Bot):
-    """Каждые 5 мин: pump/dump + zone + supertrend + watchlist alerts"""
+    """Каждые 5 мин: pump/dump + zone + supertrend + watchlist + spot alerts"""
     chat_ids = load_chat_ids() | user_chat_ids
     if not chat_ids: return
     try:
@@ -2640,6 +2783,7 @@ async def check_alerts(bot: Bot):
         await check_entry_zones(bot, chat_ids, coins)
         await check_watchlist(bot, chat_ids, coins)
         await check_supertrend_signals(bot, chat_ids, coins)
+        await check_spot_alerts(bot, chat_ids)
     except Exception as e:
         log.error(f"check_alerts: {e}")
 
@@ -3169,85 +3313,205 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
 
 
 async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/spot — Топ СПОТ: фундаментальные монеты для долгосрочного держания"""
-    msg = await update.message.reply_text("⏳ Анализирую спот-возможности...")
+    """/spot — ТОП СПОТ: полный разбор для долгосрочного инвестора"""
+    msg = await update.message.reply_text("💎 Анализирую спот-возможности... ~60 сек")
     coins = get_top500()
     if not coins:
         await msg.edit_text("❌ Нет данных"); return
 
     candidates = []
-    for coin in coins[:150]:   # топ-150 по капе
-        sym = coin["symbol"]
-        q   = coin["quote"]["USDT"]
-        ch90d = q.get("percent_change_90d", 0) or 0
-        ch7d  = q.get("percent_change_7d", 0) or 0
-        mcap  = q.get("market_cap", 0) or 0
-        vol   = q.get("volume_24h", 0) or 0
-        rank  = coin.get("cmc_rank", 999)
+    for coin in coins[:200]:
+        q         = coin["quote"]["USDT"]
+        ch90d     = q.get("percent_change_90d", 0) or 0
+        ch7d      = q.get("percent_change_7d",  0) or 0
+        ch30d     = q.get("percent_change_30d", 0) or 0
+        mcap      = q.get("market_cap",  0) or 0
+        vol       = q.get("volume_24h",  0) or 0
+        rank      = coin.get("cmc_rank", 999)
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-
-        # Фильтры для спота:
-        # - Топ-200 по капе (ликвидность)
-        # - Упала -30%+ за 90д (потенциал восстановления)
-        # - Растёт за 7д (начало восстановления)
-        # - Нет аномального объёма
-        if (rank <= 200
-                and ch90d < -30
-                and ch7d > 0
-                and vol_ratio < 50
-                and vol >= 2_000_000
-                and mcap >= 50_000_000):
-            recovery_score = abs(ch90d) + ch7d * 2 + (200 - rank) * 0.1
-            candidates.append((coin, recovery_score))
+        if (rank <= 300 and ch90d < -25 and vol_ratio < 50
+                and vol >= 1_000_000 and mcap >= 20_000_000):
+            rec_score = (abs(ch90d) * 1.0 + max(ch7d,0)*3.0
+                         + max(ch30d,0)*1.5 + (300-rank)*0.05)
+            candidates.append((coin, rec_score))
 
     candidates.sort(key=lambda x: x[1], reverse=True)
     top_spot = candidates[:5]
 
-    if not top_spot:
-        await msg.edit_text("😔 Нет подходящих спот-сетапов\n\nТребования:\n• Топ-200\n• -30%+ за 90 дней\n• Рост за 7 дней\n• Объём $2M+")
-        return
-
     nav = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Обновить",     callback_data="top_spot"),
          InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
+        [InlineKeyboardButton("🟢 ТОП ЛОНГ",    callback_data="top_long"),
+         InlineKeyboardButton("🔴 ТОП ШОРТ",    callback_data="top_short")],
     ])
 
-    header = [
+    if not top_spot:
+        await msg.edit_text(
+            "😔 *Нет спот-возможностей*\n\n"
+            "Требования: Топ-300 · -25%+ за 90д · $1M+ объём\n"
+            "Рынок в росте — монеты не у дна.",
+            parse_mode="Markdown", reply_markup=nav)
+        return
+
+    list_lines = [
         "💎 *BEST TRADE — ТОП СПОТ*",
         f"🕐 {now_utc3()}",
-        f"📡 Аналитика BEST TRADE",
+        "📡 Аналитика BEST TRADE",
         "",
-        "📋 *Критерии:* Топ-200 · Упала -30%+ · Восстановление · Ликвидность",
+        "📋 Монеты у дна с потенциалом восстановления:",
         "",
     ]
-    await msg.edit_text("\n".join(header), parse_mode="Markdown")
+    for i, (c, score) in enumerate(top_spot, 1):
+        sym = c["symbol"]; q = c["quote"]["USDT"]
+        tv  = tv_link(sym)
+        ch90 = q.get("percent_change_90d", 0) or 0
+        ch7  = q.get("percent_change_7d", 0) or 0
+        prc  = q.get("price", 0) or 0
+        list_lines.append(
+            f"{i}. [{sym}USDT]({tv})\n"
+            f"   💰`{fp(prc)}`  90D`{ch90:.0f}%`  7D`{fc(ch7)}`")
+    list_lines += ["", "📊 Полный разбор каждой монеты ниже ↓"]
+    await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
+                        reply_markup=nav, disable_web_page_preview=False)
 
-    for coin, score in top_spot:
+    for coin, _ in top_spot:
         sym  = coin["symbol"]
         slug = coin.get("slug", sym.lower())
         q    = coin["quote"]["USDT"]
         try:
-            await update.message.reply_text(f"⏳ Анализирую {sym}...")
-            a      = real_full_analysis(coin)
-            stats  = get_binance_24h(sym)
-            extras = get_market_extras(sym)
-            atl    = get_binance_alltime_low(sym)
+            prog_msg = await update.message.reply_text(f"⏳ Полный разбор {sym}...")
+            a         = real_full_analysis(coin)
+            stats_24h = get_binance_24h(sym)
+            extras    = get_market_extras(sym)
+            atl       = get_binance_alltime_low(sym)
+            candles_1d = get_binance_ohlc(sym, "1d", 200)
+            candles_1w = get_binance_ohlc(sym, "1w", 100)
 
-            text = _build_signal_post(sym, a, stats, mode="spot")
+            price = a["price"]
+            ath = max((c["high"] for c in candles_1w), default=0) if candles_1w else max((c["high"] for c in candles_1d), default=0)
 
-            # Добавляем ATL
-            if atl and atl > 0:
-                prc = a["price"]
-                from_atl = (prc - atl) / atl * 100
-                text += f"\n🏆 От ATL: `+{from_atl:.0f}%`  (ATL `{fp(atl)}`)"
+            zone_30d = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
+            zone_60d = min((c["low"] for c in candles_1d[-60:]), default=0) if len(candles_1d)>=60 else 0
+            zone_90d = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
 
-            kb = _signal_kb(sym, mode="spot")
-            await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
+            closes_1d = [c["close"] for c in candles_1d]
+            ema20_d  = calc_ema(closes_1d, 20)[-1]  if len(closes_1d)>=20  else 0
+            ema50_d  = calc_ema(closes_1d, 50)[-1]  if len(closes_1d)>=50  else 0
+            ema200_d = calc_ema(closes_1d, 200)[-1] if len(closes_1d)>=200 else 0
+            rsi_1d   = calc_rsi(closes_1d, 14)      if len(closes_1d)>=15  else 50.0
+
+            vol_30d = sum(c["vol"] for c in candles_1d[-30:])/30 if len(candles_1d)>=30 else 0
+            vol_7d  = sum(c["vol"] for c in candles_1d[-7:]) /7  if len(candles_1d)>=7  else 0
+            vol_growing = vol_7d > vol_30d * 1.2
+
+            buy_lo  = atl * 1.05 if atl > 0 else (zone_90d or price * 0.8)
+            buy_hi  = (zone_90d * 1.10) if zone_90d > 0 else price * 0.9
+            sell_t  = ath * 0.85 if ath > 0 else price * 2.0
+            from_atl = ((price-atl)/atl*100) if atl>0 else 0
+            from_ath = ((price-ath)/ath*100) if ath>0 else 0
+            to_ath   = ((ath-price)/price*100) if ath>price>0 else 0
+
+            ch1h  = q.get("percent_change_1h",  0) or 0
+            ch24h = q.get("percent_change_24h", 0) or 0
+            ch7d  = q.get("percent_change_7d",  0) or 0
+            ch30d = q.get("percent_change_30d", 0) or 0
+            ch90d = q.get("percent_change_90d", 0) or 0
+            vol24 = q.get("volume_24h", 0) or 0
+            mcap  = q.get("market_cap", 0) or 0
+            rank  = coin.get("cmc_rank", 999)
+            vol_str  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else (f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"${vol24/1e3:.0f}K")
+            mcap_str = fm(mcap) if mcap>0 else "—"
+
+            def ri(v): return "🟢" if v<30 else ("🔴" if v>70 else "🔵")
+
+            lines = [
+                f"💎 *{sym}USDT — СПОТ РАЗБОР*",
+                f"🕐 {now_utc3()}",
+                f"📡 Аналитика BEST TRADE  |  Rank #{rank}",
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "💰 *ЦЕНЫ И ИСТОРИЯ*",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                f"📍 Текущая:  `{fp(price)}`",
+            ]
+            if ath>0: lines += [f"🔺 ATH (макс): `{fp(ath)}`", f"   От ATH: `{from_ath:.1f}%`  |  До ATH: `+{to_ath:.0f}%`"]
+            if atl>0: lines += [f"🔻 ATL (мин):  `{fp(atl)}`", f"   От ATL: `+{from_atl:.0f}%`"]
+            lines += [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "📊 *ИЗМЕНЕНИЯ ЦЕНЫ*",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                f"1H:`{fc(ch1h)}`  24H:`{fc(ch24h)}`  7D:`{fc(ch7d)}`",
+                f"30D:`{fc(ch30d)}`  90D:`{fc(ch90d)}`",
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "📈 *EMA (ДНЕВНОЙ ТФ)*",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+            ]
+            if ema20_d:  lines.append(f"EMA20D:  `{fp(ema20_d)}`  {'✅' if price>ema20_d else '❌'}")
+            if ema50_d:  lines.append(f"EMA50D:  `{fp(ema50_d)}`  {'✅' if price>ema50_d else '❌'}")
+            if ema200_d: lines.append(f"EMA200D: `{fp(ema200_d)}`  {'✅ бычий тренд!' if price>ema200_d else '❌ медвежий'}")
+            lines.append(f"RSI(1D): {ri(rsi_1d)}`{rsi_1d:.1f}` {'— ЗОНА ПОКУПКИ!' if rsi_1d<30 else ('— перекуплен' if rsi_1d>70 else '')}")
+            lines += [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "🧠 *ЗОНЫ НАКОПЛЕНИЯ*",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+            ]
+            if zone_30d: lines.append(f"Мин 30д: `{fp(zone_30d)}`  {'⚡️ В ЗОНЕ!' if price<=zone_30d*1.05 else ''}")
+            if zone_60d: lines.append(f"Мин 60д: `{fp(zone_60d)}`  {'⚡️ В ЗОНЕ!' if price<=zone_60d*1.05 else ''}")
+            if zone_90d: lines.append(f"Мин 90д: `{fp(zone_90d)}`  {'⚡️ В ЗОНЕ!' if price<=zone_90d*1.05 else ''}")
+            smc = [f for f in a.get("smc_factors",[]) if "BB" not in f]
+            if smc: lines.append(f"SMC: `{'  •  '.join(smc[:4])}`")
+            lines += [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "🎯 *ТОЧКИ ВХОДА И ВЫХОДА*",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                f"🟢 Зона покупки: `{fp(buy_lo)}` — `{fp(buy_hi)}`",
+                f"   {'⚡️ ЦЕНА В ЗОНЕ ПОКУПКИ!' if buy_lo<=price<=buy_hi*1.1 else ('📍 Ждём снижения' if price>buy_hi else '✅ Ниже зоны — вход!')}",
+                f"🔴 Цель продажи: `{fp(sell_t)}`  (`+{(sell_t-price)/price*100:.0f}%`)",
+                f"📦 Объём 24H: `{vol_str}`  |  MCap: `{mcap_str}`",
+                f"Объём тренд: {'📈 Растёт — накопление!' if vol_growing else '📉 Снижается'}",
+            ]
+            if extras:
+                fr = extras.get("funding",{}); oi = extras.get("oi",{})
+                if fr.get("ok"):
+                    lines += ["","⚡️ *Фандинг (фон):*", f"`{fr['rate']:+.4f}%`  {fr['signal']}"]
+                if oi.get("ok") and oi.get("oi",0)>0:
+                    lines.append(f"OI: `{oi.get('change',0):+.1f}%`  {oi['signal']}")
+
+            spot_score = sum([rsi_1d<35, ch90d<-50, ch7d>0, vol_growing, buy_lo<=price<=buy_hi*1.1, bool(a.get("smc_smart_accum"))])
+            if spot_score>=5: v="🔥 ОТЛИЧНАЯ возможность для спот-покупки — DCA вход"; ve="🔥"
+            elif spot_score>=3: v="✅ Хорошая зона накопления"; ve="✅"
+            elif spot_score>=2: v="🟡 Ждать более низких цен"; ve="🟡"
+            else: v="⚠️ Рано входить — возможно дальнейшее падение"; ve="⚠️"
+
+            lines += [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "🏁 *СПОТ ВЕРДИКТ*",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                f"{ve} *{v}*",
+                "",
+                "💡 *Стратегия DCA (3 части):*",
+                f"  1й вход: `{fp(buy_hi)}`  — 30% позиции",
+                f"  2й вход: `{fp(buy_lo*1.02)}`  — 40% позиции",
+                f"  3й вход: `{fp(atl*1.02) if atl>0 else fp(buy_lo)}`  — 30% у ATL",
+                f"  🎯 Цель:  `{fp(sell_t)}`",
+                "",
+                "⚠️ Спот: SL необязателен. Позиция: 5-10% портфеля",
+                f"#{sym}USDT  #СПОТТРЕЙДИНГ",
+            ]
+
             TOP_SPOT_SIGNALS[sym] = {
-                "time": datetime.now(TZ),
-                "entry": a["price"],
-                "status": "active",
+                "time": datetime.now(TZ), "entry": price,
+                "buy_zone_lo": buy_lo, "buy_zone_hi": buy_hi,
+                "atl": atl, "sell_target": sell_t, "status": "watching",
             }
+
+            await prog_msg.delete()
+            await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, "\n".join(lines))
             await asyncio.sleep(2.0)
         except Exception as e:
             log.error(f"top_spot {sym}: {e}")
