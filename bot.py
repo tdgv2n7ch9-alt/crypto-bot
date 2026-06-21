@@ -1476,8 +1476,8 @@ def analyze_market(btc, eth, gm, coins):
 
 def build_overview_text(ms: dict) -> str:
     sup = ms["btc_sup"]; res = ms["btc_res"]
-    s_line = f"  └ 🟢 Поддержка: ${sup['level']:,} ({sup['label']}) — {sup['dist']:.1f}% ниже" if sup else ""
-    r_line = f"  └ 🔴 Сопротивление: ${res['level']:,} ({res['label']}) — {res['dist']:.1f}% выше" if res else ""
+    s_line = f"  🟢 Поддержка: ${sup['level']:,} ({sup['label']}) — {sup['dist']:.1f}% ниже" if sup else ""
+    r_line = f"  🔴 Сопротивление: ${res['level']:,} ({res['label']}) — {res['dist']:.1f}% выше" if res else ""
 
     long_lines  = []
     short_lines = []
@@ -1488,42 +1488,42 @@ def build_overview_text(ms: dict) -> str:
         sym = c["symbol"]; ch = a["ch24h"]
         short_lines.append(f"  {i}. 📉 *{sym}*  ${fp(a['price'])}  {fc(ch)}  RSI {a['rsi_4h']:.0f}")
 
-    return "\n".join([
+    lines = [
         "🌍 *ОБЗОР РЫНКА — BEST TRADE*",
         f"🕐 {now_utc3()}",
         "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        f"{trend_arrow(ms['btc_ch24h'])} *BTC*  ${ms['btc_price']:,.0f}  ({fc(ms['btc_ch24h'])})",
-        s_line, r_line,
+        f"{trend_arrow(ms['btc_ch24h'])} *Bitcoin (BTC)*  ${ms['btc_price']:,.0f}",
+        f"  24ч: {fc(ms['btc_ch24h'])}",
+    ]
+    if s_line: lines.append(s_line)
+    if r_line: lines.append(r_line)
+    lines += [
         "",
-        f"{trend_arrow(ms['eth_ch24h'])} *ETH*  ${ms['eth_price']:,.0f}  ({fc(ms['eth_ch24h'])})",
+        f"{trend_arrow(ms['eth_ch24h'])} *Ethereum (ETH)*  ${ms['eth_price']:,.0f}",
+        f"  24ч: {fc(ms['eth_ch24h'])}",
         "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "📊 *ДОМИНАЦИЯ*",
-        f"  BTC.D *{ms['btc_dom']:.2f}%*  |  ETH.D {ms['eth_dom']:.2f}%  |  Others {ms['others_dom']:.2f}%",
+        f"📊 *Доминация*",
+        f"  BTC *{ms['btc_dom']:.2f}%*  ·  ETH {ms['eth_dom']:.2f}%  ·  Others {ms['others_dom']:.2f}%",
         f"  {ms['dom_signal']}",
-        f"  {ms['others_signal']}",
         "",
-        f"━━━━━━━━━━━━━━━━━━━━━━",
-        f"{trend_arrow(ms['mcap_ch'])} *TOTAL*  {fm(ms['total_mcap'])}  ({fc(ms['mcap_ch'])} 24ч)",
-        f"  {ms['total_signal']}",
+        f"{trend_arrow(ms['mcap_ch'])} *Total Market Cap*  {fm(ms['total_mcap'])}",
+        f"  {fc(ms['mcap_ch'])} за 24ч  ·  {ms['total_signal']}",
         "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        f"🧭 *Настроение:* {ms['sentiment']}",
+        f"🧭 *Настроение рынка:* {ms['sentiment']}",
         f"  Растут {ms['sentiment_pct']:.0f}% монет из топ-500",
         "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "🚀 *ТОП ЛОНГИ* (топ-500)",
-    ] + (long_lines if long_lines else ["  Нет сигналов"]) + [
+        "🚀 *Топ лонги:*",
+    ]
+    lines += long_lines if long_lines else ["  Нет сигналов"]
+    lines += ["", "📉 *Топ шорты:*"]
+    lines += short_lines if short_lines else ["  Нет сигналов"]
+    lines += [
         "",
-        "📉 *ТОП ШОРТЫ* (топ-500)",
-    ] + (short_lines if short_lines else ["  Нет сигналов"]) + [
+        f"🎯 *Вердикт:* {ms['verdict']}",
         "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        f"🎯 *ВЕРДИКТ:* {ms['verdict']}",
-        "",
-        "⚠️ Риск: *2% депозита*  |  SL обязателен",
-    ])
+        "⚠️ Риск: *2% депозита*  ·  SL обязателен",
+    ]
+    return "\n".join(lines)
 
 def overview_kb():
     return InlineKeyboardMarkup([
@@ -1675,11 +1675,11 @@ def back_kb():
     ]])
 
 async def send_coin(bot, chat_id, symbol, slug, a, text):
-    # Одна кнопка как в примере
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 Открыть график на TradingView", url=tv_link(symbol))],
-        [InlineKeyboardButton("🔄 Обновить", callback_data=f"coin_{symbol}"),
-         InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
+        [InlineKeyboardButton("📈 TradingView",    url=tv_link(symbol)),
+         InlineKeyboardButton("📊 CoinMarketCap",  url=cmc_link(slug))],
+        [InlineKeyboardButton("🔄 Обновить",       callback_data=f"coin_{symbol}"),
+         InlineKeyboardButton("🏠 Меню",           callback_data="show_menu")],
     ])
 
     # Если текст уже содержит Supertrend — используем как есть
@@ -2068,12 +2068,107 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔄 Обновить",     callback_data="top_trades"),
              InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
         ])
-        # Журнал алертов — как в оригинальном формате
-        text = build_game_digest()
-        full_text = f"🔥 *BEST TRADE — Монеты в игре*\n🕐 {now_utc3()}\n\n" + text
+
+        lines = [f"🔥 *BEST TRADE — TOP Активные сделки*", f"🕐 {now_utc3()}", ""]
+        has_signals = False
+
+        # ── ЛОНГИ ──
+        active_l = {s: v for s, v in TOP_LONG_SIGNALS.items() if v.get("status") != "done"}
+        if active_l:
+            has_signals = True
+            lines.append("🟢 *ЛОНГИ:*")
+            lines.append("")
+            for sym, v in active_l.items():
+                try:
+                    stats = get_binance_24h(sym)
+                    cur   = stats.get("last", v["entry"]) if stats else v["entry"]
+                    if cur == 0: cur = v["entry"]
+                except: cur = v["entry"]
+
+                entry = v["entry"]
+                tp1   = v.get("tp1", entry * 1.02)
+                tp2   = v.get("tp2", entry * 1.04)
+                tp3   = v.get("tp3", entry * 1.08)
+                sl    = v.get("sl",  entry * 0.85)
+                move  = (cur - entry) / entry * 100 if entry > 0 else 0
+                t     = v["time"].strftime("%d.%m %H:%M")
+                tv    = tv_link(sym)
+
+                # Статус
+                dist_pct = (entry - cur) / entry * 100 if cur < entry else 0
+                if cur >= tp3:             status = "🏆 TP3 достигнут!"
+                elif cur >= tp2:           status = "✅✅ TP2 достигнут!"
+                elif cur >= tp1:           status = "✅ TP1 — двигаем стоп"
+                elif cur > entry * 1.005:  status = "📈 Отрабатывает"
+                elif dist_pct <= 2:        status = f"⚡️ До входа {dist_pct:.1f}% — СКОРО!"
+                elif cur <= sl * 1.01:     status = "⚠️ Близко к SL!"
+                else:                      status = f"⏳ До входа {dist_pct:.1f}%"
+
+                lines += [
+                    f"[{sym}USDT]({tv})",
+                    f"💵 Вход: `{fp(entry)}`  ·  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
+                    f"🎯 TP1: `{fp(tp1)}`  TP2: `{fp(tp2)}`  TP3: `{fp(tp3)}`",
+                    f"🛑 SL: `{fp(sl)}`",
+                    f"{status}  ⏰ {t}",
+                    "",
+                ]
+
+        # ── ШОРТЫ ──
+        active_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if v.get("status") != "done"}
+        if active_s:
+            has_signals = True
+            lines.append("🔴 *ШОРТЫ:*")
+            lines.append("")
+            for sym, v in active_s.items():
+                try:
+                    stats = get_binance_24h(sym)
+                    cur   = stats.get("last", v["entry"]) if stats else v["entry"]
+                    if cur == 0: cur = v["entry"]
+                except: cur = v["entry"]
+
+                entry = v["entry"]
+                tp1   = v.get("tp1", entry * 0.98)
+                tp2   = v.get("tp2", entry * 0.96)
+                tp3   = v.get("tp3", entry * 0.92)
+                sl    = v.get("sl",  entry * 1.15)
+                move  = (entry - cur) / entry * 100 if entry > 0 else 0
+                t     = v["time"].strftime("%d.%m %H:%M")
+                tv    = tv_link(sym)
+
+                dist_pct = (cur - entry) / entry * 100 if cur > entry else 0
+                if cur <= tp3:             status = "🏆 TP3 достигнут!"
+                elif cur <= tp2:           status = "✅✅ TP2 достигнут!"
+                elif cur <= tp1:           status = "✅ TP1 — двигаем стоп"
+                elif cur < entry * 0.995:  status = "📉 Отрабатывает"
+                elif dist_pct <= 2:        status = f"⚡️ До входа {dist_pct:.1f}% — СКОРО!"
+                elif cur >= sl * 0.99:     status = "⚠️ Близко к SL!"
+                else:                      status = f"⏳ До входа {dist_pct:.1f}%"
+
+                lines += [
+                    f"[{sym}USDT]({tv})",
+                    f"💵 Вход: `{fp(entry)}`  ·  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
+                    f"🎯 TP1: `{fp(tp1)}`  TP2: `{fp(tp2)}`  TP3: `{fp(tp3)}`",
+                    f"🛑 SL: `{fp(sl)}`",
+                    f"{status}  ⏰ {t}",
+                    "",
+                ]
+
+        if not has_signals:
+            lines += [
+                "📭 *Активных сделок нет*",
+                "",
+                "Открой позиции через:",
+                "🟢 ТОП ЛОНГ  ·  🔴 ТОП ШОРТ",
+                "",
+                "После открытия они появятся здесь",
+                "с мониторингом и алертами.",
+            ]
+
         try:
-            await q.edit_message_text(full_text, parse_mode="Markdown",
-                                      reply_markup=nav, disable_web_page_preview=False)
+            await q.edit_message_text(
+                "\n".join(lines), parse_mode="Markdown",
+                reply_markup=nav, disable_web_page_preview=False
+            )
         except: await q.answer("Обновлено ✅")
 
     elif data.startswith("tp_") or data.startswith("sl_"):
@@ -2095,20 +2190,21 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("full_"):
         symbol = data[5:]
-        await q.edit_message_text(f"🔍 Обновляю /full {symbol}...", parse_mode="Markdown")
-        coins = get_top500()
-        coin  = next((c for c in coins if c["symbol"] == symbol), None)
-        if not coin: await q.edit_message_text("❌ Не найдено"); return
-        slug  = coin.get("slug", symbol.lower())
-        a     = real_full_analysis(coin)
-        stats = get_binance_24h(symbol)
-        text  = _build_signal_post(symbol, a, stats, mode="long" if a["is_long"] else "short")
+        await q.edit_message_text(f"🔍 Полный анализ *{symbol}*...", parse_mode="Markdown")
+        # Вызываем полный анализ через FakeUpdate
+        class FakeMsg:
+            chat_id = q.message.chat_id
+            async def reply_text(self, text, **kwargs):
+                return await ctx.bot.send_message(q.message.chat_id, text, **kwargs)
+        class FakeUpdate:
+            effective_chat = q.message.chat
+            message = FakeMsg()
+        class FakeCtx:
+            args = [symbol]
+            bot  = ctx.bot
         try: await q.message.delete()
         except: pass
-        await send_coin(ctx.bot, q.message.chat_id, symbol, slug, a, text)
-        await ctx.bot.send_message(q.message.chat_id,
-            "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-            parse_mode="Markdown", reply_markup=main_kb())
+        await cmd_full_v2(FakeUpdate(), FakeCtx())
 
     elif data == "market_overview":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
@@ -3152,13 +3248,6 @@ def _signal_kb(symbol: str, msg_id: int = 0, chat_id: int = 0, mode: str = "long
 
 def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
                        mode: str = "long") -> str:
-    """
-    Формат точно как в примере NOMUSDT:
-    SYMBOLUSDT 🟢 LONG
-    💵 Точка входа: X.XXX
-    🎯 Тейк-профит 1: X.XXX (+X.XX%)
-    ...
-    """
     is_long = mode in ("long", "spot")
     price   = a["price"]
 
@@ -3176,10 +3265,15 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
             f"*{symbol}USDT* {side_e} *{side_t}*",
             "",
             f"💵 *Точка входа:* `{fp(price)}`",
+            "",
             f"🎯 *Тейк-профит 1:* `{fp(a['tp1'])}` *({pct(a['tp1'])})*",
+            "",
             f"🎯 *Тейк-профит 2:* `{fp(a['tp2'])}` *({pct(a['tp2'])})*",
+            "",
             f"🎯 *Тейк-профит 3:* `{fp(a['tp3'])}` *({pct(a['tp3'])})*",
+            "",
             f"🔴 *Стоп лосс:* `{fp(a['sl'])}` *({pct(a['sl'])})*",
+            "",
             f"📍 *{swing_lbl}:* `{fp(a['swing'])}`",
         ]
     else:
@@ -3187,7 +3281,9 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
             f"*{symbol}USDT* 💎 *СПОТ*",
             "",
             f"💵 *Зона входа:* `{fp(price)}`",
+            "",
             f"🎯 *Цель:* `{fp(a['tp2'])}` *({pct(a['tp2'])})*",
+            "",
             f"🛑 *Стоп (опцион):* `{fp(a['sl'])}`",
         ]
 
