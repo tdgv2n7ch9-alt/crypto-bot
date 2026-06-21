@@ -1490,13 +1490,16 @@ def build_overview_text(ms: dict) -> str:
 
 def overview_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("₿ BTC",    url=tv_link("BTC")),
-         InlineKeyboardButton("Ξ ETH",    url=tv_link("ETH"))],
-        [InlineKeyboardButton("BTC.D",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
-         InlineKeyboardButton("TOTAL",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL"),
-         InlineKeyboardButton("OTHERS.D", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:OTHERS.D")],
-        [InlineKeyboardButton("🔄 Обновить", callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы", callback_data="signals")],
+        [InlineKeyboardButton("₿ BTC на TradingView", url=tv_link("BTC")),
+         InlineKeyboardButton("Ξ ETH на TradingView", url=tv_link("ETH"))],
+        [InlineKeyboardButton("📊 BTC Dominance", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
+         InlineKeyboardButton("📈 TOTAL Market",  url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
+        [InlineKeyboardButton("🔄 Обновить обзор",   callback_data="market_overview"),
+         InlineKeyboardButton("🏠 Главное меню",     callback_data="show_menu")],
+        [InlineKeyboardButton("💎 ТОП СПОТ",         callback_data="top_spot"),
+         InlineKeyboardButton("🟢 ТОП ЛОНГ",         callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",         callback_data="top_short"),
+         InlineKeyboardButton("🔬 Полный анализ",    callback_data="menu_full")],
     ])
 
 # ═══════════════════════════════════════════
@@ -1621,15 +1624,12 @@ async def check_entry_zones(bot, chat_ids, coins):
 def main_kb():
     """Главное меню BEST TRADE"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 ТОП СПОТ",          callback_data="top_spot"),
-         InlineKeyboardButton("🟢 ТОП ЛОНГ",          callback_data="top_long")],
-        [InlineKeyboardButton("🔴 ТОП ШОРТ",          callback_data="top_short"),
+        [InlineKeyboardButton("💎 ТОП СПОТ",           callback_data="top_spot"),
+         InlineKeyboardButton("🟢 ТОП ЛОНГ",           callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",           callback_data="top_short"),
          InlineKeyboardButton("🔬 Полный анализ /full", callback_data="menu_full")],
-        [InlineKeyboardButton("🌍 Обзор рынка",        callback_data="market_overview"),
-         InlineKeyboardButton("🚀 Ракеты",             callback_data="rockets")],
-        [InlineKeyboardButton("📊 Сигналы",            callback_data="signals"),
-         InlineKeyboardButton("👁 Вотчлист",           callback_data="watchlist")],
-        [InlineKeyboardButton("🔥 TOP Активные сделки", callback_data="top_trades")],
+        [InlineKeyboardButton("🌍 Обзор рынка",         callback_data="market_overview"),
+         InlineKeyboardButton("🔥 TOP Активные сделки", callback_data="top_trades")],
     ])
 
 def back_kb():
@@ -2007,8 +2007,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             effective_chat = q.message.chat
             message        = q.message
         await cmd_top_short(FakeUpdate(), ctx)
-
-    elif data == "menu_full":
         await q.edit_message_text(
             "🔬 *Полный анализ монеты*\n\n"
             "Напиши в чат:\n"
@@ -3262,76 +3260,87 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/long — Топ ЛОНГ: лучшие фьючерс-лонги с отслеживанием"""
-    msg = await update.message.reply_text("⏳ Ищу лучшие лонг-сетапы (~40 сек)...")
+    """/long — ТОП ЛОНГ: ракеты + лонг-сигналы, отсортированные по Rocket Score"""
+    msg = await update.message.reply_text("🟢 Ищу лучшие лонг-сетапы... ~40 сек")
     coins = get_top500()
     if not coins:
         await msg.edit_text("❌ Нет данных"); return
 
-    # Фильтруем кандидатов (быстро, без Binance)
+    # Фильтр кандидатов по CMC данным (быстро)
     pre = []
     for coin in coins[:300]:
         q = coin["quote"]["USDT"]
-        vol   = q.get("volume_24h",  0) or 0
-        mcap  = q.get("market_cap",  0) or 0
-        ch24h = q.get("percent_change_24h", 0) or 0
-        ch7d  = q.get("percent_change_7d",  0) or 0
+        vol      = q.get("volume_24h",  0) or 0
+        mcap     = q.get("market_cap",  0) or 0
+        ch24h    = q.get("percent_change_24h", 0) or 0
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        if vol >= 5_000_000 and vol_ratio < 50 and ch24h > -5 and not (vol_ratio > 50):
+        if vol >= 3_000_000 and vol_ratio < 50 and ch24h > -8:
             pre.append(coin)
 
-    # Реальный ТА для топ-50 кандидатов
+    # Реальный ТА из Binance свечей для топ кандидатов
     scored = []
-    for coin in pre[:50]:
+    for coin in pre[:60]:
         try:
             a = real_full_analysis(coin)
-            if a["is_long"] and not a.get("suspicious") and a["rocket"] >= 55:
+            if a["is_long"] and not a.get("suspicious") and a["rocket"] >= 50:
                 scored.append((coin, a))
         except: pass
 
+    # Сортируем по Rocket Score (ракеты автоматически наверху)
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
-    top_long = scored[:5]
+    top_long = scored[:7]
 
     nav = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Обновить",     callback_data="top_long"),
          InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",    callback_data="top_short"),
+         InlineKeyboardButton("💎 ТОП СПОТ",    callback_data="top_spot")],
     ])
 
-    # Список сначала
-    if top_long:
-        list_lines = [
-            "🟢 *BEST TRADE — ТОП ЛОНГ*",
-            f"🕐 {now_utc3()}",
-            f"📡 Аналитика BEST TRADE",
-            "",
-        ]
-        for i, (c, a) in enumerate(top_long, 1):
-            sym = c["symbol"]
-            tv  = tv_link(sym)
-            list_lines.append(
-                f"{i}. [{sym}USDT]({tv})  `{fp(a['price'])}`  Score`{a['rocket']}`  RSI`{a['rsi_4h']:.0f}`"
-            )
-        list_lines += ["", "📊 Подробные сетапы ниже ↓"]
-        await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
-                            reply_markup=nav, disable_web_page_preview=False)
-    else:
-        await msg.edit_text("😔 Нет сильных лонг-сетапов сейчас\n\nПовторите позже или снизьте фильтры")
+    if not top_long:
+        await msg.edit_text(
+            "😔 *Нет лонг-сетапов сейчас*\n\n"
+            "Рынок нейтральный или медвежий.\n"
+            "Попробуй ТОП ШОРТ или вернись позже.",
+            parse_mode="Markdown", reply_markup=nav
+        )
         return
 
+    # Сводный список с ссылками
+    list_lines = [
+        "🟢 *BEST TRADE — ТОП ЛОНГ*",
+        f"🕐 {now_utc3()}",
+        f"📡 Аналитика BEST TRADE",
+        "",
+    ]
+    for i, (c, a) in enumerate(top_long, 1):
+        sym   = c["symbol"]
+        tv    = tv_link(sym)
+        rocket_icon = "🚀🔥" if a["rocket"] >= 80 else ("🚀" if a["rocket"] >= 68 else "✅")
+        list_lines.append(
+            f"{rocket_icon} {i}. [{sym}USDT]({tv})\n"
+            f"   💰`{fp(a['price'])}`  Score`{a['rocket']}`  RSI`{a['rsi_4h']:.0f}`"
+            f"  {'EMA200✅' if a.get('above_ema200') else ''}"
+        )
+    list_lines += ["", "📊 Подробные сетапы ниже ↓"]
+
+    await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
+                        reply_markup=nav, disable_web_page_preview=False)
+
+    # Отправляем каждый сетап с графиком
     for coin, a in top_long:
         sym  = coin["symbol"]
         slug = coin.get("slug", sym.lower())
         try:
             stats = get_binance_24h(sym)
             text  = _build_signal_post(sym, a, stats, mode="long")
-            kb    = _signal_kb(sym, mode="long")
             await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
             TOP_LONG_SIGNALS[sym] = {
-                "time":   datetime.now(TZ),
-                "entry":  a["price"],
-                "tp1":    a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
-                "sl":     a["sl"],  "rr":  a["rr"],
-                "status": "active",
+                "time":    datetime.now(TZ),
+                "entry":   a["price"],
+                "tp1": a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
+                "sl":  a["sl"], "rr": a["rr"],
+                "status":  "active",
                 "chat_id": update.effective_chat.id,
             }
             await asyncio.sleep(2.0)
@@ -3346,8 +3355,8 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/short — Топ ШОРТ: лучшие шорт-сетапы с отслеживанием"""
-    msg = await update.message.reply_text("⏳ Ищу лучшие шорт-сетапы (~40 сек)...")
+    """/short — ТОП ШОРТ: ракеты SHORT + шорт-сигналы, по Rocket Score"""
+    msg = await update.message.reply_text("🔴 Ищу лучшие шорт-сетапы... ~40 сек")
     coins = get_top500()
     if not coins:
         await msg.edit_text("❌ Нет данных"); return
@@ -3355,15 +3364,15 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pre = []
     for coin in coins[:300]:
         q = coin["quote"]["USDT"]
-        vol   = q.get("volume_24h",  0) or 0
-        mcap  = q.get("market_cap",  0) or 0
-        ch24h = q.get("percent_change_24h", 0) or 0
+        vol      = q.get("volume_24h",  0) or 0
+        mcap     = q.get("market_cap",  0) or 0
+        ch24h    = q.get("percent_change_24h", 0) or 0
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        if vol >= 5_000_000 and vol_ratio < 50 and ch24h < 5:
+        if vol >= 3_000_000 and vol_ratio < 50 and ch24h < 8:
             pre.append(coin)
 
     scored = []
-    for coin in pre[:50]:
+    for coin in pre[:60]:
         try:
             a = real_full_analysis(coin)
             if not a["is_long"] and not a.get("suspicious") and a["rocket"] >= 50:
@@ -3371,32 +3380,43 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except: pass
 
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
-    top_short = scored[:5]
+    top_short = scored[:7]
 
     nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Обновить",     callback_data="top_short"),
+        [InlineKeyboardButton("🔄 Обновить",    callback_data="top_short"),
          InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
+        [InlineKeyboardButton("🟢 ТОП ЛОНГ",   callback_data="top_long"),
+         InlineKeyboardButton("💎 ТОП СПОТ",   callback_data="top_spot")],
     ])
 
-    if top_short:
-        list_lines = [
-            "🔴 *BEST TRADE — ТОП ШОРТ*",
-            f"🕐 {now_utc3()}",
-            f"📡 Аналитика BEST TRADE",
-            "",
-        ]
-        for i, (c, a) in enumerate(top_short, 1):
-            sym = c["symbol"]
-            tv  = tv_link(sym)
-            list_lines.append(
-                f"{i}. [{sym}USDT]({tv})  `{fp(a['price'])}`  Score`{a['rocket']}`  RSI`{a['rsi_4h']:.0f}`"
-            )
-        list_lines += ["", "📊 Подробные сетапы ниже ↓"]
-        await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
-                            reply_markup=nav, disable_web_page_preview=False)
-    else:
-        await msg.edit_text("😔 Нет сильных шорт-сетапов сейчас")
+    if not top_short:
+        await msg.edit_text(
+            "😔 *Нет шорт-сетапов сейчас*\n\n"
+            "Рынок нейтральный или бычий.\n"
+            "Попробуй ТОП ЛОНГ или вернись позже.",
+            parse_mode="Markdown", reply_markup=nav
+        )
         return
+
+    list_lines = [
+        "🔴 *BEST TRADE — ТОП ШОРТ*",
+        f"🕐 {now_utc3()}",
+        f"📡 Аналитика BEST TRADE",
+        "",
+    ]
+    for i, (c, a) in enumerate(top_short, 1):
+        sym  = c["symbol"]
+        tv   = tv_link(sym)
+        rocket_icon = "🚀🔥" if a["rocket"] >= 80 else ("🚀" if a["rocket"] >= 68 else "✅")
+        list_lines.append(
+            f"{rocket_icon} {i}. [{sym}USDT]({tv})\n"
+            f"   💰`{fp(a['price'])}`  Score`{a['rocket']}`  RSI`{a['rsi_4h']:.0f}`"
+            f"  {'EMA200❌' if not a.get('above_ema200') else ''}"
+        )
+    list_lines += ["", "📊 Подробные сетапы ниже ↓"]
+
+    await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
+                        reply_markup=nav, disable_web_page_preview=False)
 
     for coin, a in top_short:
         sym  = coin["symbol"]
@@ -3406,11 +3426,11 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text  = _build_signal_post(sym, a, stats, mode="short")
             await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
             TOP_SHORT_SIGNALS[sym] = {
-                "time":   datetime.now(TZ),
-                "entry":  a["price"],
-                "tp1":    a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
-                "sl":     a["sl"],  "rr":  a["rr"],
-                "status": "active",
+                "time":    datetime.now(TZ),
+                "entry":   a["price"],
+                "tp1": a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
+                "sl":  a["sl"], "rr": a["rr"],
+                "status":  "active",
                 "chat_id": update.effective_chat.id,
             }
             await asyncio.sleep(2.0)
