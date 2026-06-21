@@ -881,17 +881,8 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
             log.error(f"Chart candle fetch {sym_clean}{ticker_suffix}: {e}")
 
     if not candles or len(candles) < 20:
-        log.warning(f"Chart FALLBACK synthetic for {symbol}")
-        p = price * 0.88
-        for _ in range(80):
-            ch = random.gauss(0.001, 0.012)
-            o = p; c_v = p * (1 + ch)
-            h = max(o, c_v) * (1 + abs(random.gauss(0, 0.005)))
-            l = min(o, c_v) * (1 - abs(random.gauss(0, 0.005)))
-            candles.append({"open": o, "high": h, "low": l, "close": c_v,
-                            "vol": random.uniform(1e5, 1e6), "time": None})
-            p = c_v
-        candles[-1]["close"] = price
+        log.warning(f"Chart NO DATA for {symbol} - returning None")
+        return None  # Не отправляем выдуманный график
 
     n_all      = len(candles)
     closes_all = [c["close"] for c in candles]
@@ -1708,9 +1699,13 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
     chart = None
     try:
         chart = generate_signal_chart(symbol, a, stats_24h)
-        log.info(f"Chart OK: {symbol} {chart.getbuffer().nbytes} bytes")
+        if chart is not None:
+            log.info(f"Chart OK: {symbol} {chart.getbuffer().nbytes} bytes")
+        else:
+            log.info(f"Chart skipped (no real data): {symbol}")
     except Exception as e:
         log.error(f"Chart FAILED {symbol}: {type(e).__name__}: {e}")
+        chart = None
 
     caption = text if len(text) <= 1024 else text[:1020] + "..."
 
@@ -2073,122 +2068,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔄 Обновить",     callback_data="top_trades"),
              InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
         ])
-
-        # Получаем текущие цены для проверки движения
-        lines = ["🔥 *BEST TRADE — TOP Активные сделки*", f"🕐 {now_utc3()}", ""]
-        has_any = False
-
-        # ЛОНГИ — показываем только если цена ВЫШЕ зоны входа (начали отрабатывать)
-        active_longs = []
-        for sym, v in TOP_LONG_SIGNALS.items():
-            if v.get("status") == "done": continue
-            try:
-                stats = get_binance_24h(sym)
-                cur_price = stats.get("high", v["entry"]) if stats else v["entry"]
-                entry = v["entry"]
-                move_pct = (cur_price - entry) / entry * 100 if entry > 0 else 0
-                tp1 = v.get("tp1", entry * 1.04)
-                tp2 = v.get("tp2", entry * 1.08)
-                sl  = v.get("sl",  entry * 0.85)
-                active_longs.append((sym, v, cur_price, move_pct, tp1, tp2, sl))
-            except:
-                active_longs.append((sym, v, v["entry"], 0, v.get("tp1",0), v.get("tp2",0), v.get("sl",0)))
-
-        if active_longs:
-            has_any = True
-            lines.append("🟢 *ЛОНГИ В РАБОТЕ:*\n")
-            for sym, v, cur, move, tp1, tp2, sl in active_longs:
-                tv    = tv_link(sym)
-                t     = v["time"].strftime("%d.%m %H:%M")
-                entry = v["entry"]
-                # Статус по движению
-                if cur >= tp2:
-                    status = "✅✅ TP2 достигнут!"
-                elif cur >= tp1:
-                    status = "✅ TP1 достигнут — двигаем стоп"
-                elif cur > entry * 1.01:
-                    status = "📈 Начала отработку"
-                elif cur < sl * 1.02:
-                    status = "⚠️ Близко к SL!"
-                else:
-                    status = "⏳ В зоне входа"
-                lines += [
-                    f"🟢 [{sym}USDT]({tv})",
-                    f"  💰 Вход: `{fp(entry)}`  →  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
-                    f"  🎯 TP1:`{fp(tp1)}`  TP2:`{fp(tp2)}`  SL:`{fp(sl)}`",
-                    f"  {status}  ⏰ {t}",
-                    "",
-                ]
-
-        # ШОРТЫ
-        active_shorts = []
-        for sym, v in TOP_SHORT_SIGNALS.items():
-            if v.get("status") == "done": continue
-            try:
-                stats = get_binance_24h(sym)
-                cur_price = stats.get("low", v["entry"]) if stats else v["entry"]
-                entry = v["entry"]
-                move_pct = (entry - cur_price) / entry * 100 if entry > 0 else 0
-                tp1 = v.get("tp1", entry * 0.96)
-                tp2 = v.get("tp2", entry * 0.92)
-                sl  = v.get("sl",  entry * 1.15)
-                active_shorts.append((sym, v, cur_price, move_pct, tp1, tp2, sl))
-            except:
-                active_shorts.append((sym, v, v["entry"], 0, v.get("tp1",0), v.get("tp2",0), v.get("sl",0)))
-
-        if active_shorts:
-            has_any = True
-            lines.append("🔴 *ШОРТЫ В РАБОТЕ:*\n")
-            for sym, v, cur, move, tp1, tp2, sl in active_shorts:
-                tv    = tv_link(sym)
-                t     = v["time"].strftime("%d.%m %H:%M")
-                entry = v["entry"]
-                if cur <= tp2:
-                    status = "✅✅ TP2 достигнут!"
-                elif cur <= tp1:
-                    status = "✅ TP1 достигнут — двигаем стоп"
-                elif cur < entry * 0.99:
-                    status = "📉 Начала отработку"
-                elif cur > sl * 0.98:
-                    status = "⚠️ Близко к SL!"
-                else:
-                    status = "⏳ В зоне входа"
-                lines += [
-                    f"🔴 [{sym}USDT]({tv})",
-                    f"  💰 Вход: `{fp(entry)}`  →  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
-                    f"  🎯 TP1:`{fp(tp1)}`  TP2:`{fp(tp2)}`  SL:`{fp(sl)}`",
-                    f"  {status}  ⏰ {t}",
-                    "",
-                ]
-
-        # СПОТ наблюдение
-        if TOP_SPOT_SIGNALS:
-            has_any = True
-            lines.append("💎 *СПОТ — НАБЛЮДЕНИЕ:*\n")
-            for sym, v in TOP_SPOT_SIGNALS.items():
-                tv    = tv_link(sym)
-                t     = v["time"].strftime("%d.%m %H:%M")
-                buy_lo = v.get("buy_zone_lo", v["entry"])
-                buy_hi = v.get("buy_zone_hi", v["entry"])
-                sell_t = v.get("sell_target",  0)
-                lines += [
-                    f"💎 [{sym}USDT]({tv})",
-                    f"  🟢 Зона: `{fp(buy_lo)}` — `{fp(buy_hi)}`",
-                    f"  🔴 Цель: `{fp(sell_t)}`  ⏰ {t}",
-                    "",
-                ]
-
-        if not has_any:
-            lines += [
-                "📭 *Активных сделок нет*\n",
-                "Нажми для открытия позиций:",
-                "• 💎 ТОП СПОТ — долгосрочные покупки",
-                "• 🟢 ТОП ЛОНГ — фьючерс лонг",
-                "• 🔴 ТОП ШОРТ — фьючерс шорт",
-            ]
-
+        # Журнал алертов — как в оригинальном формате
+        text = build_game_digest()
+        full_text = f"🔥 *BEST TRADE — Монеты в игре*\n🕐 {now_utc3()}\n\n" + text
         try:
-            await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
+            await q.edit_message_text(full_text, parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=False)
         except: await q.answer("Обновлено ✅")
 
@@ -3164,19 +3048,29 @@ def real_full_analysis(coin: dict) -> dict:
         sl_atr = price * 0.03
 
     if is_long:
-        tp1   = smart_round(price + tp_atr * 0.5)
-        tp2   = smart_round(price + tp_atr * 1.0)
-        tp3   = smart_round(price + tp_atr * 2.0)
-        sl    = smart_round(max(price - sl_atr * 1.5, support * 0.98))
-        swing = smart_round(support)
+        tp1   = smart_round(price * 1.02  if tp_atr < price*0.001 else price + tp_atr * 0.5)
+        tp2   = smart_round(price * 1.04  if tp_atr < price*0.001 else price + tp_atr * 1.0)
+        tp3   = smart_round(price * 1.08  if tp_atr < price*0.001 else price + tp_atr * 2.0)
+        _sl_atr = price - sl_atr * 1.5
+        _sl_sup = support * 0.98 if support > 0 else price * 0.85
+        sl    = smart_round(max(_sl_atr, _sl_sup) if _sl_atr > 0 else price * 0.85)
+        swing = smart_round(support if support > 0 else price * 0.92)
     else:
-        tp1   = smart_round(price - tp_atr * 0.5)
-        tp2   = smart_round(price - tp_atr * 1.0)
-        tp3   = smart_round(price - tp_atr * 2.0)
-        sl    = smart_round(min(price + sl_atr * 1.5, resistance * 1.02))
-        swing = smart_round(resistance)
+        tp1   = smart_round(price * 0.98  if tp_atr < price*0.001 else price - tp_atr * 0.5)
+        tp2   = smart_round(price * 0.96  if tp_atr < price*0.001 else price - tp_atr * 1.0)
+        tp3   = smart_round(price * 0.92  if tp_atr < price*0.001 else price - tp_atr * 2.0)
+        _sl_atr = price + sl_atr * 1.5
+        _sl_res = resistance * 1.02 if resistance > price else price * 1.15
+        sl    = smart_round(min(_sl_atr, _sl_res) if _sl_atr > price else price * 1.15)
+        swing = smart_round(resistance if resistance > price else price * 1.08)
 
-    rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
+    # Гарантируем что SL не равен нулю и не равен цене
+    if sl <= 0 or sl == price:
+        sl = smart_round(price * 0.85 if is_long else price * 1.15)
+    if swing <= 0 or swing == price:
+        swing = smart_round(price * 0.92 if is_long else price * 1.08)
+
+    rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 1.5
 
     # Labels
     if rocket >= 80:   rocket_label = "🚀🔥 ROCKET"
