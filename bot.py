@@ -1624,8 +1624,8 @@ def main_kb():
          InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
          InlineKeyboardButton("🚀 /5 Ракеты",  callback_data="rockets")],
         [InlineKeyboardButton("📊 /4 Топ",     callback_data="report"),
-         InlineKeyboardButton("⏱ 1ч",         callback_data="period_1h"),
-         InlineKeyboardButton("📅 24ч",        callback_data="period_24h")],
+         InlineKeyboardButton("🎯 /7 Precision", callback_data="precision"),
+         InlineKeyboardButton("🔥 /8 В игре",  callback_data="game")],
     ])
 
 async def send_coin(bot, chat_id, symbol, slug, a, text):
