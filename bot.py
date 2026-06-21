@@ -57,123 +57,93 @@ price_cache      = {}   # {symbol: [price1, price2, ...]} последние ц�
 alerted_zones    = {}   # {symbol: timestamp} чтобы не спамить
 pump_alerted     = {}   # {symbol: timestamp}
 
-# ── TOP — Активные сделки ──
-# {symbol: {"type": "long"/"short", "entry": float, "tp1/tp2/tp3": float, "sl": float,
-#           "time": datetime, "status": "waiting"/"active"/"done", "result": str}}
-top_trades: dict = {}   # активные и ожидающие
-top_done:   list = []   # завершённые (макс 30)
-
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")  # @channelname или -100xxx — задать в Railway env
-
-def top_add(symbol: str, direction: str, price: float,
-            tp1=None, tp2=None, tp3=None, sl=None,
-            source: str = "bot", note: str = ""):
-    """Добавляет или обновляет монету в TOP (ожидает входа или уже в позиции)"""
-    if symbol not in top_trades:
-        top_trades[symbol] = {
-            "direction": direction,   # "long" / "short"
-            "entry":     price,
-            "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl,
-            "time":   datetime.now(TZ),
-            "status": "waiting",      # waiting → active → done
-            "source": source,
-            "note":   note,
-            "result": None,
-            "entry_time": None,
-        }
-    # Очищаем старые завершённые (>72ч)
-    cutoff = datetime.now(TZ).timestamp() - 72 * 3600
-    to_del = [s for s, v in top_trades.items()
-              if v["status"] == "done" and v["time"].timestamp() < cutoff]
-    for s in to_del:
-        del top_trades[s]
-
-def top_activate(symbol: str, price: float):
-    """Цена зашла в зону — сделка стала активной"""
-    if symbol in top_trades and top_trades[symbol]["status"] == "waiting":
-        top_trades[symbol]["status"]     = "active"
-        top_trades[symbol]["entry"]      = price
-        top_trades[symbol]["entry_time"] = datetime.now(TZ)
-
-def top_close(symbol: str, result: str, exit_price: float = 0):
-    """Закрывает сделку (TP/SL/ручное)"""
-    if symbol in top_trades:
-        top_trades[symbol]["status"] = "done"
-        top_trades[symbol]["result"] = result
-        top_trades[symbol]["exit_price"] = exit_price
-        top_done.insert(0, {
-            "symbol": symbol,
-            "direction": top_trades[symbol]["direction"],
-            "result": result,
-            "exit_price": exit_price,
-            "time": datetime.now(TZ),
-        })
-        if len(top_done) > 30:
-            top_done.pop()
-
-def build_top_digest() -> str:
-    """Строит дайджест TOP — активные сделки"""
-    waiting = [(s, v) for s, v in top_trades.items() if v["status"] == "waiting"]
-    active  = [(s, v) for s, v in top_trades.items() if v["status"] == "active"]
-    waiting.sort(key=lambda x: x[1]["time"].timestamp(), reverse=True)
-    active.sort(key=lambda x: x[1]["time"].timestamp(), reverse=True)
-
-    lines = []
-
-    if active:
-        lines.append(f"⚡️ *В ПОЗИЦИИ — {len(active)} сделок*\n")
-        for sym, v in active:
-            d      = "🟢 LONG" if v["direction"] == "long" else "🔴 SHORT"
-            t      = v["entry_time"].strftime("%d.%m %H:%M") if v.get("entry_time") else "—"
-            tv     = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
-            lines.append(f"{d} [{sym}USDT]({tv})")
-            lines.append(f"  💰 Вход: `{fp(v['entry'])}`  ⏰ {t}")
-            if v.get("tp1"): lines.append(f"  🎯 TP1: `{fp(v['tp1'])}` · TP2: `{fp(v['tp2'])}` · TP3: `{fp(v['tp3'])}`")
-            if v.get("sl"):  lines.append(f"  🛑 SL: `{fp(v['sl'])}`")
-            lines.append("")
-    else:
-        lines.append("⚡️ *В ПОЗИЦИИ: 0*\n")
-
-    if waiting:
-        lines.append(f"⏳ *ЖДЁМ ВХОДА — {len(waiting)} монет*\n")
-        for sym, v in waiting:
-            d  = "🟢 LONG" if v["direction"] == "long" else "🔴 SHORT"
-            t  = v["time"].strftime("%d.%m %H:%M")
-            tv = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
-            lines.append(f"{d} [{sym}USDT]({tv})")
-            lines.append(f"  📊 Зона: `{fp(v['entry'])}`  ⏰ {t}")
-            if v.get("note"): lines.append(f"  💡 {v['note'][:50]}")
-            lines.append("")
-    else:
-        lines.append("⏳ *ЖДЁМ ВХОДА: 0*\n")
-
-    if top_done:
-        lines.append("✅ *ЗАКРЫТЫЕ СДЕЛКИ:*\n")
-        for d in top_done[:8]:
-            sym    = d["symbol"]
-            tv     = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
-            direct = "🟢" if d["direction"] == "long" else "🔴"
-            res    = d["result"]
-            t      = d["time"].strftime("%d.%m %H:%M")
-            emoji  = "✅" if "TP" in res or "профит" in res.lower() else "❌"
-            lines.append(f"{emoji} {direct} [{sym}USDT]({tv}) — {res}  ⏰ {t}")
-
-    return "\n".join(lines)
-
-# ── Обратная совместимость — старые функции ──
-def add_to_game(symbol: str, alert_type: str, price: float):
-    pass  # заменено top_add
-
-def mark_done(symbol: str, result: str = "выросла"):
-    top_close(symbol, result)
-
-# Алиас для старого build_game_digest
-active_game: dict = {}
-done_game:   list = []
+# ── ЖУРНАЛ АКТИВНЫХ АЛЕРТОВ (как "Монеты в игре") ──
+# {symbol: {"type": str, "time": datetime, "price": float, "status": "active"/"done"}}
+active_game: dict = {}   # {symbol: {"type", "time", "price", "status", "done_time"}}
+done_game:   list = []   # последние отработавшие (макс 20)
 MAX_GAME_HISTORY = 100
 
+def add_to_game(symbol: str, alert_type: str, price: float):
+    """Добавляет монету в журнал алертов"""
+    # Если уже есть — не перезаписываем (оставляем первое время)
+    if symbol not in active_game:
+        active_game[symbol] = {
+            "type":      alert_type,
+            "time":      datetime.now(TZ),
+            "price":     price,
+            "status":    "active",
+            "done_time": None,
+        }
+    # Чистим старые (>48ч активные)
+    cutoff = datetime.now(TZ).timestamp() - 48 * 3600
+    to_del = [s for s, v in active_game.items()
+              if v["time"].timestamp() < cutoff]
+    for s in to_del:
+        del active_game[s]
+
+def mark_done(symbol: str, result: str = "выросла"):
+    """Отмечает монету как отработавшую"""
+    if symbol in active_game:
+        active_game[symbol]["status"]    = "done"
+        active_game[symbol]["done_time"] = datetime.now(TZ)
+        active_game[symbol]["result"]    = result
+        # Добавляем в done_game список
+        done_game.insert(0, {
+            "symbol":    symbol,
+            "result":    result,
+            "done_time": datetime.now(TZ),
+        })
+        if len(done_game) > 20:
+            done_game.pop()
+
 def build_game_digest() -> str:
-    return build_top_digest()
+    """
+    Строит дайджест в формате VANGA:
+    • SYMBOLUSDT — 🚀 памп
+      ⏰ 21.06 16:19 UTC+3
+    """
+    # Активные — сортируем по времени (новые сверху)
+    actives = [(s, v) for s, v in active_game.items()
+               if v["status"] == "active"]
+    actives.sort(key=lambda x: x[1]["time"].timestamp(), reverse=True)
+
+    type_labels = {
+        "pump":        "🚀 памп",
+        "dump":        "💥 дамп",
+        "level":       "📍 коснулась уровня",
+        "watchlist":   "📍 коснулась уровня",
+        "supertrend":  "⚡️ смена тренда",
+        "precision":   "🎯 precision сетап",
+        "zone":        "📍 коснулась уровня",
+    }
+
+    lines = []
+    if actives:
+        lines.append(f"🔥 *Монет в игре: {len(actives)}*\n")
+        for sym, v in actives:
+            lbl      = type_labels.get(v["type"], v["type"])
+            t        = v["time"].strftime("%d.%m %H:%M")
+            tv_url   = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+            lines.append(f"• [{sym}USDT]({tv_url}) — {lbl}")
+            lines.append(f"  ⏰ {t} UTC+3")
+    else:
+        lines.append("🔥 *Монет в игре: 0*\n")
+        lines.append("_Алертов пока нет_")
+
+    # Отработавшие
+    if done_game:
+        lines.append("")
+        lines.append("✅ *Отработали:*")
+        for d in done_game[:10]:
+            sym    = d["symbol"]
+            result = d["result"]
+            t      = d["done_time"].strftime("%d.%m %H:%M")
+            tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+            emoji  = "📈" if "вырос" in result else ("📉" if "упал" in result else "✅")
+            lines.append(f"• [{sym}USDT]({tv_url}) — {emoji} {result}")
+            lines.append(f"  ⏰ {t} UTC+3")
+
+    return "\n".join(lines)
 
 # ═══════════════════════════════════════════
 # DATA FUNCTIONS
@@ -1266,6 +1236,398 @@ def build_signal_text(symbol: str, a: dict,
     return "\n".join(lines)
 
 # ═══════════════════════════════════════════
+# ПОЛНЫЙ АНАЛИЗ МОНЕТЫ — /full SYMBOL
+# ═══════════════════════════════════════════
+def build_full_analysis(symbol: str, coin: dict, a: dict,
+                        stats_24h: dict, atl: float,
+                        extras: dict, candles_4h: list,
+                        candles_1d: list) -> list:
+    """
+    Возвращает список сообщений (Telegram лимит 4096 символов).
+    Разбивает на части: ТА, SMC, Фундаментал, История, Вердикт
+    """
+    q       = coin["quote"]["USDT"]
+    price   = a["price"]
+    is_long = a["is_long"]
+    side_e  = "🟢" if is_long else "🔴"
+    side_t  = "LONG" if is_long else "SHORT"
+
+    def pct(t):
+        d = (t - price) / price * 100
+        v = d if is_long else -d
+        return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
+
+    vol_str = (f"${a['vol']/1e9:.2f}B" if a['vol']>=1e9 else
+               f"${a['vol']/1e6:.1f}M"  if a['vol']>=1e6 else f"${a['vol']/1e3:.0f}K")
+    mcap_str = fm(a["mcap"]) if a["mcap"] > 0 else "—"
+
+    # Rocket bar
+    r   = a["rocket"]
+    bar = "█"*int(r/10) + "░"*(10-int(r/10))
+
+    # RSI icon
+    def ri(v):
+        if v < 30: return "🟢"
+        if v > 70: return "🔴"
+        return "🔵"
+
+    # ─── ЧАСТЬ 1: ЗАГОЛОВОК + ТА ───
+    p1 = [
+        f"📊 *{symbol}USDT — ПОЛНЫЙ АНАЛИЗ*",
+        f"{side_e} *{side_t}*  |  🕐 {now_utc3()}",
+        f"🚀 *Rocket Score: {r}/100*  {a['rocket_label']}",
+        f"`{bar}`",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "📈 *ТЕХНИЧЕСКИЙ АНАЛИЗ*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "📍 *EMA позиции:*",
+    ]
+    ema_lines = []
+    for period, v1h, v4h, v1d in [
+        (20,  a["ema20_1h"],  a["ema20_4h"],  a["ema20_1d"]),
+        (50,  a["ema50_1h"],  a["ema50_4h"],  a["ema50_1d"]),
+        (200, a["ema200_1h"], a["ema200_4h"], a["ema200_1d"]),
+    ]:
+        above_1h = price > v1h; above_4h = price > v4h; above_1d = price > v1d
+        sym_1h = "✅" if above_1h else "❌"
+        sym_4h = "✅" if above_4h else "❌"
+        sym_1d = "✅" if above_1d else "❌"
+        ema_lines.append(f"  EMA{period}: 1H{sym_1h} `{fp(v1h)}` | 4H{sym_4h} `{fp(v4h)}` | 1D{sym_1d} `{fp(v1d)}`")
+    p1 += ema_lines
+
+    p1 += [
+        "",
+        "📊 *RSI (относительная сила):*",
+        f"  1H: {ri(a['rsi_1h'])}`{a['rsi_1h']:.1f}`  4H: {ri(a['rsi_4h'])}`{a['rsi_4h']:.1f}`  1D: {ri(a['rsi_1d'])}`{a['rsi_1d']:.1f}`",
+        f"  {'🟢 Перепродан — зона покупки' if a['rsi_4h']<30 else ('🔴 Перекуплен — зона продажи' if a['rsi_4h']>70 else '🔵 RSI нейтральный')}",
+        "",
+        "⚡️ *Supertrend (ATR 10, ×3.0):*",
+        f"  Сигнал: `{a.get('st_label','—')}`",
+        "",
+        "📉 *MACD:*",
+        f"  {'▲ Бычий разворот — покупка' if a.get('macd_bullish') else ('▼ Медвежий разворот — продажа' if a.get('macd_bearish') else '⚪️ Нейтральный')}",
+        "",
+        "📦 *Bollinger Bands:*",
+        f"  {'⚡️ Сжатие — ожидается сильное движение!' if a.get('bb_squeeze') else '⚪️ Нормальный диапазон'}",
+        "",
+        "📅 *Изменения цены:*",
+        f"  1H: `{fc(a['ch1h'])}`  24H: `{fc(a['ch24h'])}`  7D: `{fc(a['ch7d'])}`",
+        f"  30D: `{fc(a['ch30d'])}`  90D: `{fc(a['ch90d'])}`",
+    ]
+
+    if stats_24h:
+        h24 = stats_24h.get("high",0); l24 = stats_24h.get("low",0)
+        if h24 and l24:
+            best = l24*1.005 if is_long else h24*0.995
+            p1 += [
+                "",
+                f"📅 *24H диапазон:*",
+                f"  🔼 Max: `{fp(h24)}`  🔽 Min: `{fp(l24)}`",
+                f"  🎯 Лучший вход сейчас: `{fp(best)}`",
+            ]
+
+    # ─── ЧАСТЬ 2: SMC / ICT ───
+    p2 = [
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "🧠 *SMART MONEY CONCEPTS (SMC/ICT)*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+
+    smc_all = a.get("smc_factors", [])
+
+    # BOS
+    has_bos_bull = "BOS ↑" in smc_all
+    has_bos_bear = "BOS ↓" in smc_all
+    p2.append("🔷 *Break of Structure (BOS):*")
+    p2.append(f"  {'✅ Бычий BOS — смена тренда вверх' if has_bos_bull else ('🔴 Медвежий BOS — смена тренда вниз' if has_bos_bear else '⚪️ BOS не обнаружен')}")
+
+    # Order Block
+    has_ob = "OB Накопление" in smc_all
+    p2 += ["", "🟦 *Order Block (OB):*",
+           f"  {'✅ OB накопление — зона интереса smart money' if has_ob else '⚪️ OB не выявлен'}"]
+
+    # FVG
+    has_fvg_b = "FVG ↑" in smc_all; has_fvg_bear = "FVG ↓" in smc_all
+    p2 += ["", "🟨 *Fair Value Gap (FVG / Imbalance):*",
+           f"  {'✅ Бычий FVG — цена стремится закрыть имбаланс вверх' if has_fvg_b else ('🔴 Медвежий FVG — цена стремится вниз' if has_fvg_bear else '⚪️ FVG не обнаружен')}"]
+
+    # Liquidity
+    has_liq = "Liq Sweep" in smc_all
+    p2 += ["", "💧 *Liquidity Sweep:*",
+           f"  {'✅ Свип ликвидности — вероятен разворот!' if has_liq else '⚪️ Свипа ликвидности нет'}"]
+
+    # Smart Accumulation / Distribution
+    has_accum = "Smart Accum 💎" in smc_all; has_dist = "Smart Dist ⚠️" in smc_all
+    p2 += ["", "💎 *Accumulation / Distribution:*",
+           f"  {'💎 Smart Money НАКАПЛИВАЮТ — следим за входом' if has_accum else ('⚠️ Smart Money РАСПРОДАЮТ — осторожно' if has_dist else '⚪️ Нейтрально')}"]
+
+    # TF Alignment
+    has_tf_bull = "TF Align Bull" in smc_all; has_tf_bear = "TF Align Bear" in smc_all
+    p2 += ["", "🔗 *Timeframe Alignment (ТФ согласованность):*",
+           f"  {'✅ Все ТФ бычьи — высокая вероятность роста' if has_tf_bull else ('🔴 Все ТФ медвежьи — давление продавцов' if has_tf_bear else '⚪️ ТФ не выровнены')}"]
+
+    # AMD (Power of Three)
+    recovery = "Recovery 🔄" in smc_all
+    p2 += ["", "🔄 *AMD / Power of Three:*",
+           f"  {'🔄 Фаза восстановления — DCA зона' if recovery else '⚪️ Фаза не определена'}"]
+
+    # Итог SMC
+    smc_score = sum([has_bos_bull, has_ob, has_fvg_b or has_fvg_bear, has_liq, has_accum, has_tf_bull or has_tf_bear])
+    p2 += ["", f"📐 *SMC сила сигнала: {smc_score}/6*",
+           f"  {'🔥 Очень сильный SMC-сетап' if smc_score>=5 else ('✅ Хороший SMC-сигнал' if smc_score>=3 else '⚠️ Слабый SMC')}"]
+
+    # ─── ЧАСТЬ 3: ФУНДАМЕНТАЛ + ИСТОРИЯ ───
+    p3 = [
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "📋 *ФУНДАМЕНТАЛЬНЫЙ АНАЛИЗ*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"🏷 *Монета:* {symbol}USDT",
+        f"🏆 *CMC Rank:* #{a.get('rank','—')}",
+        f"💰 *Цена:* `{fp(price)}`",
+        f"📊 *Объём 24H:* `{vol_str}`",
+        f"💎 *Market Cap:* `{mcap_str}`",
+    ]
+
+    vol_ratio = a.get("vol_ratio", 0)
+    if vol_ratio > 0:
+        p3.append(f"📈 *Vol/MCap ratio:* `{vol_ratio:.1f}%`  {'⚠️ Подозрительно высокий!' if vol_ratio>50 else ('✅ Нормальный' if vol_ratio<20 else '🟡 Повышенный')}")
+
+    # Оценка ликвидности
+    liq_label = ("🟢 Высокая" if a["vol"]>=50e6 else
+                 "🟡 Средняя" if a["vol"]>=5e6  else
+                 "🟠 Низкая"  if a["vol"]>=1e6  else "🔴 Очень низкая")
+    p3.append(f"💧 *Ликвидность:* {liq_label}")
+
+    # Размер позиции
+    cap_label = ("🐳 Мега-кап" if a["mcap"]>=50e9 else
+                 "🔵 Большой" if a["mcap"]>=5e9  else
+                 "🟡 Средний" if a["mcap"]>=500e6 else
+                 "🟠 Малый"   if a["mcap"]>=50e6  else "🔴 Микро-кап")
+    p3.append(f"📦 *Размер:* {cap_label}")
+
+    # Фандинг и OI
+    if extras:
+        fr = extras.get("funding",{}); oi = extras.get("oi",{})
+        p3.append("")
+        p3.append("━━━━━━━━━━━━━━━━━━━━━━")
+        p3.append("⚡️ *ФЬЮЧЕРСНЫЕ ДАННЫЕ*")
+        p3.append("━━━━━━━━━━━━━━━━━━━━━━")
+        if fr.get("ok"):
+            rate = fr["rate"]
+            p3 += [
+                f"💸 *Funding Rate:* `{rate:+.4f}%`",
+                f"  {fr['signal']}",
+                f"  {'🔴 Лонги перегреты — шорт предпочтителен' if rate>0.1 else ('🟢 Шортисты давят — возможен шорт-сквиз' if rate<-0.05 else '🟡 Нейтральный фандинг')}",
+            ]
+        if oi.get("ok") and oi.get("oi",0)>0:
+            oi_ch = oi.get("change",0)
+            p3 += [
+                f"📊 *Open Interest:* `{oi_ch:+.1f}%` за 24ч",
+                f"  {oi['signal']}",
+            ]
+
+    # История
+    p3 += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "📅 *ИСТОРИЧЕСКИЕ ДАННЫЕ*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    ch90 = a.get("ch90d",0)
+    if ch90 < 0:
+        p3.append(f"📉 *90 дней:* `{ch90:.1f}%` — монета в нисходящем тренде")
+        from_peak = abs(ch90)
+        p3.append(f"  От предыдущего пика: `-{from_peak:.0f}%`")
+        if from_peak > 60:
+            p3.append(f"  🔄 *Recovery-потенциал: x{from_peak/100+1:.1f}* до возврата к пику")
+    else:
+        p3.append(f"📈 *90 дней:* `+{ch90:.1f}%` — монета в восходящем тренде")
+
+    if atl and atl > 0:
+        from_atl = (price - atl) / atl * 100
+        p3 += [
+            f"🏆 *Исторический минимум (ATL):* `{fp(atl)}`",
+            f"  Текущая цена выше ATL на: `+{from_atl:.0f}%`",
+        ]
+
+    # Spot vs Futures рекомендация
+    p3 += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "💡 *СПОТ vs ФЬЮЧЕРС*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    if a["vol"] >= 10e6 and not a.get("suspicious",False):
+        if is_long:
+            if a["rsi_4h"] < 35 and ch90 < -50:
+                p3.append("💎 *СПОТ — ПРЕДПОЧТИТЕЛЕН*")
+                p3.append("  Монета у дна (-50%+ от пика), RSI перепродан.")
+                p3.append("  DCA на спот: набирать частями. Горизонт 1-3 мес.")
+                p3.append("")
+                p3.append("⚡️ *ФЬЮЧЕРС — ВОЗМОЖЕН*")
+                p3.append(f"  Плечо макс. 3-5x. SL обязателен за `{fp(a['sl'])}`")
+            else:
+                p3.append("⚡️ *ФЬЮЧЕРС — ПРЕДПОЧТИТЕЛЕН*")
+                p3.append(f"  Плечо 2-5x. Вход у текущей цены `{fp(price)}`")
+                p3.append(f"  SL жёсткий: `{fp(a['sl'])}`")
+        else:
+            p3.append("⚡️ *ФЬЮЧЕРС — ШОРТ*")
+            p3.append(f"  Плечо 2-5x. Вход: `{fp(price)}`  SL: `{fp(a['sl'])}`")
+            p3.append("  На спот шорт недоступен — только через фьючерс.")
+    else:
+        p3.append("⚠️ *Низкая ликвидность — только спот малыми позициями*")
+
+    # ─── ЧАСТЬ 4: ВЕРДИКТ + СДЕЛКА ───
+    p4 = [
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "🎯 *СДЕЛКА — ИТОГ*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"{side_e} *{symbol}USDT  {side_t}*",
+        f"💰 Вход:    `{fp(price)}`",
+        f"🎯 TP1:    `{fp(a['tp1'])}`  ({pct(a['tp1'])})",
+        f"🎯 TP2:    `{fp(a['tp2'])}`  ({pct(a['tp2'])})",
+        f"🎯 TP3:    `{fp(a['tp3'])}`  ({pct(a['tp3'])})",
+        f"🛑 SL:     `{fp(a['sl'])}`",
+        f"📐 R:R     `1:{a['rr']:.1f}`",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "🏁 *ФИНАЛЬНЫЙ ВЕРДИКТ*",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+
+    # Сводная оценка
+    total_score = 0
+    verdict_factors = []
+    if r >= 75:           total_score += 3; verdict_factors.append("🚀 Rocket Score высокий")
+    elif r >= 60:         total_score += 2; verdict_factors.append("✅ Rocket Score средний")
+    if smc_score >= 4:    total_score += 2; verdict_factors.append("🧠 SMC подтверждает")
+    if a.get("macd_bullish" if is_long else "macd_bearish"):
+                          total_score += 1; verdict_factors.append("📉 MACD на стороне сделки")
+    if a.get("bb_squeeze"): total_score += 1; verdict_factors.append("⚡️ BB Squeeze — движение ожидается")
+    if is_long and a["rsi_4h"] < 35: total_score += 2; verdict_factors.append("🟢 RSI перепродан")
+    if not is_long and a["rsi_4h"] > 65: total_score += 2; verdict_factors.append("🔴 RSI перекуплен")
+
+    if total_score >= 7:
+        verdict_emoji = "🔥🚀"
+        verdict_text  = "ОЧЕНЬ СИЛЬНЫЙ СИГНАЛ — приоритет"
+    elif total_score >= 5:
+        verdict_emoji = "✅"
+        verdict_text  = "ХОРОШИЙ СИГНАЛ — можно входить"
+    elif total_score >= 3:
+        verdict_emoji = "🟡"
+        verdict_text  = "УМЕРЕННЫЙ СИГНАЛ — ждать подтверждения"
+    else:
+        verdict_emoji = "⚠️"
+        verdict_text  = "СЛАБЫЙ СИГНАЛ — воздержаться"
+
+    p4.append(f"{verdict_emoji} *{verdict_text}*")
+    p4.append("")
+    for f_ in verdict_factors:
+        p4.append(f"  • {f_}")
+    p4 += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ *РИСК-МЕНЕДЖМЕНТ:*",
+        "  • Риск на сделку: *1-2% депозита*",
+        "  • Минимальный R:R: *1:3*",
+        "  • SL ОБЯЗАТЕЛЕН до входа",
+        f"  • Макс. плечо на альтах: *5x*",
+        "",
+        f"#{symbol}USDT  #BESTTRADE",
+    ]
+
+    # Возвращаем 4 части
+    return [
+        "\n".join(p1),
+        "\n".join(p2),
+        "\n".join(p3),
+        "\n".join(p4),
+    ]
+
+
+async def cmd_full(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/full SYMBOL — полный анализ монеты"""
+    if not ctx.args:
+        await update.message.reply_text(
+            "📊 *Полный анализ монеты*\n\n"
+            "Использование: `/full BTC`\n"
+            "Пример: `/full ETH` · `/full SOL` · `/full DYDX`\n\n"
+            "Включает: ТА · SMC/ICT · Фундаментал · История · Спот/Фьючерс · Вердикт",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
+            ]])
+        )
+        return
+
+    symbol = ctx.args[0].upper().replace("USDT","")
+    msg    = await update.message.reply_text(f"🔍 Полный анализ *{symbol}*... ~20 сек", parse_mode="Markdown")
+
+    coins = get_top500()
+    coin  = next((c for c in coins if c["symbol"] == symbol), None)
+    if not coin:
+        await msg.edit_text(f"❌ *{symbol}* не найден в топ-500 CoinMarketCap\n\nПроверь символ (без USDT): `/full BTC`",
+                            parse_mode="Markdown")
+        return
+
+    a      = full_analysis(coin)
+    slug   = coin.get("slug", symbol.lower())
+
+    # Supertrend
+    try:
+        st_data = get_supertrend_signal(symbol)
+        a["st_label"] = st_data["label"]
+    except:
+        a["st_label"] = "—"
+
+    stats_24h   = get_binance_24h(symbol)
+    atl         = get_binance_alltime_low(symbol)
+    extras      = get_market_extras(symbol)
+    candles_4h  = get_binance_ohlc(symbol, "4h", 200)
+    candles_1d  = get_binance_ohlc(symbol, "1d", 200)
+
+    parts = build_full_analysis(symbol, coin, a, stats_24h, atl, extras, candles_4h, candles_1d)
+
+    kb_tv = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📈 TradingView",    url=tv_link(symbol)),
+         InlineKeyboardButton("📊 CoinMarketCap",  url=cmc_link(slug))],
+        [InlineKeyboardButton("🔄 Обновить /full", callback_data=f"full_{symbol}"),
+         InlineKeyboardButton("🏠 Главное меню",   callback_data="show_menu")],
+    ])
+
+    await msg.delete()
+
+    # Сначала отправляем график
+    await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a,
+                    parts[0])  # ТА часть как caption графика
+
+    # Остальные части без графика
+    for i, part in enumerate(parts[1:], 2):
+        nav = kb_tv if i == len(parts) else None
+        await ctx.bot.send_message(
+            update.effective_chat.id, part,
+            parse_mode="Markdown",
+            reply_markup=nav,
+            disable_web_page_preview=True
+        )
+        await asyncio.sleep(0.5)
+
+    await ctx.bot.send_message(
+        update.effective_chat.id,
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb()
+    )
+
+
+# ═══════════════════════════════════════════
 # РЫНОЧНЫЙ ОБЗОР
 # ═══════════════════════════════════════════
 BTC_ZONES = {
@@ -1520,12 +1882,13 @@ def build_overview_text(ms: dict) -> str:
 
 def overview_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("₿  BTC на TradingView",  url=tv_link("BTC")),
-         InlineKeyboardButton("Ξ  ETH на TradingView",  url=tv_link("ETH"))],
-        [InlineKeyboardButton("📊 BTC Dominance",       url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
-         InlineKeyboardButton("📈 TOTAL Market Cap",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
-        [InlineKeyboardButton("🔄  Обновить обзор",     callback_data="market_overview"),
-         InlineKeyboardButton("🏠  Главное меню",       callback_data="show_menu")],
+        [InlineKeyboardButton("₿ BTC",    url=tv_link("BTC")),
+         InlineKeyboardButton("Ξ ETH",    url=tv_link("ETH"))],
+        [InlineKeyboardButton("BTC.D",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
+         InlineKeyboardButton("TOTAL",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL"),
+         InlineKeyboardButton("OTHERS.D", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:OTHERS.D")],
+        [InlineKeyboardButton("🔄 Обновить", callback_data="market_overview"),
+         InlineKeyboardButton("🤖 Сигналы", callback_data="signals")],
     ])
 
 # ═══════════════════════════════════════════
@@ -1648,30 +2011,31 @@ async def check_entry_zones(bot, chat_ids, coins):
 # ОТПРАВКА
 # ═══════════════════════════════════════════
 def main_kb():
-    """Главное меню — 2 кнопки в ряд, полные названия"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍  Обзор рынка",        callback_data="market_overview"),
-         InlineKeyboardButton("🤖  Торговые сигналы",   callback_data="signals")],
-        [InlineKeyboardButton("🚀  Ракеты (Rocket Score)", callback_data="rockets"),
-         InlineKeyboardButton("📊  Топ рынка 24ч",     callback_data="report")],
-        [InlineKeyboardButton("🎯  Precision Shots x5–x10", callback_data="precision"),
-         InlineKeyboardButton("👁  Вотчлист + зоны",   callback_data="watchlist")],
-        [InlineKeyboardButton("🔥  TOP — Активные сделки", callback_data="top_trades"),
-         InlineKeyboardButton("📈  Анализ монеты /2",  callback_data="menu_coin")],
+        [InlineKeyboardButton("🌍 Обзор рынка",           callback_data="market_overview"),
+         InlineKeyboardButton("🤖 Торговые сигналы",      callback_data="signals")],
+        [InlineKeyboardButton("🚀 Ракеты (Rocket Score)",  callback_data="rockets"),
+         InlineKeyboardButton("📊 Топ рынка 24ч",         callback_data="report")],
+        [InlineKeyboardButton("🎯 Precision Shots x5-x10", callback_data="precision"),
+         InlineKeyboardButton("👁 Вотчлист + зоны",       callback_data="watchlist")],
+        [InlineKeyboardButton("💎 Лучший вход сейчас",    callback_data="best_entry"),
+         InlineKeyboardButton("🔥 TOP — Активные сделки", callback_data="top_trades")],
+        [InlineKeyboardButton("📈 Анализ монеты /2",      callback_data="menu_coin"),
+         InlineKeyboardButton("🔬 Полный анализ /full",   callback_data="menu_full")],
     ])
 
 def back_kb():
-    """Кнопка возврата в меню"""
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu"),
+        InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
     ]])
 
 async def send_coin(bot, chat_id, symbol, slug, a, text):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈  TradingView",       url=tv_link(symbol)),
-         InlineKeyboardButton("📊  CoinMarketCap",     url=cmc_link(slug))],
-        [InlineKeyboardButton("🔄  Обновить анализ",  callback_data=f"coin_{symbol}"),
-         InlineKeyboardButton("🏠  Главное меню",     callback_data="show_menu")],
+        [InlineKeyboardButton("📈 TradingView", url=tv_link(symbol))],
+        [InlineKeyboardButton("🔄 Обновить", callback_data=f"coin_{symbol}"),
+         InlineKeyboardButton("CMC", url=cmc_link(slug))],
+        [InlineKeyboardButton("🌍 /1 Обзор", callback_data="market_overview"),
+         InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals")],
     ])
 
     # Если текст уже содержит Supertrend — используем как есть
@@ -1829,75 +2193,21 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f.write(f"{cid}\n")
     await update.message.reply_text(
         "📊 *BEST TRADE v15.0*\n\n"
-        "Топ-500 · Фандинг · OI · Supertrend\n"
+        "Топ-500 • Фандинг • OI • Supertrend\n"
         "🚀 Rocket Score + SMC + Фундаментал\n"
-        "📍 Вотчлист с зонами входа\n"
+        "📍 Вотчлист с зонами\n"
         "⚡️ Алерты: Pump/Dump + Зоны + ST\n"
         "🕐 Время UTC+3\n\n"
-        "👇 Выбери раздел:",
+        "/1 — обзор рынка\n"
+        "/2 BTC — анализ монеты\n"
+        "/3 — торговые сигналы\n"
+        "/4 — топ рынка\n"
+        "/5 — 🚀 ракеты\n"
+        "/6 — 👁 вотчлист + зоны\n"
+        "/7 — 🎯 PRECISION SHOTS (x5-x10)\n"
+        "/8 — 🔥 Монеты в игре (дайджест алертов)",
         parse_mode="Markdown", reply_markup=main_kb()
     )
-
-async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Показывает главное меню"""
-    await update.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
-
-async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/top — TOP активных сделок"""
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄  Обновить TOP",   callback_data="top_trades"),
-         InlineKeyboardButton("🏠  Главное меню",  callback_data="show_menu")],
-    ])
-    text = f"🕐 {now_utc3()}\n\n" + build_top_digest()
-    await update.message.reply_text(
-        text, parse_mode="Markdown",
-        reply_markup=nav, disable_web_page_preview=False
-    )
-    await update.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
-
-async def publish_signal_to_channel(bot, symbol: str, direction: str, price: float,
-                                     tp1=None, tp2=None, tp3=None, sl=None,
-                                     rr: float = 0, note: str = "", source: str = "bot"):
-    """Публикует сигнал в Telegram-канал и добавляет в TOP"""
-    if not CHANNEL_ID:
-        return
-
-    d_str  = "🟢 LONG" if direction == "long" else "🔴 SHORT"
-    tv_url = tv_link(symbol)
-    lines  = [
-        f"{'🟢' if direction == 'long' else '🔴'} *{symbol}USDT  {d_str.split()[1]}*",
-        f"🕐 {now_utc3()}",
-        "",
-        f"💰 Зона входа:  `{fp(price)}`",
-    ]
-    if tp1: lines.append(f"🎯 TP1: `{fp(tp1)}`")
-    if tp2: lines.append(f"🎯 TP2: `{fp(tp2)}`")
-    if tp3: lines.append(f"🎯 TP3: `{fp(tp3)}`")
-    if sl:  lines.append(f"🛑 SL:  `{fp(sl)}`")
-    if rr:  lines.append(f"📐 R:R  `1:{rr:.1f}`")
-    if note: lines.append(f"\n💡 {note}")
-    lines += ["", f"⚠️ Риск: 2% депозита | SL обязателен", f"#{symbol}USDT"]
-
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📈 TradingView", url=tv_url),
-    ]])
-    try:
-        await bot.send_message(CHANNEL_ID, "\n".join(lines),
-                               parse_mode="Markdown", reply_markup=kb,
-                               disable_web_page_preview=True)
-        log.info(f"✅ Сигнал в канал: {symbol} {direction} @ {price}")
-    except Exception as e:
-        log.error(f"Канал {CHANNEL_ID}: {e}")
-
-    # Добавляем в TOP
-    top_add(symbol, direction, price, tp1=tp1, tp2=tp2, tp3=tp3, sl=sl,
-            source=source, note=note)
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю...")
@@ -1909,22 +2219,17 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"cmd_market: {e}")
         await msg.edit_text("❌ Ошибка")
-    await update.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("Напиши: `/2 BTC`", parse_mode="Markdown",
-                                        reply_markup=back_kb())
+        await update.message.reply_text("Напиши: `/2 BTC`", parse_mode="Markdown")
         return
     symbol = ctx.args[0].upper()
     msg    = await update.message.reply_text(f"⏳ Анализирую {symbol}...")
     coins  = get_top500()
     coin   = next((c for c in coins if c["symbol"] == symbol), None)
     if not coin:
-        await msg.edit_text(f"❌ {symbol} не найден в топ-500", reply_markup=back_kb())
+        await msg.edit_text(f"❌ {symbol} не найден в топ-500")
         return
     a      = full_analysis(coin)
     slug   = coin.get("slug", symbol.lower())
@@ -1939,11 +2244,6 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text   = build_signal_text(symbol, a, stats, atl, extras)
     await msg.delete()
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
-    await ctx.bot.send_message(
-        update.effective_chat.id,
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Анализирую топ-500... ~60 сек")
@@ -1952,13 +2252,8 @@ async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Нет данных"); return
     await msg.delete()
     await send_signals_batch(ctx.bot, update.effective_chat.id, coins)
-    await ctx.bot.send_message(
-        update.effective_chat.id,
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
 
-async def cmd_market_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg   = await update.message.reply_text("⏳ Загружаю...")
     coins = get_top500()
     if not coins:
@@ -1973,25 +2268,21 @@ async def cmd_market_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         em = "🚀" if ch >= 5 else ("🟢" if ch >= 0 else ("🔴" if ch >= -5 else "💥"))
         return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
 
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄  Обновить",     callback_data="report"),
-         InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
-    ])
-    t1 = [f"📊 *Топ-500 — BEST TRADE*", f"🕐 {now_utc3()}",
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+        InlineKeyboardButton("🚀 /5 Ракеты",  callback_data="rockets"),
+    ]])
+    t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now_utc3()}",
           f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
           "🚀 *ЛИДЕРЫ РОСТА 24ч*"]
-    t1 += [row(i, c) for i, c in enumerate(up[:20], 1)]
+    t1 += [row(i, c) for i, c in enumerate(up[:15], 1)]
     t2  = ["📉 *ЛИДЕРЫ ПАДЕНИЯ 24ч*"]
     t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
 
     await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
     await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
-    await ctx.bot.send_message(
-        update.effective_chat.id,
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
 
 async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Топ монет по Rocket Score — самые перспективные"""
@@ -2012,10 +2303,10 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         key=lambda x: x[1]["rocket"], reverse=True
     )[:10]
 
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄  Обновить ракеты",  callback_data="rockets"),
-         InlineKeyboardButton("🏠  Главное меню",     callback_data="show_menu")],
-    ])
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+    ]])
 
     lines = [
         "🚀🔥 *BEST TRADE — РАКЕТЫ*",
@@ -2029,6 +2320,7 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         filled = int(r / 10)
         bar  = "█" * filled + "░" * (10 - filled)
         side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
+        # Только значимые SMC факторы (без BB Squeeze)
         smc_clean = [f for f in a.get("smc_factors", []) if "BB Squeeze" not in f]
         smc  = " | ".join(smc_clean[:3]) or "—"
         rsi_warn = " ⚠️Перекуплен" if a["rsi_4h"] > 70 else ""
@@ -2056,24 +2348,40 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text  = build_signal_text(sym, a, stats)
         await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
         await asyncio.sleep(1.5)
+    msg   = await update.message.reply_text("⏳ Загружаю...")
+    coins = get_top500()
+    if not coins:
+        await msg.edit_text("❌ Нет данных"); return
+    now = datetime.now(TZ).strftime("%d.%m.%Y %H:%M UTC+3")
+    up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
+    dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
+    pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
 
-    await ctx.bot.send_message(
-        update.effective_chat.id,
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
+    def row(i, c):
+        q  = c["quote"]["USDT"]
+        ch = q.get("percent_change_24h", 0)
+        em = "🚀" if ch >= 5 else ("🟢" if ch >= 0 else ("🔴" if ch >= -5 else "💥"))
+        return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
+
+    t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now}",
+          f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
+          "🚀 *ЛИДЕРЫ РОСТА 24ч*"]
+    t1 += [row(i, c) for i, c in enumerate(up[:15], 1)]
+    t2  = ["📉 *ЛИДЕРЫ ПАДЕНИЯ 24ч*"]
+    t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
+
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор", callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+    ]])
+    await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
+    await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
+                               parse_mode="Markdown", reply_markup=nav)
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; data = q.data; await q.answer()
 
-    # ── Главное меню ──
-    if data == "show_menu":
-        await q.edit_message_text(
-            "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-            parse_mode="Markdown", reply_markup=main_kb()
-        )
-
-    elif data == "market_overview":
+    if data == "market_overview":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
         try:
             prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top500()
@@ -2090,9 +2398,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not coins:
             await q.edit_message_text("❌ Нет данных"); return
         await send_signals_batch(ctx.bot, q.message.chat_id, coins)
-        await ctx.bot.send_message(q.message.chat_id,
-                                   "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-                                   parse_mode="Markdown", reply_markup=main_kb())
 
     elif data == "rockets":
         await q.edit_message_text("🚀 Ищу ракеты...", parse_mode="Markdown")
@@ -2100,38 +2405,32 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not coins:
             await q.edit_message_text("❌ Нет данных"); return
         analyzed = [(c, full_analysis(c)) for c in coins]
-        rockets  = sorted([(c, a) for c, a in analyzed
+        rockets  = sorted([(c,a) for c,a in analyzed
                            if not a.get("suspicious", False)],
                           key=lambda x: x[1]["rocket"], reverse=True)[:10]
-        nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄  Обновить",    callback_data="rockets"),
-             InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
-        ])
+        nav = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+            InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+        ]])
         lines = ["🚀🔥 *РАКЕТЫ — Rocket Score*", f"🕐 {now_utc3()}", ""]
         for i, (c, a) in enumerate(rockets, 1):
             r = a["rocket"]; bar = "█"*int(r/10)+"░"*(10-int(r/10))
-            side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
-            lines.append(f"{i}. *{c['symbol']}*  `{r}/100`  {side}")
-            lines.append(f"   `{bar}`")
+            side = "🟢L" if a["is_long"] else "🔴S"
+            lines.append(f"{i}. *{c['symbol']}* `{r}/100` {side}  `{bar}`")
         await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
                                   reply_markup=nav, disable_web_page_preview=True)
 
     elif data == "precision":
-        await q.edit_message_text(
-            "🎯 *Precision Shots x5–x10*\n\n"
-            "Напиши `/7` в чате для запуска полного анализа.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu"),
-            ]])
-        )
+        # Перенаправляем на команду через fake update
+        await q.answer("🎯 Открываю Precision Shots...")
+        await q.edit_message_text("🎯 Используй команду /7 для Precision Shots", parse_mode="Markdown")
 
-    elif data in ("game", "top_trades"):
-        nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄  Обновить TOP",   callback_data="top_trades"),
-             InlineKeyboardButton("🏠  Главное меню",  callback_data="show_menu")],
-        ])
-        text = f"🔥 *BEST TRADE — TOP Активные сделки*\n🕐 {now_utc3()}\n\n" + build_top_digest()
+    elif data == "game":
+        text = f"\U0001f550 {now_utc3()}\n\n" + build_game_digest()
+        nav  = InlineKeyboardMarkup([[
+            InlineKeyboardButton("\U0001f504 Обновить",  callback_data="game"),
+            InlineKeyboardButton("\U0001f30d Обзор",     callback_data="market_overview"),
+        ]])
         try:
             await q.edit_message_text(text, parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=False)
@@ -2143,68 +2442,70 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         coins = get_top500()
         if coins:
             up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
-            dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
-            txt = "\n".join(
-                [f"📊 *Топ рост 24ч*", f"🕐 {now_utc3()}", ""] +
-                [f"🚀 {i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get('percent_change_24h',0))}"
-                 for i, c in enumerate(up[:20], 1)]
-            )
-            nav = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄  Обновить",    callback_data="report"),
-                 InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
-            ])
+            txt = "\n".join([f"🚀 *Топ рост 24ч*", f"🕐 {now_utc3()}"] +
+                            [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get('percent_change_24h',0))}"
+                             for i, c in enumerate(up[:20], 1)])
             await q.edit_message_text(txt, parse_mode="Markdown",
-                                      reply_markup=nav, disable_web_page_preview=True)
+                                      reply_markup=overview_kb(), disable_web_page_preview=True)
 
-    elif data == "watchlist":
-        coins    = get_top500()
-        coin_map = {c["symbol"]: c for c in coins}
-        lines = ["👁 *ВОТЧЛИСТ — BEST TRADE*", f"🕐 {now_utc3()}", ""]
-        for sym, info in WATCHLIST_ZONES.items():
-            coin     = coin_map.get(sym)
-            bias     = info.get("bias", "LONG")
-            note     = info.get("note", "")
-            src      = info.get("source", "")
-            zone_key = "long" if bias == "LONG" else "short"
-            zone     = info.get(zone_key, [None, None])
-            if coin:
-                price     = coin["quote"]["USDT"].get("price", 0)
-                ch24h     = coin["quote"]["USDT"].get("percent_change_24h", 0)
-                price_str = f"`{fp(price)}`  {fc(ch24h)}"
-            else:
-                price = 0; price_str = "`—`"
-            emoji      = "🟢" if bias == "LONG" else "🔴"
-            in_zone    = zone and zone[0] is not None and price > 0 and zone[0] <= price <= zone[1]
-            in_zone_str = " ⚡️ В ЗОНЕ!" if in_zone else ""
-            lines.append(f"{emoji} *{sym}*  {price_str}{in_zone_str}")
-            if zone and zone[0] is not None:
-                lines.append(f"   📊 Зона: `{fp(zone[0])} — {fp(zone[1])}`")
-            lines.append(f"   💡 {note[:55]}...")
-            lines.append(f"   📡 {src}")
-            lines.append("")
-        nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄  Обновить",     callback_data="watchlist"),
-             InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
-        ])
-        try:
-            await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
-                                      reply_markup=nav, disable_web_page_preview=True)
-        except Exception as e:
-            log.error(f"watchlist cb: {e}")
-
-    elif data == "menu_coin":
+    elif data == "menu_full":
         await q.edit_message_text(
-            "📈 *Анализ монеты*\n\n"
+            "🔬 *Полный анализ монеты*\n\n"
             "Напиши в чат:\n"
-            "`/2 BTC` — Bitcoin\n"
-            "`/2 ETH` — Ethereum\n"
-            "`/2 SOL` — Solana\n"
-            "`/2 [символ]` — любая монета из топ-500",
+            "`/full BTC` — полный анализ Bitcoin\n"
+            "`/full ETH` — полный анализ Ethereum\n"
+            "`/full SOL` — полный анализ Solana\n"
+            "`/full [символ]` — любая монета из топ-500\n\n"
+            "Включает:\n"
+            "📈 Технический анализ (EMA, RSI, MACD, Supertrend)\n"
+            "🧠 SMC/ICT (BOS, OB, FVG, Liquidity, AMD)\n"
+            "📋 Фундаментал (капа, объём, ликвидность)\n"
+            "📅 История (ATH, ATL, recovery-потенциал)\n"
+            "💡 Спот vs Фьючерс рекомендация\n"
+            "🎯 Полная сделка (вход, TP1-3, SL, R:R)\n"
+            "🏁 Финальный вердикт",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu"),
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
             ]])
         )
+
+    elif data.startswith("full_"):
+        symbol = data[5:]; cid = q.message.chat_id
+        await q.edit_message_text(f"🔍 Полный анализ *{symbol}*... ~20 сек", parse_mode="Markdown")
+        coins = get_top500()
+        coin  = next((c for c in coins if c["symbol"] == symbol), None)
+        if not coin:
+            await q.edit_message_text(f"❌ {symbol} не найден"); return
+        a    = full_analysis(coin)
+        slug = coin.get("slug", symbol.lower())
+        try:
+            st_data = get_supertrend_signal(symbol)
+            a["st_label"] = st_data["label"]
+        except: a["st_label"] = "—"
+        stats_24h  = get_binance_24h(symbol)
+        atl        = get_binance_alltime_low(symbol)
+        extras     = get_market_extras(symbol)
+        candles_4h = get_binance_ohlc(symbol, "4h", 200)
+        candles_1d = get_binance_ohlc(symbol, "1d", 200)
+        parts = build_full_analysis(symbol, coin, a, stats_24h, atl, extras, candles_4h, candles_1d)
+        kb_tv = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📈 TradingView",    url=tv_link(symbol)),
+             InlineKeyboardButton("📊 CoinMarketCap",  url=cmc_link(slug))],
+            [InlineKeyboardButton("🔄 Обновить /full", callback_data=f"full_{symbol}"),
+             InlineKeyboardButton("🏠 Главное меню",   callback_data="show_menu")],
+        ])
+        try: await q.message.delete()
+        except: pass
+        await send_coin(ctx.bot, cid, symbol, slug, a, parts[0])
+        for i, part in enumerate(parts[1:], 2):
+            nav = kb_tv if i == len(parts) else None
+            await ctx.bot.send_message(cid, part, parse_mode="Markdown",
+                                       reply_markup=nav, disable_web_page_preview=True)
+            await asyncio.sleep(0.5)
+        await ctx.bot.send_message(cid,
+            "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+            parse_mode="Markdown", reply_markup=main_kb())
 
     elif data.startswith("coin_"):
         symbol = data[5:]; cid = q.message.chat_id
@@ -2221,8 +2522,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except: pass
         await send_coin(ctx.bot, cid, symbol, slug, a, text)
         await ctx.bot.send_message(cid,
-                                   "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-                                   parse_mode="Markdown", reply_markup=main_kb())
+            "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+            parse_mode="Markdown", reply_markup=main_kb())
 
     elif data.startswith("period_"):
         period = data.split("_")[1]
@@ -2237,8 +2538,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get(field,0))}"
                          for i, c in enumerate(up[:15], 1)])
         nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄  Обновить",    callback_data=f"period_{period}"),
-             InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
+            [InlineKeyboardButton("🔄 Обновить",     callback_data=f"period_{period}"),
+             InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
         ])
         await q.edit_message_text(txt, parse_mode="Markdown",
                                   reply_markup=nav, disable_web_page_preview=True)
@@ -2664,44 +2965,27 @@ async def check_watchlist(bot, chat_ids, coins):
         if now_ts - last < 1800:  # не чаще раза в 30 мин
             continue
         watchlist_alerted[sym] = now_ts
-
-        direction = "long" if al["bias"] == "LONG" else "short"
-        price     = al["price"]
-
         text = (
-            f"{'🟢' if direction == 'long' else '🔴'} *ВОТЧЛИСТ — ЗОНА ВХОДА!*\n"
+            f"📍 *ВОТЧЛИСТ — ЗОНА ВХОДА!*\n"
             f"🕐 {now_utc3()}\n\n"
             f"{al['emoji']} *{sym}USDT  {al['bias']}*\n"
-            f"💰 Цена: `{fp(price)}`\n"
+            f"💰 Цена: `{fp(al['price'])}`\n"
             f"📊 Зона: `{fp(al['lo'])} — {fp(al['hi'])}`\n\n"
             f"💡 {al['note']}\n"
             f"📡 Источник: {al['source']}\n\n"
             f"⚠️ Риск: 2% депозита | SL обязателен\n\n"
             f"#{sym}USDT"
         )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📈  TradingView", url=tv_link(sym)),
-             InlineKeyboardButton("🔥  Открыть TOP", callback_data="top_trades")],
-        ])
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+        ]])
         for cid in chat_ids:
             try:
                 await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
             except Exception as e:
                 log.error(f"Watchlist alert {cid}: {e}")
-
-        # Добавляем в TOP как активную сделку
-        top_activate(sym, price)
-        if sym not in top_trades:
-            top_add(sym, direction, price, note=al['note'], source=al['source'])
-            top_activate(sym, price)
-
-        # Публикуем в канал
-        if CHANNEL_ID:
-            await publish_signal_to_channel(
-                bot, sym, direction, price,
-                note=al['note'], source=al['source']
-            )
-        log.info(f"Watchlist ALERT → TOP: {sym} {direction} @ {fp(price)}")
+        add_to_game(sym, "watchlist", al["price"])
+        log.info(f"Watchlist ALERT: {sym} @ {fp(al['price'])}")
 
 async def check_alerts(bot: Bot):
     """Каждые 5 мин: pump/dump + zone + supertrend + watchlist alerts"""
@@ -2719,29 +3003,38 @@ async def check_alerts(bot: Bot):
 
 async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Показывает вотчлист с зонами и текущими ценами"""
-    msg      = await update.message.reply_text("⏳ Загружаю вотчлист...")
-    coins    = get_top500()
+    msg   = await update.message.reply_text("⏳ Загружаю вотчлист...")
+    coins = get_top500()
     coin_map = {c["symbol"]: c for c in coins}
 
-    lines = ["👁 *ВОТЧЛИСТ — BEST TRADE*", f"🕐 {now_utc3()}", ""]
+    lines = [
+        "👁 *ВОТЧЛИСТ — BEST TRADE*",
+        f"🕐 {now_utc3()}",
+        "",
+    ]
 
     for sym, info in WATCHLIST_ZONES.items():
-        coin     = coin_map.get(sym)
-        bias     = info.get("bias", "LONG")
-        note     = info.get("note", "")
-        src      = info.get("source", "")
+        coin  = coin_map.get(sym)
+        bias  = info.get("bias", "LONG")
+        note  = info.get("note", "")
+        src   = info.get("source", "")
         zone_key = "long" if bias == "LONG" else "short"
-        zone     = info.get(zone_key, [None, None])
+        zone  = info.get(zone_key, [None, None])
 
         if coin:
-            price     = coin["quote"]["USDT"].get("price", 0)
-            ch24h     = coin["quote"]["USDT"].get("percent_change_24h", 0)
+            price = coin["quote"]["USDT"].get("price", 0)
+            ch24h = coin["quote"]["USDT"].get("percent_change_24h", 0)
             price_str = f"`{fp(price)}`  {fc(ch24h)}"
         else:
-            price = 0; price_str = "`—`"
+            price = 0
+            price_str = "`—`"
 
-        emoji   = "🟢" if bias == "LONG" else "🔴"
-        in_zone = zone and zone[0] is not None and price > 0 and zone[0] <= price <= zone[1]
+        emoji = "🟢" if bias == "LONG" else "🔴"
+
+        # Проверяем попадание в зону
+        in_zone = False
+        if zone and zone[0] is not None and price > 0:
+            in_zone = zone[0] <= price <= zone[1]
         in_zone_str = " ⚡️ В ЗОНЕ!" if in_zone else ""
 
         lines.append(f"{emoji} *{sym}*  {price_str}{in_zone_str}")
@@ -2751,31 +3044,30 @@ async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"   📡 {src}")
         lines.append("")
 
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄  Обновить",     callback_data="watchlist"),
-         InlineKeyboardButton("🏠  Главное меню", callback_data="show_menu")],
-    ])
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
+        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+    ]])
     await msg.edit_text("\n".join(lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=True)
-    await update.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
-    )
 
 async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """TOP — активные сделки"""
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄  Обновить TOP",   callback_data="top_trades"),
-         InlineKeyboardButton("🏠  Главное меню",  callback_data="show_menu")],
-    ])
-    text = f"🔥 *BEST TRADE — TOP Активные сделки*\n🕐 {now_utc3()}\n\n" + build_top_digest()
+    """
+    /8 — Монеты в игре
+    Дайджест всех активных алертов за 48ч + отработавшие
+    """
+    nav = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Обновить",    callback_data="game"),
+        InlineKeyboardButton("🌍 Обзор",       callback_data="market_overview"),
+    ], [
+        InlineKeyboardButton("🚀 Ракеты",      callback_data="rockets"),
+        InlineKeyboardButton("🎯 Precision",   callback_data="precision"),
+    ]])
+    text = f"🕐 {now_utc3()}\n\n" + build_game_digest()
     await update.message.reply_text(
         text, parse_mode="Markdown",
-        reply_markup=nav, disable_web_page_preview=False
-    )
-    await update.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
+        reply_markup=nav,
+        disable_web_page_preview=False  # ссылки на TradingView кликабельны
     )
 
 # ═══════════════════════════════════════════
@@ -2784,20 +3076,23 @@ async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",     cmd_start))
-    app.add_handler(CommandHandler("menu",      cmd_menu))
     app.add_handler(CommandHandler("1",         cmd_market))
     app.add_handler(CommandHandler("2",         cmd_coin))
     app.add_handler(CommandHandler("3",         cmd_signals))
-    app.add_handler(CommandHandler("4",         cmd_market_top))
+    app.add_handler(CommandHandler("4",         cmd_top))
     app.add_handler(CommandHandler("5",         cmd_rockets))
     app.add_handler(CommandHandler("6",         cmd_watchlist))
     app.add_handler(CommandHandler("7",         cmd_precision))
     app.add_handler(CommandHandler("8",         cmd_game))
-    app.add_handler(CommandHandler("top",       cmd_top))
+    app.add_handler(CommandHandler("full",      cmd_full))
+    app.add_handler(CommandHandler("menu",      lambda u,c: u.message.reply_text(
+        "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+        parse_mode="Markdown", reply_markup=main_kb())))
     app.add_handler(CommandHandler("game",      cmd_game))
     app.add_handler(CommandHandler("market",    cmd_market))
     app.add_handler(CommandHandler("coin",      cmd_coin))
     app.add_handler(CommandHandler("signals",   cmd_signals))
+    app.add_handler(CommandHandler("top",       cmd_top))
     app.add_handler(CommandHandler("rockets",   cmd_rockets))
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("precision", cmd_precision))
