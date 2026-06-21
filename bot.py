@@ -1496,7 +1496,7 @@ def overview_kb():
          InlineKeyboardButton("TOTAL",    url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL"),
          InlineKeyboardButton("OTHERS.D", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:OTHERS.D")],
         [InlineKeyboardButton("🔄 Обновить", callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы", callback_data="signals")],
+         InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
     ])
 
 # ═══════════════════════════════════════════
@@ -1619,15 +1619,22 @@ async def check_entry_zones(bot, chat_ids, coins):
 # ОТПРАВКА
 # ═══════════════════════════════════════════
 def main_kb():
+    """Главное меню — все разделы по названию, без цифр"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Обзор рынка",    callback_data="market_overview"),
-         InlineKeyboardButton("🤖 Сигналы",        callback_data="signals"),
-         InlineKeyboardButton("🚀 Ракеты",         callback_data="rockets")],
-        [InlineKeyboardButton("📊 Топ рынка",      callback_data="report"),
+        [InlineKeyboardButton("🌍 Обзор рынка",     callback_data="market_overview"),
+         InlineKeyboardButton("🤖 Сигналы",         callback_data="signals"),
+         InlineKeyboardButton("🚀 Ракеты",          callback_data="rockets")],
+        [InlineKeyboardButton("📊 Топ рынка",       callback_data="report"),
          InlineKeyboardButton("🎯 Precision Shots", callback_data="precision"),
-         InlineKeyboardButton("🔥 В игре",         callback_data="game")],
-        [InlineKeyboardButton("👁 Вотчлист",       callback_data="watchlist"),
-         InlineKeyboardButton("📈 Анализ монеты",  callback_data="menu_coin")],
+         InlineKeyboardButton("🔥 В игре",          callback_data="game")],
+        [InlineKeyboardButton("👁 Вотчлист",        callback_data="watchlist"),
+         InlineKeyboardButton("📈 Анализ монеты",   callback_data="menu_coin")],
+    ])
+
+def back_to_menu_kb():
+    """Кнопка возврата в меню — добавляется после каждой команды"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
     ])
 
 async def send_coin(bot, chat_id, symbol, slug, a, text):
@@ -1799,31 +1806,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📍 Вотчлист с зонами\n"
         "⚡️ Алерты: Pump/Dump + Зоны + ST\n"
         "🕐 Время UTC+3\n\n"
-        "/1 — Обзор рынка\n"
-        "/2 BTC — Анализ монеты\n"
-        "/3 — Торговые сигналы\n"
-        "/4 — Топ рынка (рост/падение 24ч)\n"
-        "/5 — 🚀 Ракеты (Rocket Score)\n"
-        "/6 — 👁 Вотчлист + зоны входа\n"
-        "/7 — 🎯 Precision Shots (x5-x10)\n"
-        "/8 — 🔥 Монеты в игре (дайджест алертов)\n\n"
-        "👇 Нажми кнопку ниже для быстрого доступа:",
+        "👇 Выбери раздел:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Повторно показывает главное меню с кнопками"""
+    """Повторно показывает главное меню"""
     await update.message.reply_text(
-        "📊 *BEST TRADE — Главное меню*\n\n"
-        "/1 — Обзор рынка\n"
-        "/2 BTC — Анализ монеты\n"
-        "/3 — Торговые сигналы\n"
-        "/4 — Топ рынка (рост/падение 24ч)\n"
-        "/5 — 🚀 Ракеты (Rocket Score)\n"
-        "/6 — 👁 Вотчлист + зоны входа\n"
-        "/7 — 🎯 Precision Shots (x5-x10)\n"
-        "/8 — 🔥 Монеты в игре (дайджест алертов)\n\n"
-        "👇 Нажми нужную кнопку:",
+        "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
@@ -1837,6 +1827,8 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"cmd_market: {e}")
         await msg.edit_text("❌ Ошибка")
+    await update.message.reply_text("📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                    parse_mode="Markdown", reply_markup=main_kb())
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
@@ -1862,6 +1854,9 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text   = build_signal_text(symbol, a, stats, atl, extras)
     await msg.delete()
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                               parse_mode="Markdown", reply_markup=main_kb())
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Анализирую топ-500... ~60 сек")
@@ -1870,6 +1865,9 @@ async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Нет данных"); return
     await msg.delete()
     await send_signals_batch(ctx.bot, update.effective_chat.id, coins)
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                               parse_mode="Markdown", reply_markup=main_kb())
 
 async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg   = await update.message.reply_text("⏳ Загружаю...")
@@ -1887,9 +1885,8 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
 
     nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
-        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
-        InlineKeyboardButton("🚀 /5 Ракеты",  callback_data="rockets"),
+        InlineKeyboardButton("🔄 Обновить",  callback_data="report"),
+        InlineKeyboardButton("🏠 Меню",      callback_data="show_menu"),
     ]])
     t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now_utc3()}",
           f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
@@ -1901,6 +1898,9 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
     await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                               parse_mode="Markdown", reply_markup=main_kb())
 
 async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Топ монет по Rocket Score — самые перспективные"""
@@ -1922,8 +1922,8 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )[:10]
 
     nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
-        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+        InlineKeyboardButton("🔄 Обновить", callback_data="rockets"),
+        InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
     ]])
 
     lines = [
@@ -1938,7 +1938,6 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         filled = int(r / 10)
         bar  = "█" * filled + "░" * (10 - filled)
         side = "🟢 LONG" if a["is_long"] else "🔴 SHORT"
-        # Только значимые SMC факторы (без BB Squeeze)
         smc_clean = [f for f in a.get("smc_factors", []) if "BB Squeeze" not in f]
         smc  = " | ".join(smc_clean[:3]) or "—"
         rsi_warn = " ⚠️Перекуплен" if a["rsi_4h"] > 70 else ""
@@ -1966,40 +1965,22 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text  = build_signal_text(sym, a, stats)
         await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
         await asyncio.sleep(1.5)
-    msg   = await update.message.reply_text("⏳ Загружаю...")
-    coins = get_top500()
-    if not coins:
-        await msg.edit_text("❌ Нет данных"); return
-    now = datetime.now(TZ).strftime("%d.%m.%Y %H:%M UTC+3")
-    up  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0), reverse=True)
-    dn  = sorted(coins, key=lambda x: x["quote"]["USDT"].get("percent_change_24h", 0))
-    pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
 
-    def row(i, c):
-        q  = c["quote"]["USDT"]
-        ch = q.get("percent_change_24h", 0)
-        em = "🚀" if ch >= 5 else ("🟢" if ch >= 0 else ("🔴" if ch >= -5 else "💥"))
-        return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
-
-    t1 = [f"🔥 *Топ-500 — BEST TRADE*", f"🕐 {now}",
-          f"Растут: {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
-          "🚀 *ЛИДЕРЫ РОСТА 24ч*"]
-    t1 += [row(i, c) for i, c in enumerate(up[:15], 1)]
-    t2  = ["📉 *ЛИДЕРЫ ПАДЕНИЯ 24ч*"]
-    t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
-
-    nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🌍 /1 Обзор", callback_data="market_overview"),
-        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
-    ]])
-    await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
-    await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
-                               parse_mode="Markdown", reply_markup=nav)
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                               parse_mode="Markdown", reply_markup=main_kb())
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; data = q.data; await q.answer()
 
-    if data == "market_overview":
+    # ── Показать главное меню ──
+    if data == "show_menu":
+        await q.edit_message_text(
+            "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+            parse_mode="Markdown", reply_markup=main_kb()
+        )
+
+    elif data == "market_overview":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
         try:
             prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top500()
@@ -2016,6 +1997,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not coins:
             await q.edit_message_text("❌ Нет данных"); return
         await send_signals_batch(ctx.bot, q.message.chat_id, coins)
+        await ctx.bot.send_message(q.message.chat_id,
+                                   "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                   parse_mode="Markdown", reply_markup=main_kb())
 
     elif data == "rockets":
         await q.edit_message_text("🚀 Ищу ракеты...", parse_mode="Markdown")
@@ -2027,8 +2011,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                            if not a.get("suspicious", False)],
                           key=lambda x: x[1]["rocket"], reverse=True)[:10]
         nav = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
-            InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+            InlineKeyboardButton("🔄 Обновить", callback_data="rockets"),
+            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
         ]])
         lines = ["🚀🔥 *РАКЕТЫ — Rocket Score*", f"🕐 {now_utc3()}", ""]
         for i, (c, a) in enumerate(rockets, 1):
@@ -2039,15 +2023,20 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=nav, disable_web_page_preview=True)
 
     elif data == "precision":
-        # Перенаправляем на команду через fake update
-        await q.answer("🎯 Открываю Precision Shots...")
-        await q.edit_message_text("🎯 Используй команду /7 для Precision Shots", parse_mode="Markdown")
+        await q.edit_message_text(
+            "🎯 *Precision Shots*\n\n"
+            "Нажми /7 в чате или выбери другой раздел:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data="show_menu"),
+            ]])
+        )
 
     elif data == "game":
-        text = f"\U0001f550 {now_utc3()}\n\n" + build_game_digest()
+        text = f"🕐 {now_utc3()}\n\n" + build_game_digest()
         nav  = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\U0001f504 Обновить",  callback_data="game"),
-            InlineKeyboardButton("\U0001f30d Обзор",     callback_data="market_overview"),
+            InlineKeyboardButton("🔄 Обновить",  callback_data="game"),
+            InlineKeyboardButton("🏠 Меню",      callback_data="show_menu"),
         ]])
         try:
             await q.edit_message_text(text, parse_mode="Markdown",
@@ -2055,81 +2044,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except:
             await q.answer("Обновлено ✅")
 
-    elif data == "watchlist":
-        await q.answer()
-        # Создаём фейковый update для переиспользования cmd_watchlist
-        coins = get_top500()
-        coin_map = {c["symbol"]: c for c in coins}
-        lines = [
-            "👁 *ВОТЧЛИСТ — BEST TRADE*",
-            f"🕐 {now_utc3()}",
-            "",
-        ]
-        for sym, info in WATCHLIST_ZONES.items():
-            coin  = coin_map.get(sym)
-            bias  = info.get("bias", "LONG")
-            note  = info.get("note", "")
-            src   = info.get("source", "")
-            zone_key = "long" if bias == "LONG" else "short"
-            zone  = info.get(zone_key, [None, None])
-            if coin:
-                price = coin["quote"]["USDT"].get("price", 0)
-                ch24h = coin["quote"]["USDT"].get("percent_change_24h", 0)
-                price_str = f"`{fp(price)}`  {fc(ch24h)}"
-            else:
-                price = 0
-                price_str = "`—`"
-            emoji = "🟢" if bias == "LONG" else "🔴"
-            in_zone = False
-            if zone and zone[0] is not None and price > 0:
-                in_zone = zone[0] <= price <= zone[1]
-            in_zone_str = " ⚡️ В ЗОНЕ!" if in_zone else ""
-            lines.append(f"{emoji} *{sym}*  {price_str}{in_zone_str}")
-            if zone and zone[0] is not None:
-                lines.append(f"   📊 Зона: `{fp(zone[0])} — {fp(zone[1])}`")
-            lines.append(f"   💡 {note[:60]}...")
-            lines.append(f"   📡 {src}")
-            lines.append("")
-        nav_wl = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Обновить",    callback_data="watchlist"),
-            InlineKeyboardButton("🌍 Обзор",       callback_data="market_overview"),
-        ]])
-        try:
-            await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
-                                      reply_markup=nav_wl, disable_web_page_preview=True)
-        except Exception as e:
-            log.error(f"watchlist cb: {e}")
-
-    elif data == "menu_coin":
-        await q.edit_message_text(
-            "📈 *Анализ монеты*\n\n"
-            "Напиши команду в чат:\n"
-            "`/2 BTC` — анализ Bitcoin\n"
-            "`/2 ETH` — анализ Ethereum\n"
-            "`/2 SOL` — анализ Solana\n\n"
-            "Можно любой символ из топ-500",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад в меню", callback_data="back_menu"),
-            ]])
-        )
-
-    elif data == "back_menu":
-        await q.edit_message_text(
-            "📊 *BEST TRADE — Главное меню*\n\n"
-            "/1 — Обзор рынка\n"
-            "/2 BTC — Анализ монеты\n"
-            "/3 — Торговые сигналы\n"
-            "/4 — Топ рынка (рост/падение 24ч)\n"
-            "/5 — 🚀 Ракеты (Rocket Score)\n"
-            "/6 — 👁 Вотчлист + зоны входа\n"
-            "/7 — 🎯 Precision Shots (x5-x10)\n"
-            "/8 — 🔥 Монеты в игре (дайджест алертов)\n\n"
-            "👇 Нажми нужную кнопку:",
-            parse_mode="Markdown", reply_markup=main_kb()
-        )
-
-
+    elif data == "report":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
         coins = get_top500()
         if coins:
@@ -2137,8 +2052,63 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             txt = "\n".join([f"🚀 *Топ рост 24ч*", f"🕐 {now_utc3()}"] +
                             [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get('percent_change_24h',0))}"
                              for i, c in enumerate(up[:20], 1)])
+            nav = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Обновить", callback_data="report"),
+                InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
+            ]])
             await q.edit_message_text(txt, parse_mode="Markdown",
-                                      reply_markup=overview_kb(), disable_web_page_preview=True)
+                                      reply_markup=nav, disable_web_page_preview=True)
+
+    elif data == "watchlist":
+        coins    = get_top500()
+        coin_map = {c["symbol"]: c for c in coins}
+        lines = ["👁 *ВОТЧЛИСТ — BEST TRADE*", f"🕐 {now_utc3()}", ""]
+        for sym, info in WATCHLIST_ZONES.items():
+            coin     = coin_map.get(sym)
+            bias     = info.get("bias", "LONG")
+            note     = info.get("note", "")
+            src      = info.get("source", "")
+            zone_key = "long" if bias == "LONG" else "short"
+            zone     = info.get(zone_key, [None, None])
+            if coin:
+                price     = coin["quote"]["USDT"].get("price", 0)
+                ch24h     = coin["quote"]["USDT"].get("percent_change_24h", 0)
+                price_str = f"`{fp(price)}`  {fc(ch24h)}"
+            else:
+                price = 0; price_str = "`—`"
+            emoji      = "🟢" if bias == "LONG" else "🔴"
+            in_zone    = zone and zone[0] is not None and price > 0 and zone[0] <= price <= zone[1]
+            in_zone_str = " ⚡️ В ЗОНЕ!" if in_zone else ""
+            lines.append(f"{emoji} *{sym}*  {price_str}{in_zone_str}")
+            if zone and zone[0] is not None:
+                lines.append(f"   📊 Зона: `{fp(zone[0])} — {fp(zone[1])}`")
+            lines.append(f"   💡 {note[:60]}...")
+            lines.append(f"   📡 {src}")
+            lines.append("")
+        nav = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Обновить", callback_data="watchlist"),
+            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
+        ]])
+        try:
+            await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
+                                      reply_markup=nav, disable_web_page_preview=True)
+        except Exception as e:
+            log.error(f"watchlist cb: {e}")
+
+    elif data == "menu_coin":
+        await q.edit_message_text(
+            "📈 *Анализ монеты*\n\n"
+            "Напиши в чат:\n"
+            "`/2 BTC` — Bitcoin\n"
+            "`/2 ETH` — Ethereum\n"
+            "`/2 SOL` — Solana\n"
+            "`/2 [любой символ]`\n\n"
+            "Символ из топ-500 CMC",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data="show_menu"),
+            ]])
+        )
 
     elif data.startswith("coin_"):
         symbol = data[5:]; cid = q.message.chat_id
@@ -2154,6 +2124,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try: await q.message.delete()
         except: pass
         await send_coin(ctx.bot, cid, symbol, slug, a, text)
+        await ctx.bot.send_message(cid,
+                                   "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                   parse_mode="Markdown", reply_markup=main_kb())
 
     elif data.startswith("period_"):
         period = data.split("_")[1]
@@ -2167,8 +2140,13 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         txt = "\n".join([f"📊 *Топ за {lbl}*", f"🕐 {now_utc3()}", ""] +
                         [f"{i}. *{c['symbol']}*  ${fp(c['quote']['USDT']['price'])}  {fc(c['quote']['USDT'].get(field,0))}"
                          for i, c in enumerate(up[:15], 1)])
+        nav = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Обновить", callback_data=f"period_{period}"),
+            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
+        ]])
         await q.edit_message_text(txt, parse_mode="Markdown",
-                                  reply_markup=overview_kb(), disable_web_page_preview=True)
+                                  reply_markup=nav, disable_web_page_preview=True)
+
 
 # ═══════════════════════════════════════════
 # РАССЫЛКА
@@ -2575,8 +2553,14 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"• НАКОПЛЕНИЕ — ждать пробоя, тогда входить\n\n"
         f"⚠️ Это анализ, не гарантия. Всегда SL!",
         parse_mode="Markdown",
-        reply_markup=nav
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Обновить", callback_data="precision"),
+            InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
+        ]])
     )
+    await ctx.bot.send_message(update.effective_chat.id,
+                               "📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                               parse_mode="Markdown", reply_markup=main_kb())
 
 
 
@@ -2670,11 +2654,13 @@ async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append("")
 
     nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🌍 /1 Обзор",   callback_data="market_overview"),
-        InlineKeyboardButton("🤖 /3 Сигналы", callback_data="signals"),
+        InlineKeyboardButton("🔄 Обновить", callback_data="watchlist"),
+        InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
     ]])
     await msg.edit_text("\n".join(lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=True)
+    await update.message.reply_text("📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                    parse_mode="Markdown", reply_markup=main_kb())
 
 async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
@@ -2682,18 +2668,17 @@ async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     Дайджест всех активных алертов за 48ч + отработавшие
     """
     nav = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔄 Обновить",    callback_data="game"),
-        InlineKeyboardButton("🌍 Обзор",       callback_data="market_overview"),
-    ], [
-        InlineKeyboardButton("🚀 Ракеты",      callback_data="rockets"),
-        InlineKeyboardButton("🎯 Precision",   callback_data="precision"),
+        InlineKeyboardButton("🔄 Обновить", callback_data="game"),
+        InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
     ]])
     text = f"🕐 {now_utc3()}\n\n" + build_game_digest()
     await update.message.reply_text(
         text, parse_mode="Markdown",
         reply_markup=nav,
-        disable_web_page_preview=False  # ссылки на TradingView кликабельны
+        disable_web_page_preview=False
     )
+    await update.message.reply_text("📊 *BEST TRADE — Меню*\n\n👇 Выбери раздел:",
+                                    parse_mode="Markdown", reply_markup=main_kb())
 
 # ═══════════════════════════════════════════
 # MAIN
