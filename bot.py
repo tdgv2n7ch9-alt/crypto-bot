@@ -14,6 +14,7 @@
 """
 
 import asyncio
+import time
 import io
 import logging
 import os
@@ -155,36 +156,139 @@ STABLECOINS = {
     "MIM","FEI","OUSD","DOLA","CUSD","CEUR","USDX","USDJ","USDN","BITCNY",
 }
 
-def get_top500():
+def get_all_coins():
+    """
+    Получает все монеты:
+    1. CMC: до 5000 монет (3 запроса по ~1667) 
+    2. Binance: все торгуемые USDT пары (дополняет если нет в CMC)
+    Кэш 30 минут.
+    """
+    # Кэш — обновляем не чаще раза в 30 мин
+    now_ts = datetime.now(TZ).timestamp()
+    cache_key = "_all_coins_cache"
+    if hasattr(get_all_coins, "_cache"):
+        cached_time, cached_data = get_all_coins._cache
+        if now_ts - cached_time < 1800 and cached_data:
+            return cached_data
+
+    result    = []
+    seen_syms = set()
+
+    # ── ШАГ 1: CMC listings — до 5000 монет постранично ──
     try:
         url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-        params  = {"limit": 600, "convert": "USDT", "sort": "market_cap"}
-        r = requests.get(url, headers=headers, params=params, timeout=20)
-        r.raise_for_status()
-        raw = r.json().get("data", [])
 
-        # Фильтруем стейблкоины и дубликаты символов
-        seen_syms = set()
-        result    = []
-        for coin in raw:
-            sym  = coin.get("symbol", "")
-            tags = [t.lower() for t in coin.get("tags", [])]
-            # Пропускаем стейблкоины
-            if sym in STABLECOINS:             continue
-            if "stablecoin" in tags:           continue
-            if "wrapped-tokens" in tags:       continue
-            # Пропускаем дубликаты символов (берём первый = выше по капе)
-            if sym in seen_syms:               continue
-            seen_syms.add(sym)
-            result.append(coin)
-            if len(result) >= 500:             break
+        # Загружаем по 1000, до 5 страниц
+        for start in range(1, 5001, 1000):
+            try:
+                params = {
+                    "start":   start,
+                    "limit":   1000,
+                    "convert": "USDT",
+                    "sort":    "market_cap",
+                }
+                r = requests.get(url, headers=headers, params=params, timeout=25)
+                if r.status_code != 200:
+                    break
+                batch = r.json().get("data", [])
+                if not batch:
+                    break
 
-        log.info(f"CMC: {len(result)} монет после фильтрации")
-        return result
+                added = 0
+                for coin in batch:
+                    sym  = coin.get("symbol", "")
+                    tags = [t.lower() for t in coin.get("tags", [])]
+                    q    = coin.get("quote", {}).get("USDT", {})
+                    mcap = q.get("market_cap", 0) or 0
+
+                    if sym in STABLECOINS:          continue
+                    if "stablecoin" in tags:        continue
+                    if "wrapped-tokens" in tags:    continue
+                    if sym in seen_syms:            continue
+                    if mcap > 0 and mcap < 100_000: continue  # меньше $100K — мусор
+
+                    seen_syms.add(sym)
+                    result.append(coin)
+                    added += 1
+
+                log.info(f"CMC batch start={start}: +{added} монет (всего {len(result)})")
+
+                # Если пришло меньше 500 — это последняя страница
+                if len(batch) < 500:
+                    break
+
+                time.sleep(0.5)  # rate limit
+
+            except Exception as e:
+                log.error(f"CMC batch start={start}: {e}")
+                break
+
     except Exception as e:
-        log.error(f"CMC error: {e}")
-        return []
+        log.error(f"CMC all coins: {e}")
+
+    # ── ШАГ 2: Binance — все USDT пары которых нет в CMC ──
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=20)
+        if r.status_code == 200:
+            binance_tickers = r.json()
+            for t in binance_tickers:
+                sym_full = t.get("symbol", "")
+                if not sym_full.endswith("USDT"):
+                    continue
+                sym = sym_full[:-4]
+
+                if sym in STABLECOINS:   continue
+                if sym in seen_syms:     continue
+
+                vol_usd = float(t.get("quoteVolume", 0))
+                price   = float(t.get("lastPrice", 0))
+                if vol_usd < 50_000:    continue  # слишком мало объёма
+                if price <= 0:          continue
+
+                # Создаём минимальный объект монеты
+                coin_stub = {
+                    "symbol":   sym,
+                    "slug":     sym.lower(),
+                    "cmc_rank": 9999,
+                    "tags":     [],
+                    "name":     sym,
+                    "quote": {"USDT": {
+                        "price":              price,
+                        "volume_24h":         vol_usd,
+                        "market_cap":         0,
+                        "percent_change_1h":  float(t.get("priceChangePercent", 0)),
+                        "percent_change_24h": float(t.get("priceChangePercent", 0)),
+                        "percent_change_7d":  0,
+                        "percent_change_30d": 0,
+                        "percent_change_90d": 0,
+                    }}
+                }
+                seen_syms.add(sym)
+                result.append(coin_stub)
+
+            log.info(f"Binance добавил дополнительные монеты. Итого: {len(result)}")
+
+    except Exception as e:
+        log.error(f"Binance all pairs: {e}")
+
+    # Сортируем: CMC монеты по рангу, Binance-only — в конце по объёму
+    cmc_coins    = [c for c in result if c.get("cmc_rank", 9999) < 9999]
+    binance_only = [c for c in result if c.get("cmc_rank", 9999) == 9999]
+    cmc_coins.sort(key=lambda x: x.get("cmc_rank", 9999))
+    binance_only.sort(key=lambda x: x.get("quote",{}).get("USDT",{}).get("volume_24h",0), reverse=True)
+    result = cmc_coins + binance_only
+
+    log.info(f"Итого монет: {len(result)} (CMC: {len(cmc_coins)}, Binance-only: {len(binance_only)})")
+
+    # Сохраняем в кэш
+    get_all_coins._cache = (now_ts, result)
+    return result
+
+
+# Backward compat alias
+def get_top500():
+    return get_all_coins()
 
 def get_global_metrics() -> dict:
     try:
@@ -2191,20 +2295,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("full_"):
         symbol = data[5:]
         await q.edit_message_text(f"🔍 Полный анализ *{symbol}*...", parse_mode="Markdown")
-        # Вызываем полный анализ через FakeUpdate
-        class FakeMsg:
-            chat_id = q.message.chat_id
-            async def reply_text(self, text, **kwargs):
-                return await ctx.bot.send_message(q.message.chat_id, text, **kwargs)
-        class FakeUpdate:
-            effective_chat = q.message.chat
-            message = FakeMsg()
-        class FakeCtx:
-            args = [symbol]
-            bot  = ctx.bot
         try: await q.message.delete()
         except: pass
-        await cmd_full_v2(FakeUpdate(), FakeCtx())
+        await _do_full_analysis(ctx.bot, q.message.chat_id, symbol)
 
     elif data == "market_overview":
         await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
@@ -2307,24 +2400,217 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # РАССЫЛКА
 # ═══════════════════════════════════════════
 async def send_scheduled(bot: Bot):
+    """
+    Запускается каждые 30 мин.
+    Проходит по всем монетам и СРАЗУ отправляет сигнал
+    как только находит подходящую — не ждёт накопления.
+    """
     chat_ids = load_chat_ids() | user_chat_ids
-    if not chat_ids: return
-    log.info(f"Рассылка {now_utc3()}")
-    coins  = get_top500()
-    prices = get_btc_eth_price()
-    gm     = get_global_metrics()
-    if not coins: return
-    ms   = analyze_market(prices.get("BTC", {}), prices.get("ETH", {}), gm, coins)
-    text = build_overview_text(ms)
-    kb   = overview_kb()
-    for cid in chat_ids:
-        try:
-            await bot.send_message(cid, text, parse_mode="Markdown",
-                                   reply_markup=kb, disable_web_page_preview=True)
-            await asyncio.sleep(1)
-            await send_signals_batch(bot, cid, coins)
-        except Exception as e:
-            log.error(f"Рассылка {cid}: {e}")
+    if not chat_ids:
+        return
+
+    log.info(f"[AUTO] Старт сканирования {now_utc3()}")
+
+    try:
+        coins = get_all_coins()
+        if not coins:
+            log.error("[AUTO] Нет монет")
+            return
+
+        sent_long  = 0
+        sent_short = 0
+        sent_spot  = 0
+        already_sent = set(list(TOP_LONG_SIGNALS.keys()) + list(TOP_SHORT_SIGNALS.keys()))
+
+        for coin in coins:
+            q         = coin["quote"]["USDT"]
+            price     = q.get("price",             0) or 0
+            ch1h      = q.get("percent_change_1h",  0) or 0
+            ch24h     = q.get("percent_change_24h", 0) or 0
+            ch7d      = q.get("percent_change_7d",  0) or 0
+            ch30d     = q.get("percent_change_30d", 0) or 0
+            ch90d     = q.get("percent_change_90d", 0) or 0
+            vol       = q.get("volume_24h",         0) or 0
+            mcap      = q.get("market_cap",         0) or 0
+            rank      = coin.get("cmc_rank", 9999)
+            sym       = coin["symbol"]
+            vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
+            slug      = coin.get("slug", sym.lower())
+
+            if price <= 0 or vol < 500_000: continue
+            if vol_ratio > 60:              continue
+            if sym in already_sent:         continue  # уже отправляли в этот цикл
+
+            # ── ЛОНГ: сразу отправляем ──
+            if (ch1h > 0.5 and ch24h > 2.0 and ch7d > 0
+                    and vol >= 2_000_000 and sent_long < 10):
+
+                tp1 = price * 1.02; tp2 = price * 1.04; tp3 = price * 1.08
+                sl  = price * 0.85; swing = price * 0.92
+                score = min(50 + int(ch1h*2 + ch24h*1.5), 95)
+
+                a_stub = {
+                    "price": price, "is_long": True,
+                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                    "sl": sl, "swing": swing, "rr": 2.5,
+                    "rocket": score, "rocket_label": "🚀 СИГНАЛ",
+                    "rsi_4h": 50.0, "rsi_1h": 50.0, "rsi_1d": 50.0,
+                    "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d,
+                    "ch30d": ch30d, "ch90d": ch90d,
+                    "vol": vol, "mcap": mcap, "rank": rank,
+                    "above_ema20": ch24h > 0, "above_ema50": ch7d > 0,
+                    "above_ema200": False,
+                    "macd_bullish": ch1h > 0, "macd_bearish": False,
+                    "bb_squeeze": False, "vol_spike": False,
+                    "smc_factors": [], "suspicious": False,
+                    "st_label": "—", "trend_4h": "bullish",
+                    "atr": price*0.03, "support": price*0.92,
+                    "resistance": price*1.08,
+                    "ema20_4h": price*0.99, "ema50_4h": price*0.97,
+                    "ema200_4h": price*0.85, "fund_recovery": False,
+                }
+
+                text = _build_signal_post(sym, a_stub, {}, mode="long")
+                TOP_LONG_SIGNALS[sym] = {
+                    "time": datetime.now(TZ), "entry": price,
+                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                    "sl": sl, "rr": 2.5, "status": "active",
+                }
+                already_sent.add(sym)
+                sent_long += 1
+
+                for cid in chat_ids:
+                    try:
+                        await send_coin(bot, cid, sym, slug, a_stub, text)
+                    except Exception as e:
+                        log.error(f"[AUTO LONG] {sym} → {cid}: {e}")
+                await asyncio.sleep(1.0)
+                continue  # к следующей монете
+
+            # ── ШОРТ: сразу отправляем ──
+            if (ch1h < -0.5 and ch24h < -2.0
+                    and vol >= 2_000_000 and sent_short < 10):
+
+                tp1 = price * 0.98; tp2 = price * 0.96; tp3 = price * 0.92
+                sl  = price * 1.15; swing = price * 1.08
+                score = min(50 + int(abs(ch1h)*2 + abs(ch24h)*1.5), 95)
+
+                a_stub = {
+                    "price": price, "is_long": False,
+                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                    "sl": sl, "swing": swing, "rr": 2.5,
+                    "rocket": score, "rocket_label": "📉 СИГНАЛ",
+                    "rsi_4h": 65.0, "rsi_1h": 65.0, "rsi_1d": 55.0,
+                    "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d,
+                    "ch30d": ch30d, "ch90d": ch90d,
+                    "vol": vol, "mcap": mcap, "rank": rank,
+                    "above_ema20": False, "above_ema50": False,
+                    "above_ema200": False,
+                    "macd_bullish": False, "macd_bearish": True,
+                    "bb_squeeze": False, "vol_spike": False,
+                    "smc_factors": [], "suspicious": False,
+                    "st_label": "—", "trend_4h": "bearish",
+                    "atr": price*0.03, "support": price*0.85,
+                    "resistance": price*1.08,
+                    "ema20_4h": price*1.01, "ema50_4h": price*1.03,
+                    "ema200_4h": price*1.15, "fund_recovery": False,
+                }
+
+                text = _build_signal_post(sym, a_stub, {}, mode="short")
+                TOP_SHORT_SIGNALS[sym] = {
+                    "time": datetime.now(TZ), "entry": price,
+                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                    "sl": sl, "rr": 2.5, "status": "active",
+                }
+                already_sent.add(sym)
+                sent_short += 1
+
+                for cid in chat_ids:
+                    try:
+                        await send_coin(bot, cid, sym, slug, a_stub, text)
+                    except Exception as e:
+                        log.error(f"[AUTO SHORT] {sym} → {cid}: {e}")
+                await asyncio.sleep(1.0)
+                continue
+
+            # ── СПОТ: сразу отправляем ──
+            if (ch90d < -40 and ch7d > 0
+                    and vol >= 1_000_000 and mcap >= 10_000_000
+                    and sent_spot < 3):
+
+                x_ath = 1 / (1 + ch90d/100) if ch90d < -5 else 1.0
+                buy2  = price * 0.95; buy1 = price * 0.88; buy3 = price * 0.78
+                sell  = price * x_ath * 0.85
+
+                if x_ath >= 5:   pot = f"~x{x_ath:.1f} 🔥🔥"
+                elif x_ath >= 3: pot = f"~x{x_ath:.1f} 🔥"
+                else:            pot = f"~x{x_ath:.1f} ⚡️"
+
+                text = "\n".join(filter(None, [
+                    f"*{sym}USDT* 💎 *СПОТ*",
+                    f"📡 Аналитика BEST TRADE  ·  Rank #{rank}",
+                    "",
+                    f"💰 *Цена:* `{fp(price)}`",
+                    f"🎯 *Потенциал:* *{pot} до ATH*",
+                    "",
+                    f"📊 90д: *{fc(ch90d)}*  30д: *{fc(ch30d)}*  7д: *{fc(ch7d)}*",
+                    "",
+                    f"💵 *Вход 1 (40%):* `{fp(buy2)}`",
+                    "",
+                    f"💵 *Вход 2 (40%):* `{fp(buy1)}`",
+                    "",
+                    f"💵 *Вход 3 (20%):* `{fp(buy3)}`",
+                    "",
+                    f"🥇 *Цель:* `{fp(sell)}`  *(~x{sell/price:.1f})*" if sell > price else "",
+                    "",
+                    f"⚠️ Позиция: 5–10% портфеля  ·  Горизонт: от 3 мес.",
+                    f"#{sym}USDT",
+                ]))
+
+                a_stub = {
+                    "price": price, "is_long": True,
+                    "tp1": buy2, "tp2": buy1, "tp3": buy3,
+                    "sl": price*0.70, "swing": price*0.80, "rr": 3.0,
+                    "rocket": 70, "rocket_label": "💎 СПОТ",
+                    "rsi_4h": 35.0, "rsi_1h": 35.0, "rsi_1d": 30.0,
+                    "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d,
+                    "ch30d": ch30d, "ch90d": ch90d,
+                    "vol": vol, "mcap": mcap, "rank": rank,
+                    "above_ema20": False, "above_ema50": False,
+                    "above_ema200": False,
+                    "smc_factors": [], "suspicious": False,
+                    "fund_recovery": True,
+                    "macd_bullish": False, "macd_bearish": False,
+                    "ema20_4h": price, "ema50_4h": price, "ema200_4h": price,
+                }
+
+                TOP_SPOT_SIGNALS[sym] = {
+                    "time": datetime.now(TZ), "entry": price,
+                    "buy_zone_lo": buy1, "buy_zone_hi": buy2,
+                    "atl": buy3, "sell_target": sell, "status": "watching",
+                }
+                already_sent.add(sym)
+                sent_spot += 1
+
+                for cid in chat_ids:
+                    try:
+                        await send_coin(bot, cid, sym, slug, a_stub, text)
+                    except Exception as e:
+                        log.error(f"[AUTO SPOT] {sym} → {cid}: {e}")
+                await asyncio.sleep(1.0)
+
+            # Стоп когда набрали максимум
+            if sent_long >= 10 and sent_short >= 10 and sent_spot >= 3:
+                break
+
+        log.info(
+            f"[AUTO] Завершено: 🟢 {sent_long} лонг  "
+            f"🔴 {sent_short} шорт  💎 {sent_spot} спот"
+        )
+
+    except Exception as e:
+        log.error(f"[AUTO] Критическая ошибка: {e}")
+
 
 supertrend_cache = {}  # {symbol: last_direction}
 
@@ -3673,7 +3959,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Фильтр кандидатов по CMC данным (быстро)
     pre = []
-    for coin in coins[:300]:
+    for coin in coins:   # теперь все монеты
         q = coin["quote"]["USDT"]
         vol      = q.get("volume_24h",  0) or 0
         mcap     = q.get("market_cap",  0) or 0
@@ -3684,7 +3970,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Реальный ТА из Binance свечей для топ кандидатов
     scored = []
-    for coin in pre[:60]:
+    for coin in pre[:80]:  # анализируем топ-80 кандидатов
         try:
             a = real_full_analysis(coin)
             if a["is_long"] and not a.get("suspicious") and a["rocket"] >= 50:
@@ -3773,7 +4059,7 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Нет данных"); return
 
     pre = []
-    for coin in coins[:400]:
+    for coin in coins:   # все монеты
         q = coin["quote"]["USDT"]
         vol      = q.get("volume_24h",  0) or 0
         mcap     = q.get("market_cap",  0) or 0
@@ -3789,7 +4075,6 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if not a["is_long"] and not a.get("suspicious") and a["rocket"] >= 40:
                 scored.append((coin, a))
             elif a.get("rsi_4h", 50) > 72 and a["vol"] >= 2_000_000:
-                # Перекупленные монеты — кандидаты на шорт независимо от is_long
                 a_short = dict(a); a_short["is_long"] = False
                 scored.append((coin, a_short))
         except: pass
@@ -3893,77 +4178,54 @@ async def _search_coin_by_symbol(symbol: str) -> dict | None:
 
 
 
-async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/full SYMBOL — VIP полный анализ монеты"""
-    if not ctx.args:
-        await update.message.reply_text(
-            "🔬 *Полный анализ — /full*\n\n"
-            "Использование: `/full BTC`\n"
-            "Пример: `/full ETH` · `/full SOL` · `/full RIVER`\n\n"
-            "Включает реальные данные Binance:\n"
-            "· EMA 20/50/200 · RSI · MACD · Supertrend\n"
-            "· ATH / ATL · Зоны входа · DCA стратегия\n"
-            "· Фандинг · OI · Спот vs Фьючерс · Вердикт",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
-            ]])
-        )
-        return
+async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
+    """
+    Выполняет полный анализ монеты и отправляет результат в chat_id.
+    Возвращает True если успешно.
+    """
+    symbol = symbol.upper().replace("USDT","").replace("BUSD","")
 
-    symbol = ctx.args[0].upper().replace("USDT","").replace("BUSD","")
-    msg    = await update.message.reply_text(
-        f"🔍 Анализирую *{symbol}USDT*...", parse_mode="Markdown"
-    )
-
+    # Ищем монету
     coins = get_top500()
     coin  = next((c for c in coins if c["symbol"] == symbol), None)
 
-    # Не нашли в топ-500 — ищем через CMC по символу
     if not coin:
         coin = await _search_coin_by_symbol(symbol)
 
-    # Если CMC тоже не знает — пробуем Binance напрямую
     if not coin:
-        sym_clean = symbol.upper().replace("USDT","")
+        # Пробуем Binance напрямую
         test = None
         for suffix in ["USDT", "BUSD"]:
             try:
                 r = requests.get("https://api.binance.com/api/v3/klines",
-                    params={"symbol": f"{sym_clean}{suffix}", "interval": "4h", "limit": 5},
+                    params={"symbol": f"{symbol}{suffix}", "interval": "4h", "limit": 5},
                     timeout=10)
-                if r.status_code == 200 and r.json():
+                if r.status_code == 200 and isinstance(r.json(), list) and r.json():
                     test = r.json(); break
             except: pass
-
         if not test:
-            await msg.edit_text(
+            await bot.send_message(chat_id,
                 f"❌ *{symbol}* не найден\n\n"
                 f"Монета не торгуется на Binance.\n"
-                f"Проверь символ: `/full PIPPIN` · `/full POWER` · `/full BTC`\n\n"
-                f"💡 Монеты с очень малой капой могут отсутствовать на Binance",
+                f"Пример: `/full BTC` · `/full ETH` · `/full SOL`",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
-                ]])
-            )
-            return
+                ]]))
+            return False
         price_now = float(test[-1][4])
         coin = {
-            "symbol": sym_clean, "slug": sym_clean.lower(), "cmc_rank": 9999,
-            "tags": [],
+            "symbol": symbol, "slug": symbol.lower(), "cmc_rank": 9999, "tags": [],
             "quote": {"USDT": {
                 "price": price_now, "volume_24h": 0, "market_cap": 0,
                 "percent_change_1h": 0, "percent_change_24h": 0,
-                "percent_change_7d": 0, "percent_change_30d": 0,
-                "percent_change_90d": 0,
+                "percent_change_7d": 0, "percent_change_30d": 0, "percent_change_90d": 0,
             }}
         }
-        symbol = sym_clean  # нормализуем
 
-    slug      = coin.get("slug", symbol.lower())
-    a         = real_full_analysis(coin)
-    price     = a["price"]
+    slug  = coin.get("slug", symbol.lower())
+    a     = real_full_analysis(coin)
+    price = a["price"]
     stats_24h = get_binance_24h(symbol)
     atl       = get_binance_alltime_low(symbol)
     extras    = get_market_extras(symbol)
@@ -3971,16 +4233,14 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     candles_1d = get_binance_ohlc(symbol, "1d", 365)
     candles_1w = get_binance_ohlc(symbol, "1w", 200)
 
-    # ATH
     ath = 0.0
     if candles_1w: ath = max(c["high"] for c in candles_1w)
     elif candles_1d: ath = max(c["high"] for c in candles_1d)
 
-    # Зоны накопления
     closes_1d = [c["close"] for c in candles_1d] if candles_1d else []
-    zone_30d = min(c["low"] for c in candles_1d[-30:]) if len(candles_1d)>=30 else 0
-    zone_60d = min(c["low"] for c in candles_1d[-60:]) if len(candles_1d)>=60 else 0
-    zone_90d = min(c["low"] for c in candles_1d[-90:]) if len(candles_1d)>=90 else 0
+    zone_30d  = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
+    zone_60d  = min((c["low"] for c in candles_1d[-60:]), default=0) if len(candles_1d)>=60 else 0
+    zone_90d  = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
 
     ema20_d  = next((v for v in reversed(calc_ema(closes_1d,20))  if v), 0) if len(closes_1d)>=20  else 0
     ema50_d  = next((v for v in reversed(calc_ema(closes_1d,50))  if v), 0) if len(closes_1d)>=50  else 0
@@ -4001,203 +4261,139 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mcap  = q.get("market_cap", 0) or 0
     rank  = coin.get("cmc_rank", 999)
 
-    from_atl = ((price-atl)/atl*100) if atl>0 else 0
-    from_ath = ((price-ath)/ath*100) if ath>0 else 0
-    to_ath   = ((ath-price)/price*100) if ath>price>0 else 0
+    from_atl = ((price-atl)/atl*100)   if atl>0 else 0
+    to_ath   = ((ath-price)/price*100)  if ath>price>0 else 0
+    buy_lo   = atl*1.05  if atl>0 else (zone_90d or price*0.7)
+    buy_hi   = zone_60d*1.05 if zone_60d>0 else price*0.85
+    sell_t   = ath*0.9   if ath>0 else price*3.0
 
-    buy_lo  = atl*1.05 if atl>0 else (zone_90d or price*0.7)
-    buy_hi  = zone_60d*1.05 if zone_60d>0 else price*0.85
-    sell_t  = ath*0.9  if ath>0 else price*3.0
-
-    rsi_4h  = a["rsi_4h"]
-    r       = a["rocket"]
-    bar     = "▓"*int(r/10) + "░"*(10-int(r/10))
-    trend_t = {"bullish":"↑ Бычий","bearish":"↓ Медвежий","neutral":"→ Нейтральный"}.get(a.get("trend_4h",""), "—")
+    rsi_4h = a["rsi_4h"]
+    r      = a["rocket"]
+    bar    = "▓"*int(r/10) + "░"*(10-int(r/10))
+    trend_labels = {"bullish":"↑ Бычий","bearish":"↓ Медвежий","neutral":"→ Нейтральный"}
+    trend_t = trend_labels.get(a.get("trend_4h",""), "—")
     macd_t  = "▲ Бычий" if a.get("macd_bullish") else ("▼ Медвежий" if a.get("macd_bearish") else "→ Нейтр.")
+    vol_s   = f"${vol24/1e9:.2f}B" if vol24>=1e9 else (f"${vol24/1e6:.1f}M" if vol24>=1e6 else "—")
+    mcap_s  = fm(mcap) if mcap>0 else "—"
+    side_e  = "🟢" if a["is_long"] else "🔴"
+    side_t  = "LONG" if a["is_long"] else "SHORT"
+    smc     = [f for f in a.get("smc_factors",[]) if "BB" not in f]
 
     def ri(v): return "🟢" if v<30 else ("🔴" if v>70 else "🔵")
-    def pct_chg(t, p=price): return f"+{(t-p)/p*100:.0f}%" if t>p else f"{(t-p)/p*100:.0f}%"
+    def pct_chg(t): return f"+{(t-price)/price*100:.1f}%" if t>price else f"{(t-price)/price*100:.1f}%"
 
-    vol_s  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else (f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"—")
-    mcap_s = fm(mcap) if mcap>0 else "—"
-
-    side_e = "🟢" if a["is_long"] else "🔴"
-    side_t = "LONG" if a["is_long"] else "SHORT"
-
-    # ──────────────────────────────────────────
-    # СООБЩЕНИЕ 1 — ШАПКА + ЦЕНЫ + EMA
-    # ──────────────────────────────────────────
+    # ── БЛОК 1: Цена + История + EMA дневной ──
     p1 = [
-        f"{'─'*30}",
-        f"🔬 *{symbol}USDT  ·  ПОЛНЫЙ АНАЛИЗ*",
+        f"🔬 *{symbol}USDT — ПОЛНЫЙ АНАЛИЗ*",
         f"📡 Аналитика BEST TRADE  ·  Rank #{rank}",
         f"🕐 {now_utc3()}",
-        f"{'─'*30}",
         "",
-        f"💰 *Цена сейчас:*   `{fp(price)}`",
-        f"{'─'*30}",
-        f"📉 *Исторические данные:*",
+        f"💰 *Цена:* `{fp(price)}`",
         "",
     ]
-    if ath>0: p1.append(f"  🔺 ATH:  `{fp(ath)}`   |   До ATH:  `+{to_ath:.0f}%`")
-    if atl>0: p1.append(f"  🔻 ATL:  `{fp(atl)}`   |   От ATL:  `+{from_atl:.0f}%`")
+    if ath>0: p1 += [f"🔺 *ATH:* `{fp(ath)}`  *(до ATH: +{to_ath:.0f}%)*", ""]
+    if atl>0: p1 += [f"🔻 *ATL:* `{fp(atl)}`  *(от ATL: +{from_atl:.0f}%)*", ""]
     p1 += [
+        f"📊 *Изменения:*",
+        f"1H: `{fc(ch1h)}`  24H: `{fc(ch24h)}`  7D: `{fc(ch7d)}`",
+        f"30D: `{fc(ch30d)}`  90D: `{fc(ch90d)}`",
         "",
-        f"  1H:  `{fc(ch1h)}`    24H: `{fc(ch24h)}`",
-        f"  7D:  `{fc(ch7d)}`    30D: `{fc(ch30d)}`",
-        f"  90D: `{fc(ch90d)}`",
-        "",
-        f"{'─'*30}",
-        f"📈 *EMA (Дневной ТФ):*",
-        "",
+        f"📈 *EMA дневной:*",
     ]
-    if ema200_d: p1.append(f"  EMA200:  `{fp(ema200_d)}`   {'🟢 выше — бычий тренд' if price>ema200_d else '🔴 ниже — медвежий'}")
-    if ema50_d:  p1.append(f"  EMA50:   `{fp(ema50_d)}`   {'✅ выше' if price>ema50_d else '❌ ниже'}")
-    if ema20_d:  p1.append(f"  EMA20:   `{fp(ema20_d)}`   {'✅ выше' if price>ema20_d else '❌ ниже'}")
+    if ema200_d: p1 += [f"EMA200: `{fp(ema200_d)}`  {'✅ выше — бычий' if price>ema200_d else '❌ ниже — медвежий'}", ""]
+    if ema50_d:  p1.append(f"EMA50:  `{fp(ema50_d)}`  {'✅' if price>ema50_d else '❌'}")
+    if ema20_d:  p1.append(f"EMA20:  `{fp(ema20_d)}`  {'✅' if price>ema20_d else '❌'}")
     p1 += [
         "",
-        f"  RSI(1D):  {ri(rsi_1d)}`{rsi_1d:.1f}`  {'— зона покупки!' if rsi_1d<30 else ('— перекуплен!' if rsi_1d>70 else '')}",
+        f"RSI(1D): {ri(rsi_1d)}`{rsi_1d:.0f}` {'← перепродан!' if rsi_1d<30 else ('← перекуплен!' if rsi_1d>70 else '')}",
     ]
 
-    # ──────────────────────────────────────────
-    # СООБЩЕНИЕ 2 — TA 4H + SMC
-    # ──────────────────────────────────────────
-    smc = [f for f in a.get("smc_factors",[]) if "BB" not in f]
+    # ── БЛОК 2: ТА 4H + SMC + Зоны ──
     p2 = [
-        f"{'─'*30}",
         f"📊 *ТЕХНИЧЕСКИЙ АНАЛИЗ (4H)*",
-        f"{'─'*30}",
         "",
-        f"  ⚡️ Сила сигнала:   `{r}/100`  {a['rocket_label']}",
-        f"  `{bar}`",
+        f"Сила сигнала: `{r}/100`  {a['rocket_label']}",
+        f"`{bar}`",
         "",
-        f"  EMA20(4H):  `{fp(a.get('ema20_4h',0))}`   {'✅' if a.get('above_ema20') else '❌'}",
-        f"  EMA50(4H):  `{fp(a.get('ema50_4h',0))}`   {'✅' if a.get('above_ema50') else '❌'}",
-        f"  EMA200(4H): `{fp(a.get('ema200_4h',0))}`   {'✅' if a.get('above_ema200') else '❌'}",
+        f"EMA20:  `{fp(a.get('ema20_4h',0))}`  {'✅' if a.get('above_ema20') else '❌'}",
+        f"EMA50:  `{fp(a.get('ema50_4h',0))}`  {'✅' if a.get('above_ema50') else '❌'}",
+        f"EMA200: `{fp(a.get('ema200_4h',0))}`  {'✅' if a.get('above_ema200') else '❌'}",
         "",
-        f"  RSI(4H):    {ri(rsi_4h)}`{rsi_4h:.0f}`",
-        f"  RSI(1H):    {ri(a.get('rsi_1h',50))}`{a.get('rsi_1h',50):.0f}`",
+        f"RSI 4H: {ri(rsi_4h)}`{rsi_4h:.0f}`  RSI 1H: {ri(a.get('rsi_1h',50))}`{a.get('rsi_1h',50):.0f}`",
         "",
-        f"  MACD:       `{macd_t}`",
-        f"  Тренд 4H:   `{trend_t}`",
-        f"  Supertrend: `{a.get('st_label','—')}`",
-        f"  ATR(14):    `{fp(a.get('atr',0))}`",
+        f"MACD: `{macd_t}`",
+        f"Тренд 4H: `{trend_t}`",
+        f"Supertrend: `{a.get('st_label','—')}`",
+        f"ATR: `{fp(a.get('atr',0))}`",
         "",
-        f"{'─'*30}",
-        f"🧠 *SMART MONEY (SMC/ICT):*",
-        "",
+        f"🧠 *SMC/ICT:*",
     ]
-    if smc:
-        for s in smc[:6]:
-            p2.append(f"  · {s}")
-    else:
-        p2.append("  · SMC-сигналы не обнаружены")
+    for s in (smc[:5] if smc else ["Сигналов нет"]):
+        p2.append(f"  · {s}")
+    p2 += ["", f"🔎 *Зоны накопления:*", ""]
+    if zone_30d: p2.append(f"  Мин 30д: `{fp(zone_30d)}` {'⚡️ В ЗОНЕ!' if price<=zone_30d*1.06 else ''}")
+    if zone_60d: p2.append(f"  Мин 60д: `{fp(zone_60d)}` {'⚡️ В ЗОНЕ!' if price<=zone_60d*1.06 else ''}")
+    if zone_90d: p2.append(f"  Мин 90д: `{fp(zone_90d)}` {'⚡️ В ЗОНЕ!' if price<=zone_90d*1.06 else ''}")
 
-    # Зоны накопления
-    p2 += ["", f"{'─'*30}", f"🔎 *ЗОНЫ НАКОПЛЕНИЯ:*", ""]
-    if zone_30d: p2.append(f"  Мин 30д:  `{fp(zone_30d)}`  {'⚡️ ЦЕНА В ЗОНЕ!' if price<=zone_30d*1.06 else ''}")
-    if zone_60d: p2.append(f"  Мин 60д:  `{fp(zone_60d)}`  {'⚡️ ЦЕНА В ЗОНЕ!' if price<=zone_60d*1.06 else ''}")
-    if zone_90d: p2.append(f"  Мин 90д:  `{fp(zone_90d)}`  {'⚡️ ЦЕНА В ЗОНЕ!' if price<=zone_90d*1.06 else ''}")
-    if stats_24h:
-        h24=stats_24h.get("high",0); l24=stats_24h.get("low",0)
-        if h24 and l24:
-            p2.append(f"  24H High:  `{fp(h24)}`   Low: `{fp(l24)}`")
-
-    # ──────────────────────────────────────────
-    # СООБЩЕНИЕ 3 — ФУНДАМЕНТАЛ + СДЕЛКА + ВЕРДИКТ
-    # ──────────────────────────────────────────
+    # ── БЛОК 3: Фундаментал + Сделка + Вердикт ──
     p3 = [
-        f"{'─'*30}",
         f"📦 *ФУНДАМЕНТАЛ:*",
-        f"{'─'*30}",
         "",
-        f"  Объём 24H:  `{vol_s}`",
-        f"  Market Cap: `{mcap_s}`",
-        f"  Объём тренд: {'📈 Накопление' if vol_growing else '📉 Снижение'}",
+        f"Объём 24H: `{vol_s}`",
+        f"Market Cap: `{mcap_s}`",
+        f"Объём тренд: {'📈 Накопление' if vol_growing else '📉 Снижение'}",
     ]
-
     if extras:
         fr=extras.get("funding",{}); oi=extras.get("oi",{})
         if fr.get("ok"):
-            rate=fr["rate"]
-            p3 += ["", f"  💸 Funding:  `{rate:+.4f}%`  {fr['signal']}"]
+            p3 += ["", f"💸 Funding: `{fr['rate']:+.4f}%`  {fr['signal']}"]
         if oi.get("ok") and oi.get("oi",0)>0:
-            p3.append(f"  📊 OI:       `{oi.get('change',0):+.1f}%` за 24ч")
-
-    # Спот vs Фьючерс
+            p3.append(f"📊 OI: `{oi.get('change',0):+.1f}%` за 24ч")
     p3 += [
         "",
-        f"{'─'*30}",
-        f"🎯 *ТОЧКИ ВХОДА И ВЫХОДА:*",
-        f"{'─'*30}",
+        f"🎯 *СДЕЛКА {side_e} {side_t}:*",
         "",
-        f"  {side_e} Вход:        `{fp(price)}`",
-        f"  🎯 TP1:        `{fp(a['tp1'])}`  `({pct_chg(a['tp1'])})`",
-        f"  🎯 TP2:        `{fp(a['tp2'])}`  `({pct_chg(a['tp2'])})`",
-        f"  🎯 TP3:        `{fp(a['tp3'])}`  `({pct_chg(a['tp3'])})`",
-        f"  🛑 SL:         `{fp(a['sl'])}`",
-        f"  📐 R:R:        `1:{a['rr']:.1f}`",
+        f"💵 *Точка входа:* `{fp(price)}`",
         "",
-        f"  💎 Спот-зона:  `{fp(buy_lo)}` — `{fp(buy_hi)}`",
-        f"  🔴 Спот-цель:  `{fp(sell_t)}`  `({pct_chg(sell_t)})`",
+        f"🎯 *TP1:* `{fp(a['tp1'])}` *({pct_chg(a['tp1'])})*",
         "",
-        f"{'─'*30}",
-        f"💡 *СТРАТЕГИЯ:*",
+        f"🎯 *TP2:* `{fp(a['tp2'])}` *({pct_chg(a['tp2'])})*",
+        "",
+        f"🎯 *TP3:* `{fp(a['tp3'])}` *({pct_chg(a['tp3'])})*",
+        "",
+        f"🔴 *SL:* `{fp(a['sl'])}`",
+        f"📐 R:R: `1:{a['rr']:.1f}`",
+        "",
+        f"💎 *Спот-зона:* `{fp(buy_lo)}` — `{fp(buy_hi)}`",
+        f"🏆 *Цель спот:* `{fp(sell_t)}` *(~x{sell_t/price:.1f})*" if sell_t>price else "",
         "",
     ]
-
+    # Спот vs фьючерс рекомендация
     if a["is_long"] and rsi_1d < 35 and ch90d < -40:
-        p3 += [
-            "  💎 СПОТ — приоритет",
-            "  Монета у исторического дна. Стратегия DCA:",
-            f"  1й вход: `{fp(buy_hi)}`   — 30% позиции",
-            f"  2й вход: `{fp((buy_lo+buy_hi)/2)}`   — 40% позиции",
-            f"  3й вход: `{fp(buy_lo)}`   — 30% у ATL",
-            "",
-            "  ⚡️ ФЬЮЧЕРС — возможен параллельно",
-            f"  Плечо макс 3x  ·  SL: `{fp(a['sl'])}`",
-        ]
+        p3 += ["💎 *СПОТ — приоритет* (у дна, RSI перепродан)", f"⚡️ Фьючерс: макс 3x, SL `{fp(a['sl'])}`"]
     elif a["is_long"]:
-        p3 += [
-            "  ⚡️ ФЬЮЧЕРС ЛОНГ — основной инструмент",
-            f"  Плечо 2-5x  ·  Вход: `{fp(price)}`  ·  SL: `{fp(a['sl'])}`",
-            "",
-            "  💎 СПОТ — DCA в зоне:",
-            f"  `{fp(buy_lo)}` — `{fp(buy_hi)}`  ·  Цель: `{fp(sell_t)}`",
-        ]
+        p3 += [f"⚡️ *ФЬЮЧЕРС ЛОНГ* — 2-5x", f"Вход `{fp(price)}`  SL `{fp(a['sl'])}`"]
     else:
-        p3 += [
-            "  ⚡️ ФЬЮЧЕРС ШОРТ",
-            f"  Плечо 2-5x  ·  Вход: `{fp(price)}`  ·  SL: `{fp(a['sl'])}`",
-            "  (Спот-шорт недоступен)",
-        ]
+        p3 += [f"⚡️ *ФЬЮЧЕРС ШОРТ* — 2-5x", f"Вход `{fp(price)}`  SL `{fp(a['sl'])}`"]
 
     # Вердикт
-    vscore = sum([r>=75, a.get("macd_bullish") and a["is_long"] or a.get("macd_bearish") and not a["is_long"],
-                  rsi_4h<35 and a["is_long"] or rsi_4h>65 and not a["is_long"],
+    vscore = sum([r>=75, (a.get("macd_bullish") and a["is_long"]) or (a.get("macd_bearish") and not a["is_long"]),
+                  (rsi_4h<35 and a["is_long"]) or (rsi_4h>65 and not a["is_long"]),
                   a.get("supertrend_bull") is (True if a["is_long"] else False),
                   vol_growing, bool(smc)])
-    if vscore>=5: v="🔥 ОЧЕНЬ СИЛЬНЫЙ — входить"; ve="🔥"
-    elif vscore>=3: v="✅ СИЛЬНЫЙ — хороший момент"; ve="✅"
-    elif vscore>=2: v="🟡 УМЕРЕННЫЙ — ждать подтверждения"; ve="🟡"
-    else: v="⚠️ СЛАБЫЙ — воздержаться"; ve="⚠️"
+    if vscore>=5:   ve,vt = "🔥","ОЧЕНЬ СИЛЬНЫЙ — входить"
+    elif vscore>=3: ve,vt = "✅","ХОРОШИЙ — можно входить"
+    elif vscore>=2: ve,vt = "🟡","УМЕРЕННЫЙ — ждать подтверждения"
+    else:           ve,vt = "⚠️","СЛАБЫЙ — воздержаться"
 
     p3 += [
         "",
-        f"{'─'*30}",
-        f"🏁 *ИТОГОВЫЙ ВЕРДИКТ:*",
+        f"🏁 *ВЕРДИКТ:* {ve} *{vt}*",
         "",
-        f"  {ve} *{v}*",
-        "",
-        f"{'─'*30}",
-        f"⚠️  *Риск-менеджмент:*",
-        f"  · Риск на сделку: *1-2% депозита*",
-        f"  · Минимальный R:R: *1:3*",
-        f"  · SL ОБЯЗАТЕЛЕН до открытия",
-        f"  · Макс. плечо альты: *5x*",
-        "",
+        f"⚠️ Риск: *1-2% депозита*  ·  SL обязателен",
         f"#{symbol}USDT  #BESTTRADE",
     ]
+    p3 = [l for l in p3 if l.strip() != ""]
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📈 TradingView",    url=tv_link(symbol)),
@@ -4206,33 +4402,54 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("🏠 Главное меню",   callback_data="show_menu")],
     ])
 
-    await msg.delete()
-
-    # График + первый пост
-    text_for_chart = _build_signal_post(symbol, a, stats_24h,
-                                        mode="long" if a["is_long"] else "short")
-    await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text_for_chart)
-    await asyncio.sleep(0.5)
-
-    await ctx.bot.send_message(update.effective_chat.id, "\n".join(p1),
-                               parse_mode="Markdown", disable_web_page_preview=True)
+    # Отправляем график + сигнал
+    text_chart = _build_signal_post(symbol, a, stats_24h,
+                                    mode="long" if a["is_long"] else "short")
+    await send_coin(bot, chat_id, symbol, slug, a, text_chart)
+    await asyncio.sleep(0.4)
+    await bot.send_message(chat_id, "\n".join(p1),
+                           parse_mode="Markdown", disable_web_page_preview=True)
     await asyncio.sleep(0.3)
-    await ctx.bot.send_message(update.effective_chat.id, "\n".join(p2),
-                               parse_mode="Markdown", disable_web_page_preview=True)
+    await bot.send_message(chat_id, "\n".join(p2),
+                           parse_mode="Markdown", disable_web_page_preview=True)
     await asyncio.sleep(0.3)
-    await ctx.bot.send_message(update.effective_chat.id, "\n".join(p3),
-                               parse_mode="Markdown", reply_markup=kb,
-                               disable_web_page_preview=True)
-    await ctx.bot.send_message(
-        update.effective_chat.id,
+    await bot.send_message(chat_id, "\n".join(p3),
+                           parse_mode="Markdown", reply_markup=kb,
+                           disable_web_page_preview=True)
+    await bot.send_message(chat_id,
         "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
-        parse_mode="Markdown", reply_markup=main_kb()
+        parse_mode="Markdown", reply_markup=main_kb())
+    return True
+
+
+async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/full SYMBOL — полный анализ монеты"""
+    if not ctx.args:
+        await update.message.reply_text(
+            "🔬 *Полный анализ — /full*\n\n"
+            "Использование: `/full BTC`\n"
+            "Пример: `/full ETH` · `/full SOL` · `/full RIVER`\n\n"
+            "Включает:\n"
+            "· EMA 20/50/200 · RSI · MACD · Supertrend\n"
+            "· ATH / ATL · SMC/ICT · Зоны входа\n"
+            "· Фандинг · OI · Спот vs Фьючерс · Вердикт",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
+            ]])
+        )
+        return
+
+    symbol = ctx.args[0].upper().replace("USDT","").replace("BUSD","")
+    msg    = await update.message.reply_text(
+        f"🔍 Анализирую *{symbol}USDT*...", parse_mode="Markdown"
     )
+    try:
+        await msg.delete()
+    except: pass
+    await _do_full_analysis(ctx.bot, update.effective_chat.id, symbol)
 
 
-# ═══════════════════════════════════════════
-# MAIN — в конце файла после всех функций
-# ═══════════════════════════════════════════
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",     cmd_start))
