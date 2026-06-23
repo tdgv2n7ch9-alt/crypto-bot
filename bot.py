@@ -905,6 +905,9 @@ def full_analysis(coin: dict) -> dict:
     if macd_bullish:    smc_factors.append("MACD Bull")
     if macd_bearish:    smc_factors.append("MACD Bear")
     if suspicious:      smc_factors.append("⚠️ Vol аномалия")
+    # Supply/Demand зоны
+    if in_demand:       smc_factors.append("🟢 Demand Zone")
+    if in_supply:       smc_factors.append("🔴 Supply Zone")
 
     return {
         "label": label, "score": score, "is_long": is_long,
@@ -2155,19 +2158,23 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             effective_chat = q.message.chat
             message        = q.message
         await cmd_top_short(FakeUpdate(), ctx)
+
+    elif data == "menu_full":
+        # Сразу запускаем полный анализ — просим ввести монету
         await q.edit_message_text(
             "🔬 *Полный анализ монеты*\n\n"
-            "Напиши в чат:\n"
+            "Введи команду в чат:\n"
             "`/full BTC` · `/full ETH` · `/full SOL`\n"
-            "`/full [СИМВОЛ]` — любая монета топ-500\n\n"
-            "Включает реальные индикаторы из Binance:\n"
-            "EMA 20/50/200 · RSI · MACD · Supertrend\n"
-            "SMC · ATR · Поддержка/Сопротивление\n"
-            "Фандинг · OI · Спот vs Фьючерс",
+            "`/full SYMBOL` — любая монета\n\n"
+            "Включает:\n"
+            "· EMA 9/20/50/200 · RSI · MACD · Supertrend\n"
+            "· Supply/Demand зоны · ATR\n"
+            "· Фандинг · OI · Спот vs Фьючерс\n"
+            "· Вердикт и рекомендация",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
+            ])
         )
 
     elif data in ("game", "top_trades"):
@@ -2176,20 +2183,22 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
         ])
 
-        lines = [f"🔥 *BEST TRADE — TOP Активные сделки*", f"🕐 {now_utc3()}", ""]
+        lines = [f"🔥 *BEST TRADE — Монеты в игре*", f"🕐 {now_utc3()}", ""]
         has_signals = False
+        total = len(TOP_LONG_SIGNALS) + len(TOP_SHORT_SIGNALS) + len(TOP_SPOT_SIGNALS)
+
+        if total > 0:
+            lines[2] = f"🔥 *Сигналов в работе: {total}*\n"
 
         # ── ЛОНГИ ──
         active_l = {s: v for s, v in TOP_LONG_SIGNALS.items() if v.get("status") != "done"}
         if active_l:
             has_signals = True
-            lines.append("🟢 *ЛОНГИ:*")
-            lines.append("")
             for sym, v in active_l.items():
                 try:
                     stats = get_binance_24h(sym)
                     cur   = stats.get("last", v["entry"]) if stats else v["entry"]
-                    if cur == 0: cur = v["entry"]
+                    if not cur: cur = v["entry"]
                 except: cur = v["entry"]
 
                 entry = v["entry"]
@@ -2200,23 +2209,24 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 move  = (cur - entry) / entry * 100 if entry > 0 else 0
                 t     = v["time"].strftime("%d.%m %H:%M")
                 tv    = tv_link(sym)
+                dist  = (entry - cur) / entry * 100 if cur < entry else 0
 
                 # Статус
-                dist_pct = (entry - cur) / entry * 100 if cur < entry else 0
-                if cur >= tp3:             status = "🏆 TP3 достигнут!"
-                elif cur >= tp2:           status = "✅✅ TP2 достигнут!"
-                elif cur >= tp1:           status = "✅ TP1 — двигаем стоп"
-                elif cur > entry * 1.005:  status = "📈 Отрабатывает"
-                elif dist_pct <= 2:        status = f"⚡️ До входа {dist_pct:.1f}% — СКОРО!"
-                elif cur <= sl * 1.01:     status = "⚠️ Близко к SL!"
-                else:                      status = f"⏳ До входа {dist_pct:.1f}%"
+                if cur >= tp3:          status = "🏆 TP3 достигнут!"
+                elif cur >= tp2:        status = "✅✅ TP2 достигнут!"
+                elif cur >= tp1:        status = "✅ TP1 — двигаем стоп"
+                elif cur > entry*1.005: status = "📈 Отрабатывает"
+                elif dist <= 1:        status = "⚡️ Близко к входу!"
+                elif dist <= 2:        status = f"📍 До входа {dist:.1f}%"
+                elif cur <= sl*1.01:   status = "⚠️ Близко к SL!"
+                else:                  status = f"⏳ Ждём входа {dist:.1f}%"
 
                 lines += [
-                    f"[{sym}USDT]({tv})",
-                    f"💵 Вход: `{fp(entry)}`  ·  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
-                    f"🎯 TP1: `{fp(tp1)}`  TP2: `{fp(tp2)}`  TP3: `{fp(tp3)}`",
-                    f"🛑 SL: `{fp(sl)}`",
-                    f"{status}  ⏰ {t}",
+                    f"• [{sym}USDT]({tv}) — 🟢 лонг",
+                    f"  💰 Вход `{fp(entry)}`  Сейчас `{fp(cur)}`  `{move:+.1f}%`",
+                    f"  🎯 TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  SL `{fp(sl)}`",
+                    f"  {status}",
+                    f"  ⏰ {t} UTC+3",
                     "",
                 ]
 
@@ -2224,51 +2234,78 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         active_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if v.get("status") != "done"}
         if active_s:
             has_signals = True
-            lines.append("🔴 *ШОРТЫ:*")
-            lines.append("")
             for sym, v in active_s.items():
                 try:
                     stats = get_binance_24h(sym)
                     cur   = stats.get("last", v["entry"]) if stats else v["entry"]
-                    if cur == 0: cur = v["entry"]
+                    if not cur: cur = v["entry"]
                 except: cur = v["entry"]
 
                 entry = v["entry"]
                 tp1   = v.get("tp1", entry * 0.98)
                 tp2   = v.get("tp2", entry * 0.96)
-                tp3   = v.get("tp3", entry * 0.92)
                 sl    = v.get("sl",  entry * 1.15)
                 move  = (entry - cur) / entry * 100 if entry > 0 else 0
                 t     = v["time"].strftime("%d.%m %H:%M")
                 tv    = tv_link(sym)
+                dist  = (cur - entry) / entry * 100 if cur > entry else 0
 
-                dist_pct = (cur - entry) / entry * 100 if cur > entry else 0
-                if cur <= tp3:             status = "🏆 TP3 достигнут!"
-                elif cur <= tp2:           status = "✅✅ TP2 достигнут!"
-                elif cur <= tp1:           status = "✅ TP1 — двигаем стоп"
-                elif cur < entry * 0.995:  status = "📉 Отрабатывает"
-                elif dist_pct <= 2:        status = f"⚡️ До входа {dist_pct:.1f}% — СКОРО!"
-                elif cur >= sl * 0.99:     status = "⚠️ Близко к SL!"
-                else:                      status = f"⏳ До входа {dist_pct:.1f}%"
+                if cur <= tp2:          status = "✅✅ TP2 достигнут!"
+                elif cur <= tp1:        status = "✅ TP1 — двигаем стоп"
+                elif cur < entry*0.995: status = "📉 Отрабатывает"
+                elif dist <= 1:        status = "⚡️ Близко к входу!"
+                elif dist <= 2:        status = f"📍 До входа {dist:.1f}%"
+                elif cur >= sl*0.99:   status = "⚠️ Близко к SL!"
+                else:                  status = f"⏳ Ждём входа {dist:.1f}%"
 
                 lines += [
-                    f"[{sym}USDT]({tv})",
-                    f"💵 Вход: `{fp(entry)}`  ·  Сейчас: `{fp(cur)}`  `{move:+.1f}%`",
-                    f"🎯 TP1: `{fp(tp1)}`  TP2: `{fp(tp2)}`  TP3: `{fp(tp3)}`",
-                    f"🛑 SL: `{fp(sl)}`",
-                    f"{status}  ⏰ {t}",
+                    f"• [{sym}USDT]({tv}) — 🔴 шорт",
+                    f"  💰 Вход `{fp(entry)}`  Сейчас `{fp(cur)}`  `{move:+.1f}%`",
+                    f"  🎯 TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  SL `{fp(sl)}`",
+                    f"  {status}",
+                    f"  ⏰ {t} UTC+3",
                     "",
                 ]
 
+        # ── СПОТ наблюдение ──
+        if TOP_SPOT_SIGNALS:
+            has_signals = True
+            for sym, v in TOP_SPOT_SIGNALS.items():
+                tv     = tv_link(sym)
+                t      = v["time"].strftime("%d.%m %H:%M")
+                buy_lo = v.get("buy_zone_lo", v["entry"])
+                buy_hi = v.get("buy_zone_hi", v["entry"])
+                sell_t = v.get("sell_target", 0)
+                lines += [
+                    f"• [{sym}USDT]({tv}) — 💎 спот",
+                    f"  🟢 Зона `{fp(buy_lo)}` — `{fp(buy_hi)}`",
+                    f"  🔴 Цель `{fp(sell_t)}`",
+                    f"  ⏰ {t} UTC+3",
+                    "",
+                ]
+
+        # ── Отработавшие ──
+        done_l = {s: v for s, v in TOP_LONG_SIGNALS.items()  if v.get("status") == "done"}
+        done_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if v.get("status") == "done"}
+        if done_l or done_s:
+            lines.append("✅ *Отработали:*")
+            for sym, v in list(done_l.items())[:5]:
+                tv = tv_link(sym)
+                t  = v["time"].strftime("%d.%m %H:%M")
+                lines.append(f"• [{sym}USDT]({tv}) — 📈 выросла")
+                lines.append(f"  ⏰ {t} UTC+3")
+            for sym, v in list(done_s.items())[:5]:
+                tv = tv_link(sym)
+                t  = v["time"].strftime("%d.%m %H:%M")
+                lines.append(f"• [{sym}USDT]({tv}) — 📉 упала")
+                lines.append(f"  ⏰ {t} UTC+3")
+
         if not has_signals:
             lines += [
-                "📭 *Активных сделок нет*",
-                "",
-                "Открой позиции через:",
+                "📭 *Активных сигналов нет*\n",
+                "Сигналы появляются автоматически каждые 30 мин.",
+                "Или открой вручную:",
                 "🟢 ТОП ЛОНГ  ·  🔴 ТОП ШОРТ",
-                "",
-                "После открытия они появятся здесь",
-                "с мониторингом и алертами.",
             ]
 
         try:
@@ -2277,8 +2314,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=nav, disable_web_page_preview=False
             )
         except: await q.answer("Обновлено ✅")
-
-    elif data.startswith("tp_") or data.startswith("sl_"):
         # Закрытие сделки
         parts = data.split("_")
         action = parts[0]   # tp / sl
@@ -3090,18 +3125,94 @@ async def check_spot_alerts(bot: Bot, chat_ids: set):
             log.error(f"check_spot_alerts {sym}: {e}")
 
 
+async def check_entry_approach(bot: Bot, chat_ids: set):
+    """Алерт когда цена приближается к точке входа (1-2%) для активных лонг/шорт сигналов"""
+    now_ts = datetime.now(TZ).timestamp()
+
+    for sym, v in list(TOP_LONG_SIGNALS.items()):
+        if v.get("status") == "done": continue
+        last_alert = pump_alerted.get(f"_entry_l_{sym}", 0)
+        if now_ts - last_alert < 3600: continue  # не чаще раза в час
+
+        try:
+            stats = get_binance_24h(sym)
+            if not stats: continue
+            cur   = stats.get("last", 0)
+            entry = v.get("entry", 0)
+            if not cur or not entry: continue
+
+            dist = (entry - cur) / entry * 100 if cur < entry else 0
+            if 0 < dist <= 2.0:  # цена в 0-2% от входа
+                pump_alerted[f"_entry_l_{sym}"] = now_ts
+                text = (
+                    f"⚡️ *ВХОД БЛИЗКО — {sym}USDT* 🟢 ЛОНГ\n"
+                    f"🕐 {now_utc3()}\n\n"
+                    f"💰 Цена входа: `{fp(entry)}`\n"
+                    f"📍 Текущая:    `{fp(cur)}`\n"
+                    f"📏 До входа:   `{dist:.1f}%`\n\n"
+                    f"🎯 TP1: `{fp(v.get('tp1', entry*1.02))}`\n"
+                    f"🛑 SL:  `{fp(v.get('sl', entry*0.85))}`\n\n"
+                    f"⚠️ Готовься к входу!\n#{sym}USDT"
+                )
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("🔥 TOP Сделки",  callback_data="top_trades"),
+                ]])
+                for cid in chat_ids:
+                    try: await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    except Exception as e: log.error(f"Entry approach alert {cid}: {e}")
+        except Exception as e:
+            log.error(f"check_entry_approach {sym}: {e}")
+
+    for sym, v in list(TOP_SHORT_SIGNALS.items()):
+        if v.get("status") == "done": continue
+        last_alert = pump_alerted.get(f"_entry_s_{sym}", 0)
+        if now_ts - last_alert < 3600: continue
+
+        try:
+            stats = get_binance_24h(sym)
+            if not stats: continue
+            cur   = stats.get("last", 0)
+            entry = v.get("entry", 0)
+            if not cur or not entry: continue
+
+            dist = (cur - entry) / entry * 100 if cur > entry else 0
+            if 0 < dist <= 2.0:
+                pump_alerted[f"_entry_s_{sym}"] = now_ts
+                text = (
+                    f"⚡️ *ВХОД БЛИЗКО — {sym}USDT* 🔴 ШОРТ\n"
+                    f"🕐 {now_utc3()}\n\n"
+                    f"💰 Цена входа: `{fp(entry)}`\n"
+                    f"📍 Текущая:    `{fp(cur)}`\n"
+                    f"📏 До входа:   `{dist:.1f}%`\n\n"
+                    f"🎯 TP1: `{fp(v.get('tp1', entry*0.98))}`\n"
+                    f"🛑 SL:  `{fp(v.get('sl', entry*1.15))}`\n\n"
+                    f"⚠️ Готовься к входу!\n#{sym}USDT"
+                )
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("🔥 TOP Сделки",  callback_data="top_trades"),
+                ]])
+                for cid in chat_ids:
+                    try: await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    except Exception as e: log.error(f"Entry approach alert {cid}: {e}")
+        except Exception as e:
+            log.error(f"check_entry_approach {sym}: {e}")
+
+
 async def check_alerts(bot: Bot):
-    """Каждые 5 мин: pump/dump + zone + supertrend + watchlist + spot alerts"""
+    """Каждые 5 мин: pump/dump + zone + supertrend + watchlist + spot + entry alerts"""
     chat_ids = load_chat_ids() | user_chat_ids
     if not chat_ids: return
     try:
-        coins = get_top500()
+        coins = get_all_coins()
         if not coins: return
         await check_pump_dump(bot, chat_ids, coins)
         await check_entry_zones(bot, chat_ids, coins)
         await check_watchlist(bot, chat_ids, coins)
         await check_supertrend_signals(bot, chat_ids, coins)
         await check_spot_alerts(bot, chat_ids)
+        await check_entry_approach(bot, chat_ids)   # алерт приближения к входу
     except Exception as e:
         log.error(f"check_alerts: {e}")
 
@@ -3265,11 +3376,55 @@ def real_ta(symbol: str) -> dict:
         atr_vals = calc_atr(c4h, 14)
         atr_v    = atr_vals[-1] if atr_vals else 0.0
 
-        # ── Support / Resistance (последние 50 свечей) ──
-        recent_lows  = sorted(lows_4h[-50:])
-        recent_highs = sorted(highs_4h[-50:], reverse=True)
-        support      = sum(recent_lows[:5])  / 5
-        resistance   = sum(recent_highs[:5]) / 5
+        # ── Supply / Demand зоны (SMC метод) ──
+        # Demand (покупка) = зоны где цена резко выросла после консолидации
+        # Supply (продажа) = зоны где цена резко упала после консолидации
+        demand_zones = []  # [(low, high), ...]
+        supply_zones = []
+
+        for i in range(5, len(candles) - 5):
+            c = candles[i]
+            # Спред свечи
+            body = abs(c["close"] - c["open"])
+            rng  = c["high"] - c["low"]
+            if rng == 0: continue
+
+            # Импульсная свеча вверх → Demand зона (основание)
+            if (c["close"] > c["open"]                         # бычья
+                    and body / rng > 0.6                       # сильное тело
+                    and body > sum(abs(candles[j]["close"] - candles[j]["open"])
+                                   for j in range(i-3, i)) / 3):  # больше среднего
+                demand_zones.append((c["low"], c["open"]))
+
+            # Импульсная свеча вниз → Supply зона (верхушка)
+            if (c["close"] < c["open"]
+                    and body / rng > 0.6
+                    and body > sum(abs(candles[j]["close"] - candles[j]["open"])
+                                   for j in range(i-3, i)) / 3):
+                supply_zones.append((c["close"], c["high"]))
+
+        # Ближайшая Demand зона ниже цены = support
+        price_now = closes_4h[-1]
+        relevant_demand = [z for z in demand_zones if z[1] < price_now]
+        relevant_supply = [z for z in supply_zones if z[0] > price_now]
+
+        if relevant_demand:
+            closest_demand = max(relevant_demand, key=lambda z: z[1])
+            support = closest_demand[0]
+        else:
+            recent_lows = sorted(lows_4h[-50:])
+            support = sum(recent_lows[:5]) / 5
+
+        if relevant_supply:
+            closest_supply = min(relevant_supply, key=lambda z: z[0])
+            resistance = closest_supply[1]
+        else:
+            recent_highs = sorted(highs_4h[-50:], reverse=True)
+            resistance = sum(recent_highs[:5]) / 5
+
+        # Флаг: цена у зоны
+        in_demand_zone = any(z[0] <= price_now <= z[1] * 1.02 for z in demand_zones[-10:])
+        in_supply_zone = any(z[0] * 0.98 <= price_now <= z[1] for z in supply_zones[-10:])
 
         # ── Supertrend (4H) ──
         st_vals = calc_supertrend(c4h, 10, 3.0)
@@ -3309,6 +3464,11 @@ def real_ta(symbol: str) -> dict:
             "resistance": round(resistance, 8),
             "trend_4h":  trend_4h,
             "candles_4h": c4h,
+            # Supply/Demand зоны
+            "in_demand_zone": in_demand_zone,
+            "in_supply_zone": in_supply_zone,
+            "demand_zones": demand_zones[-5:],  # последние 5
+            "supply_zones": supply_zones[-5:],
         })
     except Exception as e:
         log.error(f"real_ta {symbol}: {e}")
@@ -3372,6 +3532,10 @@ def real_full_analysis(coin: dict) -> dict:
     tf_aligned_bear = not above_ema20 and not above_ema50 and trend_4h == "bearish"
     fund_recovery   = ch90d < -40 and ch7d > 5 and not suspicious
 
+    # Supply/Demand зоны из реальных свечей
+    in_demand = ta.get("in_demand_zone", False)
+    in_supply = ta.get("in_supply_zone", False)
+
     # Direction: реальный тренд из TA
     score_ta = 0
     if trend_4h == "bullish":    score_ta += 3
@@ -3388,6 +3552,9 @@ def real_full_analysis(coin: dict) -> dict:
     elif ch7d < -5:              score_ta -= 1
     if supertrend_bull is True:  score_ta += 2
     elif supertrend_bull is False: score_ta -= 2
+    # Supply/Demand влияют на направление
+    if in_demand:                score_ta += 3   # цена в зоне покупки → лонг
+    if in_supply:                score_ta -= 3   # цена в зоне продажи → шорт
 
     is_long = score_ta >= 0
 
@@ -3409,6 +3576,11 @@ def real_full_analysis(coin: dict) -> dict:
     if smc_fvg_bull and is_long: rocket += 3
     if supertrend_bull is True and is_long:  rocket += 6
     elif supertrend_bull is False and not is_long: rocket += 6
+    # Supply/Demand бонусы
+    if in_demand and is_long:    rocket += 12   # цена в зоне Demand → сильный лонг
+    if in_supply and not is_long: rocket += 12  # цена в зоне Supply → сильный шорт
+    if in_demand and not is_long: rocket -= 10  # противоречие
+    if in_supply and is_long:    rocket -= 10   # противоречие
     if rank <= 20:               rocket += 6
     elif rank <= 50:             rocket += 4
     elif rank <= 200:            rocket += 2
@@ -4482,15 +4654,20 @@ def main():
 
     scheduler = AsyncIOScheduler(timezone=TZ)
     scheduler.add_job(
-        lambda: asyncio.create_task(send_scheduled(app.bot)),
-        "interval", minutes=30
+        send_scheduled,
+        "interval",
+        minutes=30,
+        args=[app.bot],
+        next_run_time=datetime.now(TZ)  # первый запуск сразу
     )
     scheduler.add_job(
-        lambda: asyncio.create_task(check_alerts(app.bot)),
-        "interval", minutes=5
+        check_alerts,
+        "interval",
+        minutes=5,
+        args=[app.bot]
     )
     scheduler.start()
-    log.info("✅ BEST TRADE v31.0 | Real-time signals | UTC+3")
+    log.info("✅ BEST TRADE v32.0 | Supply/Demand | Real-time signals | UTC+3")
     _load_signals()
     app.run_polling(drop_pending_updates=True)
 
