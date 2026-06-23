@@ -1960,15 +1960,91 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Загружаю...")
+    msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
     try:
-        prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top500()
-        ms = analyze_market(prices.get("BTC", {}), prices.get("ETH", {}), gm, coins)
-        await msg.edit_text(build_overview_text(ms), parse_mode="Markdown",
+        prices = get_btc_eth_price()
+        gm     = get_global_metrics()
+        coins  = get_all_coins()
+        if not prices or not coins:
+            await msg.edit_text("❌ Нет данных от API"); return
+
+        btc = prices.get("BTC", {})
+        eth = prices.get("ETH", {})
+        btc_price = btc.get("price", 0)
+        eth_price = eth.get("price", 0)
+        btc_ch24  = btc.get("percent_change_24h", 0) or 0
+        eth_ch24  = eth.get("percent_change_24h", 0) or 0
+
+        # Доминация
+        btc_dom    = gm.get("btc_dominance", 0)
+        eth_dom    = gm.get("eth_dominance", 0)
+        total_mcap = gm.get("total_market_cap", 0)
+        mcap_ch    = gm.get("total_market_cap_yesterday_percentage_change", 0) or 0
+
+        # Настроение — быстро по CMC данным
+        pos = sum(1 for c in coins[:200]
+                  if (c["quote"]["USDT"].get("percent_change_24h") or 0) > 0)
+        pct = pos / 200 * 100
+        if pct >= 65:    sentiment = "🟢 Бычье"
+        elif pct >= 50:  sentiment = "🟡 Нейтральное"
+        else:            sentiment = "🔴 Медвежье"
+
+        # Топ лонги/шорты — только по CMC данным (быстро)
+        long_lines  = []
+        short_lines = []
+        sorted_ch = sorted(coins[:100],
+                           key=lambda c: c["quote"]["USDT"].get("percent_change_24h",0) or 0,
+                           reverse=True)
+        for c in sorted_ch[:5]:
+            sym = c["symbol"]
+            ch  = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
+            p   = c["quote"]["USDT"].get("price", 0)
+            vol = c["quote"]["USDT"].get("volume_24h", 0) or 0
+            if vol >= 2_000_000:
+                long_lines.append(f"  🟢 *{sym}*  `{fp(p)}`  `{fc(ch)}`")
+        for c in sorted(coins[:100],
+                        key=lambda c: c["quote"]["USDT"].get("percent_change_24h",0) or 0)[:5]:
+            sym = c["symbol"]
+            ch  = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
+            p   = c["quote"]["USDT"].get("price", 0)
+            vol = c["quote"]["USDT"].get("volume_24h", 0) or 0
+            if vol >= 2_000_000:
+                short_lines.append(f"  🔴 *{sym}*  `{fp(p)}`  `{fc(ch)}`")
+
+        ta = trend_arrow
+        lines = [
+            "🌍 *ОБЗОР РЫНКА — BEST TRADE*",
+            f"🕐 {now_utc3()}",
+            "",
+            f"{ta(btc_ch24)} *Bitcoin (BTC)*  `${btc_price:,.0f}`  `{fc(btc_ch24)}`",
+            f"{ta(eth_ch24)} *Ethereum (ETH)*  `${eth_price:,.0f}`  `{fc(eth_ch24)}`",
+            "",
+            f"📊 *Доминация:*  BTC `{btc_dom:.1f}%`  ETH `{eth_dom:.1f}%`",
+            f"💰 *Total MCap:*  `{fm(total_mcap)}`  `{fc(mcap_ch)}`",
+            "",
+            f"🧭 *Настроение:* {sentiment}  ({pct:.0f}% монет растут)",
+            "",
+            "📈 *Топ роста 24ч:*",
+        ]
+        lines += long_lines if long_lines else ["  —"]
+        lines += ["", "📉 *Топ падения 24ч:*"]
+        lines += short_lines if short_lines else ["  —"]
+        lines += [
+            "",
+            "⚠️ Риск: *2% депозита*  ·  SL обязателен",
+        ]
+
+        await msg.edit_text("\n".join(lines), parse_mode="Markdown",
                             reply_markup=overview_kb(), disable_web_page_preview=True)
     except Exception as e:
         log.error(f"cmd_market: {e}")
-        await msg.edit_text("❌ Ошибка")
+        await msg.edit_text(
+            f"❌ Ошибка обзора рынка\n\nПопробуй ещё раз",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Обновить", callback_data="market_overview"),
+                InlineKeyboardButton("🏠 Меню",     callback_data="show_menu"),
+            ]])
+        )
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
@@ -2338,15 +2414,21 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _do_full_analysis(ctx.bot, q.message.chat_id, symbol)
 
     elif data == "market_overview":
-        await q.edit_message_text("⏳ Загружаю...", parse_mode="Markdown")
+        await q.edit_message_text("⏳ Загружаю обзор...", parse_mode="Markdown")
         try:
-            prices = get_btc_eth_price(); gm = get_global_metrics(); coins = get_top500()
-            ms = analyze_market(prices.get("BTC", {}), prices.get("ETH", {}), gm, coins)
-            await q.edit_message_text(build_overview_text(ms), parse_mode="Markdown",
-                                      reply_markup=overview_kb(), disable_web_page_preview=True)
+            # Используем FakeUpdate чтобы вызвать исправленный cmd_market
+            class FakeMsg:
+                async def reply_text(self, text, **kw):
+                    return await ctx.bot.send_message(q.message.chat_id, text, **kw)
+            class FakeUpdate:
+                effective_chat = q.message.chat
+                message = FakeMsg()
+            try: await q.message.delete()
+            except: pass
+            await cmd_market(FakeUpdate(), ctx)
         except Exception as e:
             log.error(f"overview cb: {e}")
-            await q.edit_message_text("❌ Ошибка")
+            await ctx.bot.send_message(q.message.chat_id, "❌ Ошибка обзора рынка")
 
     elif data == "signals":
         await q.edit_message_text("⏳ Загружаю сигналы...", parse_mode="Markdown")
