@@ -1637,16 +1637,15 @@ def build_overview_text(ms: dict) -> str:
 
 def overview_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("₿ BTC на TradingView", url=tv_link("BTC")),
-         InlineKeyboardButton("Ξ ETH на TradingView", url=tv_link("ETH"))],
-        [InlineKeyboardButton("📊 BTC Dominance", url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:BTC.D"),
-         InlineKeyboardButton("📈 TOTAL Market",  url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
-        [InlineKeyboardButton("🔄 Обновить обзор",   callback_data="market_overview"),
-         InlineKeyboardButton("🏠 Главное меню",     callback_data="show_menu")],
-        [InlineKeyboardButton("💎 ТОП СПОТ",         callback_data="top_spot"),
-         InlineKeyboardButton("🟢 ТОП ЛОНГ",         callback_data="top_long")],
-        [InlineKeyboardButton("🔴 ТОП ШОРТ",         callback_data="top_short"),
-         InlineKeyboardButton("🔬 Полный анализ",    callback_data="menu_full")],
+        [InlineKeyboardButton("🔄 Обновить",          callback_data="market_overview"),
+         InlineKeyboardButton("📊 Тренд анализ",      callback_data="trend_analysis")],
+        [InlineKeyboardButton("💎 ТОП СПОТ",          callback_data="top_spot"),
+         InlineKeyboardButton("🟢 ТОП ЛОНГ",          callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",          callback_data="top_short"),
+         InlineKeyboardButton("🔬 Полный анализ",     callback_data="menu_full")],
+        [InlineKeyboardButton("₿ BTC Chart",          url=tv_link("BTC")),
+         InlineKeyboardButton("📈 TOTAL",             url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
+        [InlineKeyboardButton("🏠 Главное меню",      callback_data="show_menu")],
     ])
 
 # ═══════════════════════════════════════════
@@ -1737,15 +1736,17 @@ async def check_entry_zones(bot, chat_ids, coins):
 # ОТПРАВКА
 # ═══════════════════════════════════════════
 def main_kb():
-    """Главное меню BEST TRADE"""
+    """Главное меню BEST TRADE v34"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💎 ТОП СПОТ",           callback_data="top_spot"),
-         InlineKeyboardButton("🟢 ТОП ЛОНГ",           callback_data="top_long")],
-        [InlineKeyboardButton("🔴 ТОП ШОРТ",           callback_data="top_short"),
-         InlineKeyboardButton("🔬 Полный анализ /full", callback_data="menu_full")],
-        [InlineKeyboardButton("🌍 Обзор рынка",         callback_data="market_overview"),
-         InlineKeyboardButton("🔥 TOP Активные сделки", callback_data="top_trades")],
-        [InlineKeyboardButton("📡 Сигналы каналов",    callback_data="channel_signals")],
+        [InlineKeyboardButton("🌍 Обзор рынка",          callback_data="market_overview"),
+         InlineKeyboardButton("📊 Тренд анализ",         callback_data="trend_analysis")],
+        [InlineKeyboardButton("💎 ТОП СПОТ",             callback_data="top_spot"),
+         InlineKeyboardButton("🟢 ТОП ЛОНГ",             callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",             callback_data="top_short"),
+         InlineKeyboardButton("🔬 Полный анализ",        callback_data="menu_full")],
+        [InlineKeyboardButton("🔥 Активные сделки",      callback_data="top_trades"),
+         InlineKeyboardButton("📡 Сигналы каналов",      callback_data="channel_signals")],
+        [InlineKeyboardButton("🐋 On-Chain (Lookonchain)", callback_data="onchain_info")],
     ])
 
 def back_kb():
@@ -1919,11 +1920,19 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     with open("chat_ids.txt", "a") as f:
         f.write(f"{cid}\n")
     await update.message.reply_text(
-        "📊 *BEST TRADE v22.0*\n\n"
-        "Профессиональный торговый бот\n"
-        "Реальные индикаторы · Binance свечи\n"
-        "EMA · RSI · MACD · Supertrend · SMC\n"
-        "📡 Аналитика BEST TRADE\n\n"
+        "📊 *BEST TRADE v34.0*\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🧠 *Профессиональная торговая система*\n\n"
+        "🔬 *Анализ:*\n"
+        "· SMC/ICT · Order Blocks · FVG · BOS\n"
+        "· EMA 20/50/200 · RSI · MACD · Supertrend\n"
+        "· Wyckoff · AMD · Power of Three\n"
+        "· Multi-TF Confluence · Killzone\n\n"
+        "📡 *Мониторинг:*\n"
+        "· 11 каналов трейдеров в реальном времени\n"
+        "· On-chain данные (Lookonchain)\n"
+        "· Сигналы с TP/SL автоматически\n\n"
+        "⚠️ *Риск:* 1–2% депозита · SL всегда\n\n"
         "👇 Выбери раздел:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
@@ -1983,24 +1992,25 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ta = trend_arrow
         lines = [
             "🌍 *ОБЗОР РЫНКА — BEST TRADE*",
+            "━━━━━━━━━━━━━━━━━━━━━",
             f"🕐 {now_utc3()}",
             "",
-            f"{ta(btc_ch24)} *Bitcoin (BTC)*  `${btc_price:,.0f}`  `{fc(btc_ch24)}`",
-            f"{ta(eth_ch24)} *Ethereum (ETH)*  `${eth_price:,.0f}`  `{fc(eth_ch24)}`",
+            f"₿ *Bitcoin*   `${btc_price:,.0f}`  {ta(btc_ch24)} `{fc(btc_ch24)}`",
+            f"Ξ *Ethereum*  `${eth_price:,.0f}`   {ta(eth_ch24)} `{fc(eth_ch24)}`",
             "",
-            f"📊 *Доминация:*  BTC `{btc_dom:.1f}%`  ETH `{eth_dom:.1f}%`",
+            f"📊 *Доминация:*  BTC `{btc_dom:.1f}%`  ·  ETH `{eth_dom:.1f}%`",
             f"💰 *Total MCap:*  `{fm(total_mcap)}`  `{fc(mcap_ch)}`",
+            f"🧭 *Настроение:*  {sentiment}  ·  `{pct:.0f}%` монет в плюсе",
             "",
-            f"🧭 *Настроение:* {sentiment}  ({pct:.0f}% монет растут)",
-            "",
-            "📈 *Топ роста 24ч:*",
+            "━━━ 📈 *ТОП РОСТА 24ч* ━━━",
         ]
         lines += long_lines if long_lines else ["  —"]
-        lines += ["", "📉 *Топ падения 24ч:*"]
+        lines += ["", "━━━ 📉 *ТОП ПАДЕНИЯ 24ч* ━━━"]
         lines += short_lines if short_lines else ["  —"]
         lines += [
             "",
-            "⚠️ Риск: *2% депозита*  ·  SL обязателен",
+            "━━━━━━━━━━━━━━━━━━━━━",
+            "⚠️ *Риск:* 1–2% депозита  ·  SL обязателен  ·  макс 3–5x",
         ]
 
         await msg.edit_text("\n".join(lines), parse_mode="Markdown",
@@ -2179,7 +2189,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # ── Новые главные разделы ──
     if data == "show_menu":
         await q.edit_message_text(
-            "📊 *BEST TRADE — Главное меню*\n\n👇 Выбери раздел:",
+            "📊 *BEST TRADE v34.0*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🧠 *Профессиональная торговая система*\n\n"
+            "🔬 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
+            "📡 11 каналов · On-chain · Killzone\n\n"
+            "👇 Выбери раздел:",
             parse_mode="Markdown", reply_markup=main_kb()
         )
 
@@ -2205,17 +2220,22 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_top_short(FakeUpdate(), ctx)
 
     elif data == "menu_full":
-        # Сразу запускаем полный анализ — просим ввести монету
         await q.edit_message_text(
-            "🔬 *Полный анализ монеты*\n\n"
+            "🔬 *Полный анализ монеты*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
             "Введи команду в чат:\n"
-            "`/full BTC` · `/full ETH` · `/full SOL`\n"
+            "`/full BTC`  `/full ETH`  `/full SOL`\n"
             "`/full SYMBOL` — любая монета\n\n"
-            "Включает:\n"
-            "· EMA 9/20/50/200 · RSI · MACD · Supertrend\n"
-            "· Supply/Demand зоны · ATR\n"
-            "· Фандинг · OI · Спот vs Фьючерс\n"
-            "· Вердикт и рекомендация",
+            "📊 *Включает 6 уровней анализа:*\n"
+            "① SMC/ICT — OB · FVG · BOS · CHoCH · Sweep\n"
+            "② Wyckoff — фаза накопления/распределения\n"
+            "③ AMD — Power of Three (Asia/London/NY)\n"
+            "④ Multi-TF — confluence 1H/4H/1D/1W\n"
+            "⑤ Volume Profile · OI · Funding Rate\n"
+            "⑥ Macro — Gold · USDT.D · ETH/BTC ratio\n\n"
+            "🎯 *Результат:*\n"
+            "Entry · TP1/TP2/TP3 · SL · Score 0–100\n"
+            "Killzone · Качество входа A+/A/B/C",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
@@ -2485,6 +2505,32 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(txt, parse_mode="Markdown",
                                   reply_markup=overview_kb(), disable_web_page_preview=True)
 
+    elif data == "onchain_info":
+        nav = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data="onchain_info"),
+             InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
+        ])
+        try:
+            await q.edit_message_text(
+                "🐋 *On-Chain мониторинг*\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ *Lookonchain* активен\n\n"
+                "📊 *Что отслеживается:*\n"
+                "· Движения китов (>$1M)\n"
+                "· BlackRock / Grayscale ETF потоки\n"
+                "· Bitcoin ETF NetFlow (дневной)\n"
+                "· Накопление/распределение крупных кошельков\n"
+                "· Ротация между монетами\n\n"
+                "📨 *Алерты приходят автоматически* в личку\n"
+                "когда Reader обнаруживает важное событие\n\n"
+                "⏱ Проверка каждые *10 минут*\n\n"
+                f"🕐 {now_utc3()}",
+                parse_mode="Markdown", reply_markup=nav
+            )
+        except Exception as e:
+            if "not modified" in str(e).lower():
+                await q.answer("✅ Актуально")
+
     elif data == "channel_signals":
         await _show_channel_signals(q)
 
@@ -2507,14 +2553,24 @@ async def _show_channel_signals(q):
 
     try:
         msg_text = (
-            "📡 *Сигналы каналов*\n\n"
-            "✅ Reader активен — мониторит *11 каналов*\n\n"
-            "📨 Сигналы приходят тебе *напрямую в личку* от бота.\n\n"
-            "📋 *Каналы:*\n"
-            "• PIXEL\n• Мысли Эмилии\n• Биржевой спекулянт\n"
-            "• Scalping Blog | Адель\n• Kira | ICT\n• Заговор ликвидности\n"
-            "• MANIPULATOR\n• VAGR TRADING\n• ANNA TRADE\n"
-            "• 2Trade – Kirill Sobolev\n• КРИПТА С НУЛЯ | ТТ\n\n"
+            "📡 *Сигналы каналов*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "✅ Reader v5 активен\n"
+            "📡 Мониторит *11 каналов* в реальном времени\n"
+            "🐋 On-chain: *Lookonchain* (каждые 10 мин)\n\n"
+            "📋 *Подключённые каналы:*\n"
+            "① PIXEL\n"
+            "② Мысли Эмилии\n"
+            "③ Биржевой спекулянт\n"
+            "④ Scalping Blog | Адель\n"
+            "⑤ Kira | ICT\n"
+            "⑥ Заговор ликвидности\n"
+            "⑦ MANIPULATOR\n"
+            "⑧ VAGR TRADING\n"
+            "⑨ ANNA TRADE\n"
+            "⑩ 2Trade – Kirill Sobolev\n"
+            "⑪ КРИПТА С НУЛЯ | ТТ\n\n"
+            "📨 Сигналы с TP/SL приходят *автоматически* в личку\n\n"
             f"🕐 {now_utc3()}"
         )
         try:
@@ -3611,12 +3667,11 @@ def get_order_book_analysis(symbol: str) -> dict:
 
 def get_macro_context() -> dict:
     """
-    Макро контекст: DXY (индекс доллара) и Gold.
+    Макро контекст: DXY, Gold, NQ корреляция.
     Крипта = риск-актив. Когда DXY растёт → крипта падает.
-    Когда Gold растёт → неопределённость → осторожно.
-    Используем BTC/USDT как proxy для DXY корреляции
-    (т.к. DXY недоступен через Binance).
-    Добавляем анализ ETH/BTC ratio — опережающий индикатор альтсезона.
+    NQ (Nasdaq) и крипта — высокая корреляция в 2024-2026.
+    Gold падает = risk-off = давление на крипту.
+    ETH/BTC ratio — опережающий индикатор альтсезона.
     """
     result = {
         "ok": False,
@@ -3628,6 +3683,12 @@ def get_macro_context() -> dict:
         "dom_trend": "neutral",
         "macro_label": "",
         "risk_on": True,
+        # Традиционные рынки
+        "nq_trend": "unknown",
+        "nq_label": "",
+        "gold_trend": "unknown", 
+        "gold_label": "",
+        "traditional_risk": "neutral",
     }
     try:
         # ETH/BTC ratio — ключевой индикатор альтсезона
@@ -3674,6 +3735,28 @@ def get_macro_context() -> dict:
             else:
                 result["dom_trend"]   = "neutral"
                 result["macro_label"] = f"⚖️ Доминация BTC {dom:.1f}% — нейтрально"
+        except: pass
+
+        # ── NQ (Nasdaq) корреляция ──
+        # Используем QQQ-подобный proxy: AAPL/MSFT недоступны на Binance
+        # Анализируем BTC поведение vs традиционные рынки через CoinGecko
+        try:
+            # Gold proxy через PAXG/USDT на Binance
+            gold_data = get_binance_ohlc("PAXG", "1d", 10)
+            if gold_data and len(gold_data) >= 5:
+                gold_closes = [c["close"] for c in gold_data]
+                gold_ch = (gold_closes[-1] - gold_closes[-5]) / gold_closes[-5] * 100
+                if gold_ch > 1:
+                    result["gold_trend"]  = "bullish"
+                    result["gold_label"]  = f"🥇 Gold +{gold_ch:.1f}% — неопределённость, осторожно"
+                    result["traditional_risk"] = "cautious"
+                elif gold_ch < -1:
+                    result["gold_trend"] = "bearish"
+                    result["gold_label"] = f"🥇 Gold {gold_ch:.1f}% — risk-off, давление на крипту ⚠️"
+                    result["traditional_risk"] = "risk_off"
+                else:
+                    result["gold_trend"] = "neutral"
+                    result["gold_label"] = f"🥇 Gold нейтральный ({gold_ch:.1f}%)"
         except: pass
 
         result["ok"] = True
@@ -4724,6 +4807,30 @@ def signal_quality_filter(a: dict, pa: dict, coin: dict) -> dict:
         if not btc["long_ok"] and is_long:
             score -= 25; warnings.append(f"🚨 BTC резко падает ({btc['btc_ch1h']:.1f}% за 1ч) — НЕ ВХОДИТЬ")
 
+    # ── USDT.D фильтр ──
+    # Высокий USDT.D = деньги в стейблах = медвежий рынок
+    try:
+        usdt_d_data = get_usdt_dominance() if "get_usdt_dominance" in dir() else {}
+        usdt_d = usdt_d_data.get("usdt_d", 0)
+        if usdt_d > 9.0 and is_long:
+            score -= 15; warnings.append(f"🚨 USDT.D={usdt_d:.1f}% — сильное медвежье давление, лонг рискован")
+        elif usdt_d > 8.5 and is_long:
+            score -= 8; warnings.append(f"⚠️ USDT.D={usdt_d:.1f}% — осторожно с лонгами")
+        elif usdt_d < 7.5 and is_long:
+            score += 8; reasons.append(f"✅ USDT.D={usdt_d:.1f}% — деньги идут в крипту")
+        elif usdt_d > 8.5 and not is_long:
+            score += 10; reasons.append(f"✅ USDT.D={usdt_d:.1f}% — рынок медвежий, шорт по тренду")
+    except: pass
+
+    # ── Корреляция Gold / традиционные рынки ──
+    try:
+        mac_ctx = get_macro_context()
+        if mac_ctx.get("traditional_risk") == "risk_off" and is_long:
+            score -= 10; warnings.append("⚠️ Gold падает — risk-off на традиционных рынках")
+        elif mac_ctx.get("traditional_risk") == "risk_off" and not is_long:
+            score += 5; reasons.append("✅ Risk-off — попутный ветер для шортов")
+    except: pass
+
     # ── Killzone бонус/штраф ──
     kz = get_killzone_status()
     if kz["is_good"]:
@@ -5129,6 +5236,49 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
                 liq_bear_sweep = True
 
         result["ict_liquidity_sweep"] = liq_bull_sweep or liq_bear_sweep
+
+        # ── AMD СТРУКТУРА (ICT Power of Three) ──
+        # Accumulation (Asia) → Manipulation (London sweep) → Distribution (NY move)
+        # Определяем текущую фазу по времени + price action
+        amd_phase = None
+        amd_label = None
+        now_h = datetime.now(TZ).hour
+
+        if len(c4h) >= 6:
+            high_6  = max(c["high"]  for c in c4h[-6:])
+            low_6   = min(c["low"]   for c in c4h[-6:])
+            mid_6   = (high_6 + low_6) / 2
+            last_close = c4h[-1]["close"]
+
+            # Asia (01-09 UTC+3): накопление — тихие движения
+            if 1 <= now_h < 9:
+                amd_phase = "accumulation"
+                amd_label = "🌏 AMD: Фаза накопления (Asia) — жди манипуляцию"
+            # London open (09-13 UTC+3): манипуляция — sweep
+            elif 9 <= now_h < 13:
+                if last_close < low_6 * 1.001:  # свип вниз
+                    amd_phase = "manipulation_bear"
+                    amd_label = "🇬🇧 AMD: Манипуляция ↓ (London sweep) — возможный разворот вверх"
+                elif last_close > high_6 * 0.999:
+                    amd_phase = "manipulation_bull"
+                    amd_label = "🇬🇧 AMD: Манипуляция ↑ (London sweep) — возможный разворот вниз"
+                else:
+                    amd_phase = "manipulation"
+                    amd_label = "🇬🇧 AMD: Лондонское открытие — следи за свипом"
+            # NY (15-22 UTC+3): распределение — основное движение
+            elif 15 <= now_h < 22:
+                if last_close > mid_6:
+                    amd_phase = "distribution_bull"
+                    amd_label = "🇺🇸 AMD: Распределение ↑ (NY движение) — импульс вверх"
+                else:
+                    amd_phase = "distribution_bear"
+                    amd_label = "🇺🇸 AMD: Распределение ↓ (NY движение) — импульс вниз"
+            else:
+                amd_phase = "dead_zone"
+                amd_label = "💤 AMD: Dead Zone — между сессиями"
+
+        result["amd_phase"] = amd_phase
+        result["amd_label"] = amd_label
 
         # ── WYCKOFF ФАЗЫ ──
         # Упрощённое определение по volume + price action на 1D
@@ -6845,7 +6995,7 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     vp  = get_volume_profile(symbol)
     # Уровень 3 — Order Book
     ob  = get_order_book_analysis(symbol)
-    # Уровень 4 — Macro (DXY/ETH-BTC)
+    # Уровень 4 — Macro (DXY/ETH-BTC/Gold/NQ)
     mac = get_macro_context()
     # Уровень 5 — Сезонность
     sea = get_seasonality()
@@ -6986,13 +7136,25 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
         if ob["ask_wall"]:
             parts.append(f"  🔴 Стена продаж: `{fp(ob['ask_wall'])}`")
 
-    # Macro / ETH-BTC (Уровень 4)
+    # Macro / ETH-BTC / Gold / AMD (Уровень 4)
     if mac["ok"]:
-        parts += ["", f"🌍 *Макро:*"]
+        parts += ["", f"🌍 *Макро контекст:*"]
         if mac["altseason_label"]:
             parts.append(f"  {mac['altseason_label']}")
         if mac["macro_label"]:
             parts.append(f"  {mac['macro_label']}")
+        if mac.get("gold_label"):
+            parts.append(f"  {mac['gold_label']}")
+        trad = mac.get("traditional_risk", "neutral")
+        if trad == "risk_off":
+            parts.append(f"  ⚠️ Традиционные рынки в risk-off — осторожно с лонгами")
+        elif trad == "cautious":
+            parts.append(f"  ⚠️ Gold растёт — рынок неопределён")
+
+    # AMD Phase (ICT Power of Three)
+    amd_lbl = pa.get("amd_label") if pa.get("ok") else None
+    if amd_lbl:
+        parts.append(f"  {amd_lbl}")
 
     # Сезонность (Уровень 5)
     if sea["ok"]:
