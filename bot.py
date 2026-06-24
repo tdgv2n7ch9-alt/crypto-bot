@@ -3459,6 +3459,580 @@ async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # main() перенесён в конец файла после всех функций
 
 # ═══════════════════════════════════════════════════════════════════
+# PRO ANALYSIS — институциональный уровень
+# SMC / ICT / Wyckoff / Elliott / Multi-TF / OI / Funding
+# ═══════════════════════════════════════════════════════════════════
+
+def pro_analysis(symbol: str, coin: dict) -> dict:
+    """
+    Профессиональный анализ уровня топ-трейдера.
+    Включает: SMC/ICT, Wyckoff, Elliott Wave (упрощ.), 
+    Multi-TF confluence, OI, Funding, Volume Profile, 
+    Market Structure, Liquidity Sweep detection.
+    
+    Возвращает расширенный dict с оценкой 0-100 и 
+    детальным объяснением каждого фактора.
+    """
+    q     = coin["quote"]["USDT"]
+    ch1h  = q.get("percent_change_1h",  0) or 0
+    ch24h = q.get("percent_change_24h", 0) or 0
+    ch7d  = q.get("percent_change_7d",  0) or 0
+    ch30d = q.get("percent_change_30d", 0) or 0
+    ch90d = q.get("percent_change_90d", 0) or 0
+    vol   = q.get("volume_24h",  0) or 0
+    mcap  = q.get("market_cap",  0) or 0
+    rank  = coin.get("cmc_rank", 999)
+    vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
+
+    result = {
+        "ok": False,
+        "pro_score": 0,        # 0-100 итоговый скор
+        "direction": "neutral", # long / short / neutral
+        "confidence": 0,        # 0-100 уверенность
+        "setup_type": None,     # ICT / Wyckoff / SMC / Elliott / Breakout
+        "factors": [],          # список факторов с весами
+        "warnings": [],         # предупреждения
+        "entry_quality": None,  # A+ / A / B / C
+        # Структура рынка
+        "market_structure": "unknown",  # uptrend/downtrend/ranging/accumulation/distribution
+        "phase": None,           # Wyckoff phase
+        # ICT концепции
+        "ict_ob_bull": False,    # Bullish Order Block
+        "ict_ob_bear": False,    # Bearish Order Block
+        "ict_fvg_bull": False,   # Fair Value Gap вверх
+        "ict_fvg_bear": False,   # Fair Value Gap вниз
+        "ict_liquidity_sweep": False,  # Sweep of buy/sell side liquidity
+        "ict_killzone": False,   # London/NY/Asia killzone
+        "ict_pd_array": None,    # Premium/Discount array
+        # SMC
+        "smc_bos": None,         # Break of Structure: "bull" / "bear"
+        "smc_choch": None,       # Change of Character: "bull" / "bear"
+        "smc_inducement": False, # Inducement level swept
+        # Wyckoff
+        "wyckoff_phase": None,   # Accumulation/Distribution/Markup/Markdown
+        "wyckoff_event": None,   # SC/AR/ST/Spring/UTAD etc
+        # Elliott
+        "elliott_wave": None,    # "wave3_up" / "wave5_up" / "wave_c_down" etc
+        # Volume
+        "vol_climax": False,     # Climax volume (abnormal spike)
+        "vol_dry_up": False,     # Volume dry-up (consolidation)
+        "vol_trend": None,       # "increasing" / "decreasing"
+        # OI / Funding
+        "funding_rate": None,
+        "oi_change": None,
+        "oi_signal": None,
+        # Multi-TF
+        "tf_1h": "neutral",
+        "tf_4h": "neutral",
+        "tf_1d": "neutral",
+        "tf_1w": "neutral",
+        "tf_confluence": 0,      # сколько TF согласны
+    }
+
+    try:
+        # ── ЗАГРУЖАЕМ СВЕЧИ ПО ВСЕМ TF ──
+        c1h  = get_binance_ohlc(symbol, "1h",  100) or []
+        c4h  = get_binance_ohlc(symbol, "4h",  200) or []
+        c1d  = get_binance_ohlc(symbol, "1d",  365) or []
+        c1w  = get_binance_ohlc(symbol, "1w",  100) or []
+
+        if len(c4h) < 50:
+            return result
+
+        # ── БАЗОВЫЕ ДАННЫЕ ──
+        closes_1h = [c["close"] for c in c1h]
+        closes_4h = [c["close"] for c in c4h]
+        closes_1d = [c["close"] for c in c1d]
+        closes_1w = [c["close"] for c in c1w]
+        highs_4h  = [c["high"]  for c in c4h]
+        lows_4h   = [c["low"]   for c in c4h]
+        vols_4h   = [c["vol"]   for c in c4h]
+        price     = closes_4h[-1]
+
+        # ── EMA MULTI-TF ──
+        ema20_4h  = calc_ema(closes_4h, 20)[-1]  or price
+        ema50_4h  = calc_ema(closes_4h, 50)[-1]  or price
+        ema200_4h = calc_ema(closes_4h, 200)[-1] or price
+        ema200_1d = (calc_ema(closes_1d, 200)[-1] or price) if len(closes_1d) >= 200 else price
+        ema50_1d  = (calc_ema(closes_1d, 50)[-1]  or price) if len(closes_1d) >= 50  else price
+        ema20_1w  = (calc_ema(closes_1w, 20)[-1]  or price) if len(closes_1w) >= 20  else price
+
+        # ── RSI MULTI-TF ──
+        rsi_1h = calc_rsi(closes_1h, 14) if len(closes_1h) >= 15 else 50.0
+        rsi_4h = calc_rsi(closes_4h, 14) if len(closes_4h) >= 15 else 50.0
+        rsi_1d = calc_rsi(closes_1d, 14) if len(closes_1d) >= 15 else 50.0
+        rsi_1w = calc_rsi(closes_1w, 14) if len(closes_1w) >= 15 else 50.0
+
+        # ── MACD 4H ──
+        ema12_4h = calc_ema(closes_4h, 12)
+        ema26_4h = calc_ema(closes_4h, 26)
+        macd_line = [a-b for a,b in zip(ema12_4h, ema26_4h) if a and b]
+        sig_line  = calc_ema(macd_line, 9) if len(macd_line) >= 9 else [0.0]
+        macd_val  = macd_line[-1]  if macd_line  else 0.0
+        sig_val   = sig_line[-1]   if sig_line   else 0.0
+        macd_hist = macd_val - sig_val
+        macd_bull = macd_val > sig_val
+        macd_bear = macd_val < sig_val
+        # Гистограмма растёт/падает
+        macd_hist_growing = (len(macd_line) > 1 and
+                             macd_hist > (macd_line[-2] - (sig_line[-2] if len(sig_line) > 1 else 0)))
+
+        # ── ATR 4H ──
+        atr_vals = calc_atr(c4h, 14)
+        atr = atr_vals[-1] if atr_vals else price * 0.03
+
+        # ── SUPERTREND 4H ──
+        st_vals = calc_supertrend(c4h, 10, 3.0)
+        st_bull = st_vals[-1]["direction"] == 1 if st_vals else None
+
+        # ── MARKET STRUCTURE (BOS/CHoCH) ──
+        # Определяем структуру через swing highs/lows на 4H
+        lookback = min(50, len(c4h))
+        recent   = c4h[-lookback:]
+        # Swing highs
+        sh = []
+        for i in range(2, len(recent)-2):
+            if recent[i]["high"] > recent[i-1]["high"] and recent[i]["high"] > recent[i+1]["high"]:
+                sh.append((i, recent[i]["high"]))
+        # Swing lows
+        sl_pts = []
+        for i in range(2, len(recent)-2):
+            if recent[i]["low"] < recent[i-1]["low"] and recent[i]["low"] < recent[i+1]["low"]:
+                sl_pts.append((i, recent[i]["low"]))
+
+        # BOS Bull: новый swing high выше предыдущего
+        bos_bull = False
+        if len(sh) >= 2 and sh[-1][1] > sh[-2][1]:
+            bos_bull = True
+        # BOS Bear: новый swing low ниже предыдущего
+        bos_bear = False
+        if len(sl_pts) >= 2 and sl_pts[-1][1] < sl_pts[-2][1]:
+            bos_bear = True
+        # CHoCH: смена после BOS
+        choch_bull = bos_bull and len(sl_pts) >= 2 and sl_pts[-1][1] > sl_pts[-2][1]
+        choch_bear = bos_bear and len(sh) >= 2 and sh[-1][1] < sh[-2][1]
+
+        result["smc_bos"]   = "bull" if bos_bull else ("bear" if bos_bear else None)
+        result["smc_choch"] = "bull" if choch_bull else ("bear" if choch_bear else None)
+
+        # ── ICT ORDER BLOCKS ──
+        # Bullish OB: последняя медвежья свеча перед импульсным ростом
+        ob_bull = False
+        ob_bear = False
+        ob_bull_zone = None
+        ob_bear_zone = None
+
+        for i in range(5, len(c4h)-3):
+            candle  = c4h[i]
+            next3   = c4h[i+1:i+4]
+            body    = abs(candle["close"] - candle["open"])
+            rng     = candle["high"] - candle["low"]
+            if rng == 0: continue
+
+            # Bullish OB: медвежья свеча + следующие 3 закрылись выше high OB
+            if (candle["close"] < candle["open"] and body/rng > 0.5):
+                if all(c["close"] > candle["high"] for c in next3):
+                    # Цена сейчас в зоне OB (ретест)
+                    ob_lo = candle["open"]
+                    ob_hi = candle["high"]
+                    if ob_lo <= price <= ob_hi * 1.01:
+                        ob_bull = True
+                        ob_bull_zone = (ob_lo, ob_hi)
+
+            # Bearish OB: бычья свеча + следующие 3 закрылись ниже low OB
+            if (candle["close"] > candle["open"] and body/rng > 0.5):
+                if all(c["close"] < candle["low"] for c in next3):
+                    ob_lo = candle["low"]
+                    ob_hi = candle["open"]
+                    if ob_lo * 0.99 <= price <= ob_hi:
+                        ob_bear = True
+                        ob_bear_zone = (ob_lo, ob_hi)
+
+        result["ict_ob_bull"] = ob_bull
+        result["ict_ob_bear"] = ob_bear
+
+        # ── ICT FAIR VALUE GAP (FVG) ──
+        # FVG Bull: свеча[i-1].high < свеча[i+1].low — дыра в ценовом действии
+        fvg_bull = False
+        fvg_bear = False
+        for i in range(1, len(c4h)-1):
+            gap_lo = c4h[i-1]["high"]
+            gap_hi = c4h[i+1]["low"]
+            if gap_hi > gap_lo:  # Bullish FVG
+                if gap_lo <= price <= gap_hi * 1.02:
+                    fvg_bull = True
+            gap_lo2 = c4h[i+1]["high"]
+            gap_hi2 = c4h[i-1]["low"]
+            if gap_hi2 < gap_lo2:  # Bearish FVG
+                if gap_hi2 * 0.98 <= price <= gap_lo2:
+                    fvg_bear = True
+
+        result["ict_fvg_bull"] = fvg_bull
+        result["ict_fvg_bear"] = fvg_bear
+
+        # ── LIQUIDITY SWEEP ──
+        # Цена взяла ликвидность под swing low затем вернулась (bull sweep)
+        liq_bull_sweep = False
+        liq_bear_sweep = False
+        if len(sl_pts) >= 2 and len(c4h) >= 5:
+            prev_sl = sl_pts[-2][1]
+            last_5_lows = [c["low"] for c in c4h[-5:]]
+            last_5_cls  = [c["close"] for c in c4h[-5:]]
+            if min(last_5_lows) < prev_sl and last_5_cls[-1] > prev_sl:
+                liq_bull_sweep = True  # взяли ликвидность под SL и вернулись
+        if len(sh) >= 2 and len(c4h) >= 5:
+            prev_sh_h = sh[-2][1]
+            last_5_highs = [c["high"] for c in c4h[-5:]]
+            last_5_cls   = [c["close"] for c in c4h[-5:]]
+            if max(last_5_highs) > prev_sh_h and last_5_cls[-1] < prev_sh_h:
+                liq_bear_sweep = True
+
+        result["ict_liquidity_sweep"] = liq_bull_sweep or liq_bear_sweep
+
+        # ── WYCKOFF ФАЗЫ ──
+        # Упрощённое определение по volume + price action на 1D
+        wyckoff_phase = None
+        wyckoff_event = None
+        if len(closes_1d) >= 30:
+            price_30d_min = min(closes_1d[-30:])
+            price_30d_max = max(closes_1d[-30:])
+            price_range   = price_30d_max - price_30d_min
+            price_pos     = (price - price_30d_min) / price_range if price_range > 0 else 0.5
+
+            vols_1d = [c["vol"] for c in c1d[-30:]] if c1d else []
+            vol_avg_30d = sum(vols_1d) / len(vols_1d) if vols_1d else 1
+            vol_last5   = sum(vols_1d[-5:]) / 5       if len(vols_1d) >= 5 else vol_avg_30d
+            vol_inc = vol_last5 > vol_avg_30d * 1.2
+
+            if ch90d < -50 and price_pos < 0.3:
+                if vol_inc and ch7d > 0:
+                    wyckoff_phase = "Accumulation"
+                    wyckoff_event = "Spring/LPS — разворот у дна"
+                else:
+                    wyckoff_phase = "Markdown"
+                    wyckoff_event = "Phase D/E — продолжение падения"
+            elif ch90d < -30 and abs(ch30d) < 10:
+                wyckoff_phase = "Accumulation"
+                wyckoff_event = "Phase B/C — накопление"
+            elif ch30d > 15 and ch7d > 5:
+                wyckoff_phase = "Markup"
+                wyckoff_event = "Phase E — восходящее движение"
+            elif ch30d > 20 and ch7d < -5 and price_pos > 0.7:
+                wyckoff_phase = "Distribution"
+                wyckoff_event = "UTAD / Phase B — раздача"
+
+        result["wyckoff_phase"] = wyckoff_phase
+        result["wyckoff_event"] = wyckoff_event
+
+        # ── ELLIOTT WAVE (упрощённый паттерн) ──
+        # Определяем волну по структуре движений
+        elliott_wave = None
+        if len(closes_4h) >= 50:
+            # Смотрим на последние 3 значимых движения
+            moves = []
+            prev = closes_4h[-50]
+            step = 10
+            for i in range(-40, 0, step):
+                cur = closes_4h[i]
+                moves.append((cur - prev) / prev * 100)
+                prev = cur
+
+            if len(moves) >= 4:
+                # Волна 3 вверх: сильный рост после коррекции
+                if moves[-2] < -5 and moves[-1] > 8:
+                    elliott_wave = "wave3_up 🚀"
+                # Волна 5 вверх: новый хай но RSI дивергенция
+                elif moves[-1] > 5 and rsi_4h > 70 and moves[-3] > 0:
+                    elliott_wave = "wave5_up ⚠️"
+                # Волна C вниз: коррекция после роста
+                elif moves[-2] > 5 and moves[-1] < -5:
+                    elliott_wave = "wave_c_down 📉"
+                # Волна 2 коррекция (лучшая точка входа для волны 3)
+                elif moves[-3] > 10 and moves[-2] < -5 and moves[-1] > 2:
+                    elliott_wave = "wave2_correction 💎"
+
+        result["elliott_wave"] = elliott_wave
+
+        # ── VOLUME ANALYSIS ──
+        vol_avg_20 = sum(vols_4h[-20:]) / 20 if len(vols_4h) >= 20 else 1
+        vol_now    = vols_4h[-1]
+        vol_climax = vol_now > vol_avg_20 * 3.0  # экстремальный объём
+        vol_dry    = vol_now < vol_avg_20 * 0.4  # иссякание объёма
+        vol_trend_inc = sum(vols_4h[-5:]) / 5 > sum(vols_4h[-20:-5]) / 15 if len(vols_4h) >= 20 else False
+
+        result["vol_climax"] = vol_climax
+        result["vol_dry_up"] = vol_dry
+        result["vol_trend"] = "increasing" if vol_trend_inc else "decreasing"
+
+        # ── OI / FUNDING (Binance futures) ──
+        funding_rate = None
+        oi_change    = None
+        oi_signal    = None
+        try:
+            # Funding rate
+            r_fr = requests.get(
+                "https://fapi.binance.com/fapi/v1/premiumIndex",
+                params={"symbol": f"{symbol}USDT"}, timeout=5
+            )
+            if r_fr.status_code == 200:
+                d = r_fr.json()
+                funding_rate = float(d.get("lastFundingRate", 0)) * 100
+            # OI
+            r_oi = requests.get(
+                "https://fapi.binance.com/futures/data/openInterestHist",
+                params={"symbol": f"{symbol}USDT", "period": "4h", "limit": 2}, timeout=5
+            )
+            if r_oi.status_code == 200:
+                oi_data = r_oi.json()
+                if len(oi_data) >= 2:
+                    oi_now  = float(oi_data[-1].get("sumOpenInterestValue", 0))
+                    oi_prev = float(oi_data[-2].get("sumOpenInterestValue", 1))
+                    oi_change = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0
+                    # Интерпретация
+                    if oi_change > 3 and ch1h > 0:
+                        oi_signal = "🟢 OI растёт + цена растёт → сильный лонг"
+                    elif oi_change > 3 and ch1h < 0:
+                        oi_signal = "🔴 OI растёт + цена падает → сильный шорт"
+                    elif oi_change < -3 and ch1h > 0:
+                        oi_signal = "⚡️ OI падает + цена растёт → шорт-сквиз"
+                    elif oi_change < -3 and ch1h < 0:
+                        oi_signal = "💨 OI падает + цена падает → лонг-ликвидации"
+        except: pass
+
+        result["funding_rate"] = funding_rate
+        result["oi_change"]    = oi_change
+        result["oi_signal"]    = oi_signal
+
+        # ── PREMIUM/DISCOUNT ARRAY (ICT) ──
+        # Определяем находится ли цена в Premium (выше 50% диапазона) или Discount
+        if len(closes_4h) >= 20:
+            hi_20 = max(highs_4h[-20:])
+            lo_20 = min(lows_4h[-20:])
+            mid   = (hi_20 + lo_20) / 2
+            eq    = mid  # Equilibrium
+            if price < eq * 0.95:
+                result["ict_pd_array"] = "Discount 💚 (зона покупки)"
+            elif price > eq * 1.05:
+                result["ict_pd_array"] = "Premium 🔴 (зона продажи)"
+            else:
+                result["ict_pd_array"] = "Equilibrium ⚖️"
+
+        # ── MULTI-TF ТРЕНД ──
+        def tf_trend(closes, ema_fast, ema_slow):
+            if len(closes) < ema_slow: return "neutral"
+            ef = calc_ema(closes, ema_fast)[-1] or closes[-1]
+            es = calc_ema(closes, ema_slow)[-1] or closes[-1]
+            p  = closes[-1]
+            if p > ef > es:  return "bullish"
+            if p < ef < es:  return "bearish"
+            return "neutral"
+
+        tf_1h_trend = tf_trend(closes_1h, 20, 50)  if len(closes_1h) >= 50  else "neutral"
+        tf_4h_trend = tf_trend(closes_4h, 20, 50)
+        tf_1d_trend = tf_trend(closes_1d, 50, 200) if len(closes_1d) >= 200 else "neutral"
+        tf_1w_trend = tf_trend(closes_1w, 10, 20)  if len(closes_1w) >= 20  else "neutral"
+
+        result["tf_1h"] = tf_1h_trend
+        result["tf_4h"] = tf_4h_trend
+        result["tf_1d"] = tf_1d_trend
+        result["tf_1w"] = tf_1w_trend
+
+        bull_tfs = sum(1 for t in [tf_1h_trend, tf_4h_trend, tf_1d_trend, tf_1w_trend] if t == "bullish")
+        bear_tfs = sum(1 for t in [tf_1h_trend, tf_4h_trend, tf_1d_trend, tf_1w_trend] if t == "bearish")
+        result["tf_confluence"] = bull_tfs if bull_tfs >= bear_tfs else -bear_tfs
+
+        # ── ИТОГОВЫЙ PRO SCORE ──
+        factors  = []
+        warnings = []
+        score    = 0
+        bull_pts = 0
+        bear_pts = 0
+
+        # 1. Multi-TF confluence (макс вес)
+        if bull_tfs >= 3:
+            bull_pts += 20; factors.append(f"✅ Multi-TF: {bull_tfs}/4 бычьих TF (+20)")
+        elif bull_tfs == 2:
+            bull_pts += 10; factors.append(f"🟡 Multi-TF: 2/4 бычьих TF (+10)")
+        if bear_tfs >= 3:
+            bear_pts += 20; factors.append(f"✅ Multi-TF: {bear_tfs}/4 медвежьих TF (+20)")
+        elif bear_tfs == 2:
+            bear_pts += 10
+
+        # 2. ICT Order Block
+        if ob_bull:
+            bull_pts += 15; factors.append("🟢 ICT Bullish Order Block — ретест зоны покупки (+15)")
+        if ob_bear:
+            bear_pts += 15; factors.append("🔴 ICT Bearish Order Block — ретест зоны продажи (+15)")
+
+        # 3. Liquidity Sweep
+        if liq_bull_sweep:
+            bull_pts += 12; factors.append("⚡️ Liquidity Sweep под SL → разворот вверх (+12)")
+        if liq_bear_sweep:
+            bear_pts += 12; factors.append("⚡️ Liquidity Sweep над BH → разворот вниз (+12)")
+
+        # 4. FVG
+        if fvg_bull:
+            bull_pts += 8; factors.append("🟢 Bullish FVG — цена в зоне дисбаланса (+8)")
+        if fvg_bear:
+            bear_pts += 8; factors.append("🔴 Bearish FVG — цена в зоне дисбаланса (+8)")
+
+        # 5. BOS / CHoCH
+        if bos_bull:
+            bull_pts += 8; factors.append("🟢 BOS вверх — структура рынка бычья (+8)")
+        if bos_bear:
+            bear_pts += 8; factors.append("🔴 BOS вниз — структура рынка медвежья (+8)")
+        if choch_bull:
+            bull_pts += 10; factors.append("🚀 CHoCH — смена характера → разворот вверх (+10)")
+        if choch_bear:
+            bear_pts += 10; factors.append("📉 CHoCH — смена характера → разворот вниз (+10)")
+
+        # 6. RSI Multi-TF
+        if rsi_4h < 30 and rsi_1d < 35:
+            bull_pts += 10; factors.append(f"🟢 RSI перепродан на 4H({rsi_4h:.0f}) и 1D({rsi_1d:.0f}) (+10)")
+        elif rsi_4h < 40:
+            bull_pts += 5;  factors.append(f"🟡 RSI 4H перепродан ({rsi_4h:.0f}) (+5)")
+        if rsi_4h > 70 and rsi_1d > 65:
+            bear_pts += 10; factors.append(f"🔴 RSI перекуплен на 4H({rsi_4h:.0f}) и 1D({rsi_1d:.0f}) (+10)")
+        elif rsi_4h > 65:
+            bear_pts += 5
+
+        # 7. MACD
+        if macd_bull and macd_hist_growing:
+            bull_pts += 7; factors.append("🟢 MACD пересечение вверх + гистограмма растёт (+7)")
+        elif macd_bull:
+            bull_pts += 3
+        if macd_bear and not macd_hist_growing:
+            bear_pts += 7; factors.append("🔴 MACD пересечение вниз (+7)")
+
+        # 8. Supertrend
+        if st_bull is True:
+            bull_pts += 8;  factors.append("🟢 Supertrend: BUY сигнал (+8)")
+        elif st_bull is False:
+            bear_pts += 8;  factors.append("🔴 Supertrend: SELL сигнал (+8)")
+
+        # 9. Wyckoff
+        if wyckoff_phase == "Accumulation":
+            bull_pts += 10; factors.append(f"💎 Wyckoff: {wyckoff_event} (+10)")
+        elif wyckoff_phase == "Markup":
+            bull_pts += 8;  factors.append(f"🚀 Wyckoff: {wyckoff_event} (+8)")
+        elif wyckoff_phase == "Distribution":
+            bear_pts += 10; factors.append(f"⚠️ Wyckoff: {wyckoff_event} (+10)")
+        elif wyckoff_phase == "Markdown":
+            bear_pts += 8;  factors.append(f"📉 Wyckoff: {wyckoff_event} (+8)")
+
+        # 10. Elliott Wave
+        if elliott_wave:
+            if "wave3_up" in elliott_wave:
+                bull_pts += 12; factors.append(f"🚀 Elliott: {elliott_wave} — самая сильная волна (+12)")
+            elif "wave2_correction" in elliott_wave:
+                bull_pts += 10; factors.append(f"💎 Elliott: {elliott_wave} — идеальная точка входа (+10)")
+            elif "wave5_up" in elliott_wave:
+                bull_pts += 5; warnings.append(f"⚠️ Elliott: {elliott_wave} — финальная волна, риск разворота")
+            elif "wave_c_down" in elliott_wave:
+                bear_pts += 10; factors.append(f"📉 Elliott: {elliott_wave} (+10)")
+
+        # 11. OI / Funding
+        if oi_change is not None:
+            if oi_change > 5 and ch1h > 0:
+                bull_pts += 8; factors.append(f"🟢 OI +{oi_change:.1f}% + рост цены → институционалы покупают (+8)")
+            elif oi_change < -5 and ch1h > 0:
+                bull_pts += 6; factors.append(f"⚡️ OI -{abs(oi_change):.1f}% + рост → шорт-сквиз (+6)")
+            elif oi_change > 5 and ch1h < 0:
+                bear_pts += 8; factors.append(f"🔴 OI растёт + цена падает → медведи усиливаются (+8)")
+
+        if funding_rate is not None:
+            if funding_rate < -0.05:
+                bull_pts += 6; factors.append(f"🟢 Funding rate отрицательный ({funding_rate:.4f}%) → шорты платят (+6)")
+            elif funding_rate > 0.08:
+                bear_pts += 6; factors.append(f"🔴 Funding rate высокий ({funding_rate:.4f}%) → лонги перегреты (+6)")
+            elif abs(funding_rate) < 0.01:
+                bull_pts += 2; factors.append(f"⚖️ Funding нейтральный — здоровый рынок (+2)")
+
+        # 12. Volume
+        if vol_trend_inc and ch1h > 0:
+            bull_pts += 5; factors.append("📊 Объём растёт + цена растёт → подтверждение тренда (+5)")
+        if vol_climax:
+            warnings.append("⚠️ Climax volume — возможен разворот или продолжение")
+        if vol_dry and abs(ch24h) < 2:
+            bull_pts += 4; factors.append("💎 Volume dry-up в боковике → breakout близко (+4)")
+
+        # 13. Фундаментал
+        if rank <= 20:
+            bull_pts += 5; factors.append(f"🏆 Топ-20 по рыночной капе (rank #{rank}) (+5)")
+        elif rank <= 50:
+            bull_pts += 3; factors.append(f"🥇 Топ-50 (rank #{rank}) (+3)")
+
+        # ── ОПРЕДЕЛЯЕМ НАПРАВЛЕНИЕ ──
+        if bull_pts > bear_pts + 10:
+            direction = "long"
+            score = min(100, 30 + bull_pts)
+        elif bear_pts > bull_pts + 10:
+            direction = "short"
+            score = min(100, 30 + bear_pts)
+        else:
+            direction = "neutral"
+            score = max(bull_pts, bear_pts)
+
+        # Снижаем при подозрительных сигналах
+        if vol_ratio > 50:
+            score = int(score * 0.6)
+            warnings.append("⚠️ Аномальный Vol/MCap — возможна манипуляция")
+
+        # Тип сетапа
+        if ob_bull or ob_bear:        setup = "ICT Order Block"
+        elif liq_bull_sweep or liq_bear_sweep: setup = "ICT Liquidity Sweep"
+        elif choch_bull or choch_bear: setup = "SMC CHoCH"
+        elif wyckoff_phase:            setup = f"Wyckoff {wyckoff_phase}"
+        elif elliott_wave:             setup = f"Elliott {elliott_wave}"
+        elif fvg_bull or fvg_bear:    setup = "ICT FVG"
+        else:                          setup = "Multi-TF Confluence"
+
+        # Entry quality
+        strong_confluences = sum([
+            ob_bull and direction == "long",
+            ob_bear and direction == "short",
+            liq_bull_sweep and direction == "long",
+            liq_bear_sweep and direction == "short",
+            choch_bull and direction == "long",
+            choch_bear and direction == "short",
+            bull_tfs >= 3 and direction == "long",
+            bear_tfs >= 3 and direction == "short",
+            (fvg_bull and direction == "long") or (fvg_bear and direction == "short"),
+            (rsi_4h < 30 and direction == "long") or (rsi_4h > 70 and direction == "short"),
+        ])
+        if strong_confluences >= 5:   entry_q = "A+ 🔥"
+        elif strong_confluences >= 3: entry_q = "A ✅"
+        elif strong_confluences >= 2: entry_q = "B 🟡"
+        else:                         entry_q = "C ⚠️"
+
+        result.update({
+            "ok":             True,
+            "pro_score":      score,
+            "direction":      direction,
+            "confidence":     min(100, score),
+            "setup_type":     setup,
+            "factors":        factors,
+            "warnings":       warnings,
+            "entry_quality":  entry_q,
+            "market_structure": f"{direction}",
+            "phase":          wyckoff_phase,
+            # raw data for display
+            "rsi_1h": rsi_1h, "rsi_4h": rsi_4h, "rsi_1d": rsi_1d,
+            "ema200_4h": ema200_4h, "ema200_1d": ema200_1d,
+            "macd_bull": macd_bull, "macd_hist": macd_hist,
+            "atr": atr, "st_bull": st_bull,
+            "price": price,
+            "support": min(lows_4h[-20:]) if len(lows_4h) >= 20 else price*0.95,
+            "resistance": max(highs_4h[-20:]) if len(highs_4h) >= 20 else price*1.05,
+        })
+
+    except Exception as e:
+        log.error(f"pro_analysis {symbol}: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
 # РЕАЛЬНЫЙ ТЕХНИЧЕСКИЙ АНАЛИЗ — из свечей Binance (не CMC estimate)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -4627,16 +5201,17 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
         }
 
     slug  = coin.get("slug", symbol.lower())
-    a     = real_full_analysis(coin)
-    price = a["price"]
     q     = coin["quote"]["USDT"]
     rank  = coin.get("cmc_rank", 9999)
 
-    stats_24h  = get_binance_24h(symbol)
-    atl        = get_binance_alltime_low(symbol)
-    extras     = get_market_extras(symbol)
+    # ── PRO ANALYSIS — полный институциональный анализ ──
+    pa    = pro_analysis(symbol, coin)
+    a     = real_full_analysis(coin)   # для TP/SL расчётов
+    price = pa["price"] if pa["ok"] and pa["price"] > 0 else a["price"]
+
     candles_1d = get_binance_ohlc(symbol, "1d", 365)
     candles_1w = get_binance_ohlc(symbol, "1w", 200)
+    atl        = get_binance_alltime_low(symbol)
 
     ath = 0.0
     if candles_1w and len(candles_1w) > 1:
@@ -4645,8 +5220,6 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
         ath = max(c["high"] for c in candles_1d)
 
     closes_1d = [c["close"] for c in candles_1d] if candles_1d else []
-    ema200_d  = next((v for v in reversed(calc_ema(closes_1d,200)) if v), 0) if len(closes_1d)>=200 else 0
-    rsi_1d    = calc_rsi(closes_1d,14) if len(closes_1d)>=15 else 50.0
     zone_90d  = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
     zone_30d  = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
 
@@ -4665,96 +5238,152 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     buy_hi   = zone_30d if zone_30d > 0 else price*0.88
     sell_t   = ath*0.9  if ath > 0 else price*3.0
 
-    rsi_4h   = a["rsi_4h"]
-    r        = a["rocket"]
-    bar      = "▓"*int(r/10) + "░"*(10-int(r/10))
-    side_e   = "🟢" if a["is_long"] else "🔴"
-    side_t   = "LONG" if a["is_long"] else "SHORT"
-    smc      = [f for f in a.get("smc_factors",[]) if "BB" not in f]
+    # Направление и уровень
+    direction = pa.get("direction", "long") if pa["ok"] else ("long" if a["is_long"] else "short")
+    is_long   = direction != "short"
+    pro_score = pa.get("pro_score", a["rocket"])
+    eq_bar    = "▓"*int(pro_score/10) + "░"*(10-int(pro_score/10))
+    entry_q   = pa.get("entry_quality", "B 🟡")
+    setup     = pa.get("setup_type", "Multi-TF")
 
-    vol_s  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"${vol24/1e3:.0f}K"
-    mcap_s = fm(mcap) if mcap>0 else "—"
+    side_e = "🟢" if is_long else "🔴"
+    side_t = "LONG" if is_long else "SHORT"
+
+    rsi_4h = pa.get("rsi_4h", a["rsi_4h"])
+    rsi_1d = pa.get("rsi_1d", 50.0)
+    ema200_4h = pa.get("ema200_4h", 0)
+    ema200_1d = pa.get("ema200_1d", 0)
 
     def ri(v): return "🟢" if v<30 else "🔴" if v>70 else "🔵"
     def pct(t): d=(t-price)/price*100; return f"+{d:.2f}%" if d>=0 else f"{d:.2f}%"
 
-    # Маркет тренд
-    trend_icon = {"bullish":"↑","bearish":"↓","neutral":"→"}.get(a.get("trend_4h",""), "→")
-    macd_t = "▲" if a.get("macd_bullish") else "▼" if a.get("macd_bearish") else "→"
+    vol_s  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"${vol24/1e3:.0f}K"
+    mcap_s = fm(mcap) if mcap>0 else "—"
 
-    # Вердикт
-    vscore = sum([
-        r >= 70,
-        (a.get("macd_bullish") and a["is_long"]) or (a.get("macd_bearish") and not a["is_long"]),
-        (rsi_4h < 35 and a["is_long"]) or (rsi_4h > 65 and not a["is_long"]),
-        a.get("above_ema200"),
-        bool(smc),
-        rsi_1d < 40 and a["is_long"],
-    ])
-    if vscore >= 5:   ve, vt = "🔥", "СИЛЬНЫЙ СИГНАЛ"
-    elif vscore >= 3: ve, vt = "✅", "ХОРОШИЙ СИГНАЛ"
-    elif vscore >= 2: ve, vt = "🟡", "УМЕРЕННЫЙ — ждать"
-    else:             ve, vt = "⚠️", "СЛАБЫЙ — воздержаться"
-
-    # ── ОДНО СООБЩЕНИЕ — чистое, без линий ──
+    # ── ФОРМАТ ПРОФЕССИОНАЛЬНОГО ОТЧЁТА ──
     parts = [
         f"*{symbol}USDT* {side_e} *{side_t}*",
-        f"📡 Аналитика BEST TRADE   Rank #{rank}",
+        f"📡 BEST TRADE PRO   Rank #{rank}",
         "",
-        f"💰 *{fp(price)}*",
+        f"💰 *{fp(price)}*   Vol {vol_s}   MCap {mcap_s}",
     ]
 
     if ath > 0:
-        parts.append(f"🔺 ATH `{fp(ath)}`   до ATH `+{to_ath:.0f}%`   потенциал `~x{x_ath:.1f}`")
+        parts.append(f"🔺 ATH `{fp(ath)}`  потенциал `~x{x_ath:.1f}` (+{to_ath:.0f}%)")
     if atl > 0:
-        parts.append(f"🔻 ATL `{fp(atl)}`   от ATL `+{from_atl:.0f}%`")
+        parts.append(f"🔻 ATL `{fp(atl)}`  от ATL +{from_atl:.0f}%")
 
     parts += [
         "",
-        f"1H `{fc(ch1h)}`   24H `{fc(ch24h)}`   7D `{fc(ch7d)}`   30D `{fc(ch30d)}`   90D `{fc(ch90d)}`",
+        f"📊 1H`{fc(ch1h)}`  24H`{fc(ch24h)}`  7D`{fc(ch7d)}`  30D`{fc(ch30d)}`  90D`{fc(ch90d)}`",
         "",
-        f"RSI(1D) {ri(rsi_1d)}`{rsi_1d:.0f}`   RSI(4H) {ri(rsi_4h)}`{rsi_4h:.0f}`",
-        f"EMA200(1D) `{fp(ema200_d)}`   {'✅ выше' if price>ema200_d>0 else '❌ ниже'}",
-        f"EMA200(4H) `{fp(a.get('ema200_4h',0))}`   {'✅ выше' if a.get('above_ema200') else '❌ ниже'}",
-        f"Тренд {trend_icon}   MACD {macd_t}   ST `{a.get('st_label','—')}`",
+        f"🏆 *PRO Score: `{pro_score}/100`*   Качество входа: *{entry_q}*",
+        f"`{eq_bar}`",
+        f"🎯 Сетап: *{setup}*",
         "",
-        f"Сигнал `{r}/100`   `{bar}`",
     ]
 
-    if smc:
-        parts.append(f"SMC `{'  ·  '.join(smc[:4])}`")
+    # Структура рынка
+    tf_map = {"bullish": "🟢↑", "bearish": "🔴↓", "neutral": "⚪→"}
+    if pa["ok"]:
+        tf_line = (f"TF: 1H{tf_map.get(pa['tf_1h'],'?')}  "
+                   f"4H{tf_map.get(pa['tf_4h'],'?')}  "
+                   f"1D{tf_map.get(pa['tf_1d'],'?')}  "
+                   f"1W{tf_map.get(pa['tf_1w'],'?')}")
+        conf = pa.get("tf_confluence", 0)
+        conf_str = f"  Confluence: {abs(conf)}/4 {'🟢' if conf > 0 else '🔴'}"
+        parts.append(tf_line + conf_str)
 
-    # Фандинг
-    if extras:
-        fr = extras.get("funding", {})
-        if fr.get("ok"):
-            parts.append(f"Funding `{fr['rate']:+.4f}%`   {fr['signal']}")
+    parts += [
+        f"RSI(1H){ri(pa.get('rsi_1h',50))}`{pa.get('rsi_1h',rsi_4h):.0f}`  "
+        f"RSI(4H){ri(rsi_4h)}`{rsi_4h:.0f}`  "
+        f"RSI(1D){ri(rsi_1d)}`{rsi_1d:.0f}`",
+    ]
+    if ema200_4h:
+        parts.append(f"EMA200(4H)`{fp(ema200_4h)}` {'✅' if price>ema200_4h else '❌'}  "
+                     f"EMA200(1D)`{fp(ema200_1d)}` {'✅' if price>ema200_1d>0 else '❌'}")
 
+    # ICT / SMC факторы
+    ict_hits = []
+    if pa.get("ict_ob_bull"):     ict_hits.append("OB Bull ✅")
+    if pa.get("ict_ob_bear"):     ict_hits.append("OB Bear 🔴")
+    if pa.get("ict_fvg_bull"):    ict_hits.append("FVG Bull ✅")
+    if pa.get("ict_fvg_bear"):    ict_hits.append("FVG Bear 🔴")
+    if pa.get("ict_liquidity_sweep"): ict_hits.append("Liq Sweep ⚡️")
+    if pa.get("smc_bos"):         ict_hits.append(f"BOS {pa['smc_bos']} 🔀")
+    if pa.get("smc_choch"):       ict_hits.append(f"CHoCH {pa['smc_choch']} 🔄")
+    if pa.get("ict_pd_array"):    ict_hits.append(pa["ict_pd_array"])
+    if ict_hits:
+        parts.append(f"SMC/ICT: `{'  ·  '.join(ict_hits[:4])}`")
+
+    # Wyckoff + Elliott
+    if pa.get("wyckoff_phase"):
+        parts.append(f"Wyckoff: `{pa['wyckoff_phase']}` — {pa.get('wyckoff_event','')}")
+    if pa.get("elliott_wave"):
+        parts.append(f"Elliott: `{pa['elliott_wave']}`")
+
+    # OI / Funding
+    if pa.get("oi_signal"):
+        parts.append(pa["oi_signal"])
+    if pa.get("funding_rate") is not None:
+        fr = pa["funding_rate"]
+        fr_e = "🟢" if fr < -0.02 else ("🔴" if fr > 0.05 else "⚖️")
+        parts.append(f"Funding: {fr_e}`{fr:+.4f}%`")
+
+    # Volume
+    vol_info = []
+    if pa.get("vol_climax"):  vol_info.append("Climax ⚠️")
+    if pa.get("vol_dry_up"):  vol_info.append("Dry-up 💎")
+    if pa.get("vol_trend") == "increasing": vol_info.append("Vol↑ 📊")
+    if vol_info:
+        parts.append(f"Volume: `{'  ·  '.join(vol_info)}`")
+
+    # Ключевые факторы
+    factors = pa.get("factors", [])
+    if factors:
+        parts += ["", "📋 *Ключевые факторы:*"]
+        for f_ in factors[:6]:
+            parts.append(f"  {f_}")
+
+    # Предупреждения
+    warnings = pa.get("warnings", [])
+    if warnings:
+        parts += [""]
+        for w in warnings[:3]:
+            parts.append(w)
+
+    # TP/SL
     parts += [
         "",
         f"💵 *Точка входа:* `{fp(price)}`",
         "",
         f"🎯 *TP1:* `{fp(a['tp1'])}` *({pct(a['tp1'])})*",
-        "",
         f"🎯 *TP2:* `{fp(a['tp2'])}` *({pct(a['tp2'])})*",
-        "",
         f"🎯 *TP3:* `{fp(a['tp3'])}` *({pct(a['tp3'])})*",
         "",
         f"🔴 *SL:* `{fp(a['sl'])}`   R:R `1:{a['rr']:.1f}`",
     ]
 
-    if ath > 0:
+    # Спот DCA зоны
+    if ath > 0 and ch90d < -30:
         parts += [
             "",
-            f"💎 *Спот DCA:*",
-            f"Вход 1 `{fp(buy_hi)}`   Вход 2 `{fp(buy_lo)}`",
-            f"Цель `{fp(sell_t)}`   (~x{sell_t/price:.1f})",
+            f"💎 *Спот DCA зоны:*",
+            f"  Зона 1 (40%): `{fp(buy_hi)}`",
+            f"  Зона 2 (40%): `{fp(buy_lo)}`",
+            f"  Зона 3 (20%): `{fp(atl*1.05 if atl>0 else price*0.7)}`",
+            f"  Цель: `{fp(sell_t)}`  (~x{sell_t/price:.1f})",
         ]
 
-    # Спот vs фьючерс
-    if a["is_long"] and rsi_1d < 35 and ch90d < -40:
-        rec = "💎 Спот-приоритет — DCA у дна"
-    elif a["is_long"]:
+    # Рекомендация
+    if pro_score >= 75:    ve, vt = "🔥", "СИЛЬНЫЙ СИГНАЛ"
+    elif pro_score >= 60:  ve, vt = "✅", "ХОРОШИЙ СИГНАЛ"
+    elif pro_score >= 45:  ve, vt = "🟡", "УМЕРЕННЫЙ — ждать подтверждения"
+    else:                  ve, vt = "⚠️", "СЛАБЫЙ — воздержаться"
+
+    if is_long and rsi_1d < 35 and ch90d < -40:
+        rec = "💎 Приоритет — спот DCA"
+    elif is_long:
         rec = "⚡️ Фьючерс лонг 2-5x"
     else:
         rec = "⚡️ Фьючерс шорт 2-5x"
@@ -4767,13 +5396,8 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     ]
 
     text = "\n".join(parts)
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 TradingView",   url=tv_link(symbol)),
-         InlineKeyboardButton("📊 CoinMarketCap", url=cmc_link(slug))],
-        [InlineKeyboardButton("🔄 Обновить",      callback_data=f"full_{symbol}"),
-         InlineKeyboardButton("🏠 Меню",          callback_data="show_menu")],
-    ])
+    if len(text) > 4096:
+        text = text[:4090] + "..."
 
     await send_coin(bot, chat_id, symbol, slug, a, text)
     return True
