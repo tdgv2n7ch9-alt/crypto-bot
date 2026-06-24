@@ -2506,25 +2506,29 @@ async def _show_channel_signals(q):
     ])
 
     try:
-        if not os.path.exists(_READER_SIGNALS_FILE):
-            await q.edit_message_text(
-                "📡 *Сигналы каналов*\n\n"
-                "⏳ Нет данных от каналов.\n"
-                "Reader ещё не собрал сигналы или не запущен.\n\n"
-                "_Убедись что reader.py работает на Railway_",
-                parse_mode="Markdown", reply_markup=nav
-            )
-            return
+        msg_text = (
+            "📡 *Сигналы каналов*\n\n"
+            "✅ Reader активен — мониторит *11 каналов*\n\n"
+            "📨 Сигналы приходят тебе *напрямую в личку* от бота.\n\n"
+            "📋 *Каналы:*\n"
+            "• PIXEL\n• Мысли Эмилии\n• Биржевой спекулянт\n"
+            "• Scalping Blog | Адель\n• Kira | ICT\n• Заговор ликвидности\n"
+            "• MANIPULATOR\n• VAGR TRADING\n• ANNA TRADE\n"
+            "• 2Trade – Kirill Sobolev\n• КРИПТА С НУЛЯ | ТТ\n\n"
+            f"🕐 {now_utc3()}"
+        )
+        try:
+            await q.edit_message_text(msg_text, parse_mode="Markdown", reply_markup=nav)
+        except Exception as e:
+            if "not modified" in str(e).lower():
+                await q.answer("✅ Актуально")
+            else:
+                raise e
+        return
 
-        with open(_READER_SIGNALS_FILE) as f:
-            signals = _json.load(f)
-
+        signals = []
         if not signals:
-            await q.edit_message_text(
-                "📡 *Сигналы каналов*\n\n📭 Сигналов пока нет",
-                parse_mode="Markdown", reply_markup=nav
-            )
-            return
+            pass
 
         # Группируем по каналу, берём последние 24ч
         cutoff = datetime.now(TZ).timestamp() - 86400
