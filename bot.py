@@ -3366,6 +3366,1443 @@ async def check_entry_approach(bot: Bot, chat_ids: set):
             log.error(f"check_entry_approach {sym}: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════════
+# УРОВЕНЬ 1 — CONFLUENCE MATRIX (7+ факторов)
+# ═══════════════════════════════════════════════════════════════════
+
+def confluence_matrix(a: dict, pa: dict, coin: dict,
+                      btc_ctx: dict, kz: dict) -> dict:
+    """
+    Максимально строгий фильтр — сигнал только при 7+ совпадениях.
+    Каждый фактор имеет вес. Итог: score 0-100 и grade A+/A/B/C/D.
+    """
+    is_long = a.get("is_long", True)
+    factors = []
+    score   = 0
+
+    checks = [
+        # (условие, вес, описание)
+        (a.get("above_ema200"),                                    8,  "EMA200 ✅"),
+        (a.get("trend_4h") == ("bullish" if is_long else "bearish"), 7, "Тренд 4H ✅"),
+        (a.get("supertrend_bull") is (True if is_long else False),  7,  "Supertrend ✅"),
+        (a.get("macd_bullish") if is_long else a.get("macd_bearish"), 6, "MACD ✅"),
+        ((a.get("rsi_4h",50)<35) if is_long else (a.get("rsi_4h",50)>65), 8, "RSI зона ✅"),
+        (pa.get("ict_ob_bull") if is_long else pa.get("ict_ob_bear"), 10, "ICT Order Block ✅"),
+        (pa.get("ict_liquidity_sweep"),                             9,  "Liq Sweep ✅"),
+        ((pa.get("ict_fvg_bull") if is_long else pa.get("ict_fvg_bear")), 7, "FVG ✅"),
+        (pa.get("smc_bos") == ("bull" if is_long else "bear"),     8,  "BOS ✅"),
+        (pa.get("smc_choch") == ("bull" if is_long else "bear"),   9,  "CHoCH ✅"),
+        (pa.get("wyckoff_phase") in (["Accumulation","Markup"] if is_long
+                                      else ["Distribution","Markdown"]), 8, "Wyckoff ✅"),
+        (btc_ctx.get("long_ok") if is_long else btc_ctx.get("short_ok"), 7, "BTC контекст ✅"),
+        (kz.get("is_good"),                                        5,  "Killzone ✅"),
+        (pa.get("tf_confluence",0) >= (2 if is_long else -2),      8,  "TF Confluence ✅"),
+        (a.get("vol_spike") or pa.get("vol_trend")=="increasing",  5,  "Объём растёт ✅"),
+    ]
+
+    hits = 0
+    for cond, weight, label in checks:
+        if cond:
+            score += weight
+            factors.append(label)
+            hits += 1
+
+    score = min(100, score)
+
+    if hits >= 10 and score >= 80:   grade = "A+ 🔥🔥"
+    elif hits >= 8 and score >= 65:  grade = "A+ 🔥"
+    elif hits >= 7 and score >= 55:  grade = "A ✅"
+    elif hits >= 5 and score >= 40:  grade = "B 🟡"
+    elif hits >= 3:                  grade = "C ⚠️"
+    else:                            grade = "D ❌"
+
+    return {
+        "score":   score,
+        "hits":    hits,
+        "grade":   grade,
+        "factors": factors,
+        "pass":    grade.startswith("A"),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# УРОВЕНЬ 2 — VOLUME PROFILE / POC
+# ═══════════════════════════════════════════════════════════════════
+
+def get_volume_profile(symbol: str, tf: str = "4h", limit: int = 100) -> dict:
+    """
+    Volume Profile — где сосредоточен основной объём.
+    POC (Point of Control) = цена с максимальным объёмом = сильнейший уровень.
+    VAH (Value Area High) = верх зоны ценности (70% объёма)
+    VAL (Value Area Low)  = низ зоны ценности
+    """
+    result = {"ok": False, "poc": 0.0, "vah": 0.0, "val": 0.0,
+              "price_in_va": False, "price_above_poc": False,
+              "label": "", "levels": []}
+    try:
+        candles = get_binance_ohlc(symbol, tf, limit)
+        if not candles or len(candles) < 20:
+            return result
+
+        price = candles[-1]["close"]
+
+        # Строим гистограмму объёма по ценовым уровням
+        all_high = max(c["high"] for c in candles)
+        all_low  = min(c["low"]  for c in candles)
+        if all_high <= all_low:
+            return result
+
+        bins = 50  # 50 ценовых уровней
+        step = (all_high - all_low) / bins
+        vol_bins = [0.0] * bins
+
+        for c in candles:
+            lo, hi, vol = c["low"], c["high"], c["vol"]
+            for b in range(bins):
+                bin_lo = all_low + b * step
+                bin_hi = bin_lo + step
+                # Пересечение свечи с бином
+                overlap_lo = max(lo, bin_lo)
+                overlap_hi = min(hi, bin_hi)
+                if overlap_hi > overlap_lo:
+                    frac = (overlap_hi - overlap_lo) / (hi - lo) if hi > lo else 1.0
+                    vol_bins[b] += vol * frac
+
+        # POC = бин с максимальным объёмом
+        poc_bin = vol_bins.index(max(vol_bins))
+        poc = all_low + (poc_bin + 0.5) * step
+
+        # Value Area — 70% объёма вокруг POC
+        total_vol = sum(vol_bins)
+        target    = total_vol * 0.70
+        accum     = vol_bins[poc_bin]
+        lo_b = hi_b = poc_bin
+
+        while accum < target and (lo_b > 0 or hi_b < bins - 1):
+            expand_lo = vol_bins[lo_b - 1] if lo_b > 0 else 0
+            expand_hi = vol_bins[hi_b + 1] if hi_b < bins - 1 else 0
+            if expand_lo >= expand_hi and lo_b > 0:
+                lo_b -= 1; accum += expand_lo
+            elif hi_b < bins - 1:
+                hi_b += 1; accum += expand_hi
+            else:
+                break
+
+        vah = all_low + (hi_b + 1) * step
+        val = all_low + lo_b * step
+
+        price_in_va    = val <= price <= vah
+        price_above_poc = price > poc
+
+        if price_in_va and price_above_poc:
+            label = "🟢 Цена в Value Area выше POC — бычий контекст"
+        elif price_in_va and not price_above_poc:
+            label = "🔴 Цена в Value Area ниже POC — медвежий контекст"
+        elif price > vah:
+            label = "🚀 Цена выше VAH — сильный бычий импульс"
+        elif price < val:
+            label = "📉 Цена ниже VAL — сильный медвежий импульс"
+        else:
+            label = "⚖️ Нейтральная зона"
+
+        result.update({
+            "ok": True, "poc": round(poc, 8),
+            "vah": round(vah, 8), "val": round(val, 8),
+            "price_in_va": price_in_va,
+            "price_above_poc": price_above_poc,
+            "label": label,
+            "levels": [round(val, 8), round(poc, 8), round(vah, 8)],
+        })
+
+    except Exception as e:
+        log.error(f"volume_profile {symbol}: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# УРОВЕНЬ 3 — MARKET MICROSTRUCTURE (стакан / стена ордеров)
+# ═══════════════════════════════════════════════════════════════════
+
+def get_order_book_analysis(symbol: str) -> dict:
+    """
+    Анализ стакана ордеров Binance.
+    Находит крупные стены (bid/ask walls) — уровни где институционалы
+    защищают позиции. Это реальные уровни поддержки/сопротивления.
+    """
+    result = {
+        "ok": False,
+        "bid_wall": None,    # крупная поддержка
+        "ask_wall": None,    # крупное сопротивление
+        "bid_ask_ratio": 1.0, # > 1.5 = давление покупателей
+        "imbalance": "neutral",
+        "label": "",
+        "support_levels": [],
+        "resistance_levels": [],
+    }
+    try:
+        r = requests.get(
+            "https://api.binance.com/api/v3/depth",
+            params={"symbol": f"{symbol}USDT", "limit": 100},
+            timeout=8
+        )
+        if r.status_code != 200:
+            return result
+
+        data   = r.json()
+        bids   = [(float(p), float(q)) for p, q in data.get("bids", [])]
+        asks   = [(float(p), float(q)) for p, q in data.get("asks", [])]
+
+        if not bids or not asks:
+            return result
+
+        mid_price = (bids[0][0] + asks[0][0]) / 2
+
+        # Находим стены — ордера > 3× среднего
+        def find_walls(orders, n=20):
+            if not orders: return []
+            vols = [q for _, q in orders[:n]]
+            avg  = sum(vols) / len(vols) if vols else 1
+            walls = [(p, q) for p, q in orders[:n] if q > avg * 3.0]
+            return sorted(walls, key=lambda x: x[1], reverse=True)[:3]
+
+        bid_walls = find_walls(bids)
+        ask_walls = find_walls(asks)
+
+        # Суммарный объём bid vs ask (первые 20 уровней)
+        total_bid = sum(q for _, q in bids[:20])
+        total_ask = sum(q for _, q in asks[:20])
+        ratio     = total_bid / total_ask if total_ask > 0 else 1.0
+
+        if ratio > 1.5:
+            imbalance = "bullish"
+            label = f"🟢 Стакан: покупатели доминируют (ratio {ratio:.2f})"
+        elif ratio < 0.67:
+            imbalance = "bearish"
+            label = f"🔴 Стакан: продавцы доминируют (ratio {ratio:.2f})"
+        else:
+            imbalance = "neutral"
+            label = f"⚖️ Стакан сбалансирован (ratio {ratio:.2f})"
+
+        result.update({
+            "ok":           True,
+            "bid_wall":     bid_walls[0][0] if bid_walls else None,
+            "ask_wall":     ask_walls[0][0] if ask_walls else None,
+            "bid_ask_ratio": round(ratio, 2),
+            "imbalance":    imbalance,
+            "label":        label,
+            "support_levels":    [p for p, _ in bid_walls],
+            "resistance_levels": [p for p, _ in ask_walls],
+        })
+
+    except Exception as e:
+        log.error(f"order_book {symbol}: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# УРОВЕНЬ 4 — DXY / GOLD КОРРЕЛЯЦИЯ
+# ═══════════════════════════════════════════════════════════════════
+
+def get_macro_context() -> dict:
+    """
+    Макро контекст: DXY (индекс доллара) и Gold.
+    Крипта = риск-актив. Когда DXY растёт → крипта падает.
+    Когда Gold растёт → неопределённость → осторожно.
+    Используем BTC/USDT как proxy для DXY корреляции
+    (т.к. DXY недоступен через Binance).
+    Добавляем анализ ETH/BTC ratio — опережающий индикатор альтсезона.
+    """
+    result = {
+        "ok": False,
+        "eth_btc_ratio": 0.0,
+        "eth_btc_trend": "neutral",
+        "altseason": False,
+        "altseason_label": "",
+        "btc_dominance": 0.0,
+        "dom_trend": "neutral",
+        "macro_label": "",
+        "risk_on": True,
+    }
+    try:
+        # ETH/BTC ratio — ключевой индикатор альтсезона
+        eth_btc = get_binance_ohlc("ETHBTC", "1d", 30)
+        if eth_btc and len(eth_btc) >= 14:
+            closes = [c["close"] for c in eth_btc]
+            ratio  = closes[-1]
+            ema7   = calc_ema(closes, 7)[-1]  or ratio
+            ema14  = calc_ema(closes, 14)[-1] or ratio
+
+            if ratio > ema7 > ema14:
+                eth_btc_trend = "bullish"
+                altseason     = True
+                altseason_lbl = "🚀 ETH/BTC растёт — альтсезон активен"
+            elif ratio < ema7 < ema14:
+                eth_btc_trend = "bearish"
+                altseason     = False
+                altseason_lbl = "🔴 ETH/BTC падает — доминация BTC, осторожно с альтами"
+            else:
+                eth_btc_trend = "neutral"
+                altseason     = False
+                altseason_lbl = "⚖️ ETH/BTC нейтрален"
+
+            result.update({
+                "eth_btc_ratio": round(ratio, 6),
+                "eth_btc_trend": eth_btc_trend,
+                "altseason":     altseason,
+                "altseason_label": altseason_lbl,
+            })
+
+        # BTC доминация через CMC
+        try:
+            gm = get_global_metrics()
+            dom = gm.get("btc_dominance", 0)
+            result["btc_dominance"] = round(dom, 1)
+            if dom > 55:
+                result["dom_trend"]   = "btc_season"
+                result["macro_label"] = f"₿ Доминация BTC {dom:.1f}% — деньги в BTC"
+                result["risk_on"]     = False
+            elif dom < 45:
+                result["dom_trend"]   = "alt_season"
+                result["macro_label"] = f"🌊 Доминация BTC {dom:.1f}% — альтсезон"
+                result["risk_on"]     = True
+            else:
+                result["dom_trend"]   = "neutral"
+                result["macro_label"] = f"⚖️ Доминация BTC {dom:.1f}% — нейтрально"
+        except: pass
+
+        result["ok"] = True
+
+    except Exception as e:
+        log.error(f"macro_context: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# УРОВЕНЬ 5 — СЕЗОННОСТЬ
+# ═══════════════════════════════════════════════════════════════════
+
+def get_seasonality() -> dict:
+    """
+    Исторические паттерны сезонности крипторынка.
+    На основе 10 лет данных BTC.
+    """
+    now   = datetime.now(TZ)
+    month = now.month
+    day   = now.day
+
+    # Исторический bias по месяцам (+ бычий, - медвежий, 0 нейтральный)
+    monthly_bias = {
+        1:  (-2, "Январь — исторически слабый месяц после декабрьского роста"),
+        2:  (+1, "Февраль — умеренно бычий, часто пре-халвинг движение"),
+        3:  (+2, "Март — сильный месяц, институционалы возвращаются"),
+        4:  (+3, "Апрель — исторически лучший месяц BTC ('Uptober #2')"),
+        5:  (+1, "Май — 'Sell in May'? Не всегда, но осторожность уместна"),
+        6:  (-1, "Июнь — исторически слабый, коррекции часты"),
+        7:  (+1, "Июль — лето часто даёт отскок после июньских минимумов"),
+        8:  (-1, "Август — тихий месяц, низкие объёмы"),
+        9:  (-2, "Сентябрь — исторически худший месяц крипты"),
+        10: (+3, "'Uptober' — лучший месяц для BTC исторически"),
+        11: (+2, "Ноябрь — продолжение роста, Q4 ралли"),
+        12: (+1, "Декабрь — часто рост до середины, потом коррекция"),
+    }
+
+    # Паттерны по неделям
+    week_of_month = (day - 1) // 7 + 1
+    weekly_notes = {
+        1: "Первая неделя — часто продолжение прошлого месяца",
+        2: "Вторая неделя — часто разворот или консолидация",
+        3: "Третья неделя — опционные экспирации (пятница)",
+        4: "Четвёртая неделя — конец месяца, часто манипуляция",
+    }
+
+    # Халвинг цикл (следующий ~апрель 2028)
+    # Последний халвинг: апрель 2024
+    from datetime import date
+    last_halving  = date(2024, 4, 20)
+    next_halving  = date(2028, 4, 20)
+    days_since    = (now.date() - last_halving).days
+    days_to_next  = (next_halving - now.date()).days
+    cycle_pct     = days_since / (next_halving - last_halving).days * 100
+
+    if cycle_pct < 15:
+        halving_phase = "Pre-halving run 🚀"
+        halving_bias  = +3
+    elif cycle_pct < 35:
+        halving_phase = "Post-halving accumulation 💎"
+        halving_bias  = +1
+    elif cycle_pct < 60:
+        halving_phase = "Bull market expansion 🔥"
+        halving_bias  = +3
+    elif cycle_pct < 80:
+        halving_phase = "Distribution / correction ⚠️"
+        halving_bias  = -2
+    else:
+        halving_phase = "Bear market / accumulation 🔄"
+        halving_bias  = -1
+
+    bias, month_note = monthly_bias.get(month, (0, ""))
+    total_bias = bias + halving_bias
+
+    if total_bias >= 4:    season_label = "🔥🔥 Очень бычий сезон"
+    elif total_bias >= 2:  season_label = "🟢 Бычий сезон"
+    elif total_bias >= 0:  season_label = "⚪ Нейтральный сезон"
+    elif total_bias >= -2: season_label = "🟡 Осторожный сезон"
+    else:                  season_label = "🔴 Медвежий сезон"
+
+    return {
+        "ok":           True,
+        "month":        month,
+        "month_bias":   bias,
+        "month_note":   month_note,
+        "week":         week_of_month,
+        "week_note":    weekly_notes.get(week_of_month, ""),
+        "halving_phase": halving_phase,
+        "halving_bias":  halving_bias,
+        "days_to_next_halving": days_to_next,
+        "cycle_pct":    round(cycle_pct, 1),
+        "total_bias":   total_bias,
+        "label":        season_label,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# УРОВЕНЬ 6 — ON-CHAIN ДАННЫЕ
+# ═══════════════════════════════════════════════════════════════════
+
+def get_onchain_data(symbol: str) -> dict:
+    """
+    On-chain метрики через публичные API.
+    Exchange Netflow: отток с бирж = бычий сигнал (ходлеры уходят)
+                      приток на биржи = медвежий (готовятся продавать)
+    Whale movements через Binance large trades.
+    """
+    result = {
+        "ok":           False,
+        "exchange_flow": None,   # "inflow" / "outflow" / "neutral"
+        "flow_label":   "",
+        "whale_buys":   0,
+        "whale_sells":  0,
+        "whale_label":  "",
+        "large_trade_ratio": 1.0,
+        "net_flow_signal": "neutral",
+    }
+    try:
+        # Анализируем крупные сделки через Binance агрегированные трейды
+        r = requests.get(
+            "https://api.binance.com/api/v3/aggTrades",
+            params={
+                "symbol": f"{symbol}USDT",
+                "limit":  500,
+            },
+            timeout=8
+        )
+        if r.status_code != 200:
+            return result
+
+        trades = r.json()
+        if not trades:
+            return result
+
+        # Средний объём одной сделки
+        all_qtys = [float(t["q"]) for t in trades]
+        avg_qty  = sum(all_qtys) / len(all_qtys) if all_qtys else 1
+
+        # "Кит" = сделка > 10× среднего
+        whale_threshold = avg_qty * 10
+
+        whale_buys  = 0
+        whale_sells = 0
+        buy_vol     = 0.0
+        sell_vol    = 0.0
+
+        for t in trades:
+            qty     = float(t["q"])
+            is_sell = t.get("m", False)  # maker = продавец
+            if qty >= whale_threshold:
+                if is_sell:
+                    whale_sells += 1; sell_vol += qty
+                else:
+                    whale_buys  += 1; buy_vol  += qty
+
+        # Pressure ratio
+        total_vol = buy_vol + sell_vol
+        if total_vol > 0:
+            buy_ratio = buy_vol / total_vol
+        else:
+            buy_ratio = 0.5
+
+        # Сигнал
+        if buy_ratio > 0.65:
+            flow    = "outflow"
+            flow_lbl = f"🟢 Киты покупают ({whale_buys} крупных покупок)"
+            net_sig  = "bullish"
+        elif buy_ratio < 0.35:
+            flow    = "inflow"
+            flow_lbl = f"🔴 Киты продают ({whale_sells} крупных продаж)"
+            net_sig  = "bearish"
+        else:
+            flow    = "neutral"
+            flow_lbl = "⚖️ Киты нейтральны"
+            net_sig  = "neutral"
+
+        whale_lbl = (f"🐋 {whale_buys} покупок  {whale_sells} продаж  "
+                     f"Buy pressure: {buy_ratio*100:.0f}%")
+
+        result.update({
+            "ok":              True,
+            "exchange_flow":   flow,
+            "flow_label":      flow_lbl,
+            "whale_buys":      whale_buys,
+            "whale_sells":     whale_sells,
+            "whale_label":     whale_lbl,
+            "large_trade_ratio": round(buy_ratio, 2),
+            "net_flow_signal": net_sig,
+        })
+
+    except Exception as e:
+        log.error(f"onchain {symbol}: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BACKTESTING — проверка точности сигналов на истории
+# ═══════════════════════════════════════════════════════════════════
+
+def backtest_signal(symbol: str, is_long: bool, lookback_candles: int = 90) -> dict:
+    """
+    Симулирует сигналы на исторических данных 4H за lookback_candles свечей.
+    Для каждой точки входа проверяет: достиг ли TP1/TP2/TP3 раньше SL.
+
+    Возвращает:
+    - winrate (% прибыльных сделок)
+    - avg_rr (среднее R:R)
+    - total_trades
+    - best_streak / worst_streak
+    - expectancy (математическое ожидание на сделку)
+    """
+    result = {
+        "ok": False,
+        "total": 0,
+        "wins": 0,
+        "losses": 0,
+        "winrate": 0.0,
+        "avg_rr": 0.0,
+        "expectancy": 0.0,
+        "best_streak": 0,
+        "worst_streak": 0,
+        "label": "",
+        "summary": "",
+    }
+    try:
+        candles = get_binance_ohlc(symbol, "4h", lookback_candles + 30)
+        if not candles or len(candles) < 40:
+            return result
+
+        closes = [c["close"] for c in candles]
+        highs  = [c["high"]  for c in candles]
+        lows   = [c["low"]   for c in candles]
+
+        trades = []
+        i = 20  # начинаем после прогрева индикаторов
+
+        while i < len(candles) - 10:
+            price = closes[i]
+            atr_w = [abs(candles[j]["high"] - candles[j]["low"]) for j in range(max(0,i-14), i)]
+            atr   = sum(atr_w) / len(atr_w) if atr_w else price * 0.02
+
+            # Swing уровни для TP/SL
+            lookback = min(20, i)
+            recent_highs = highs[i-lookback:i]
+            recent_lows  = lows[i-lookback:i]
+
+            levels_above = sorted([h for h in recent_highs if h > price * 1.005])
+            levels_below = sorted([l for l in recent_lows  if l < price * 0.995], reverse=True)
+
+            if is_long:
+                sl  = levels_below[0] * 0.998 if levels_below else price - atr * 1.5
+                tp1 = levels_above[0] * 0.998 if levels_above else price + atr * 1.0
+                tp2 = levels_above[1] * 0.998 if len(levels_above) > 1 else price + atr * 1.618
+                tp3 = levels_above[2] * 0.998 if len(levels_above) > 2 else price + atr * 2.618
+                sl  = max(sl, price * 0.80)
+            else:
+                sl  = levels_above[0] * 1.002 if levels_above else price + atr * 1.5
+                tp1 = levels_below[0] * 1.002 if levels_below else price - atr * 1.0
+                tp2 = levels_below[1] * 1.002 if len(levels_below) > 1 else price - atr * 1.618
+                tp3 = levels_below[2] * 1.002 if len(levels_below) > 2 else price - atr * 2.618
+                sl  = min(sl, price * 1.20)
+
+            if abs(sl - price) < price * 0.003:
+                i += 3; continue
+
+            rr3 = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 1.5
+
+            # Симуляция: смотрим следующие 10 свечей
+            outcome = None
+            exit_rr = 0.0
+            for j in range(i+1, min(i+11, len(candles))):
+                h = highs[j]
+                l = lows[j]
+                if is_long:
+                    if l <= sl:
+                        outcome = "loss"; exit_rr = -1.0; break
+                    if h >= tp3:
+                        outcome = "win"; exit_rr = rr3; break
+                    if h >= tp2:
+                        outcome = "win"; exit_rr = abs(tp2-price)/abs(sl-price); break
+                    if h >= tp1:
+                        outcome = "win"; exit_rr = abs(tp1-price)/abs(sl-price); break
+                else:
+                    if h >= sl:
+                        outcome = "loss"; exit_rr = -1.0; break
+                    if l <= tp3:
+                        outcome = "win"; exit_rr = rr3; break
+                    if l <= tp2:
+                        outcome = "win"; exit_rr = abs(tp2-price)/abs(sl-price); break
+                    if l <= tp1:
+                        outcome = "win"; exit_rr = abs(tp1-price)/abs(sl-price); break
+
+            if outcome:
+                trades.append({"outcome": outcome, "rr": exit_rr})
+
+            i += 5  # шаг 5 свечей (20ч) между сигналами
+
+        if not trades:
+            return result
+
+        wins   = [t for t in trades if t["outcome"] == "win"]
+        losses = [t for t in trades if t["outcome"] == "loss"]
+        total  = len(trades)
+        wr     = len(wins) / total * 100
+        avg_rr = sum(t["rr"] for t in trades) / total
+        # Expectancy = winrate × avg_win_rr + lossrate × (-1)
+        avg_win_rr = sum(t["rr"] for t in wins) / len(wins) if wins else 0
+        expectancy = (len(wins)/total * avg_win_rr) + (len(losses)/total * (-1.0))
+
+        # Серии
+        best_streak = worst_streak = cur_w = cur_l = 0
+        for t in trades:
+            if t["outcome"] == "win":
+                cur_w += 1; cur_l = 0
+                best_streak = max(best_streak, cur_w)
+            else:
+                cur_l += 1; cur_w = 0
+                worst_streak = max(worst_streak, cur_l)
+
+        # Оценка
+        if wr >= 60 and expectancy > 0.3:   label = "🔥 Отличная стратегия"
+        elif wr >= 50 and expectancy > 0:    label = "✅ Рабочая стратегия"
+        elif wr >= 40 and expectancy > -0.2: label = "🟡 Умеренная стратегия"
+        else:                                label = "🔴 Слабая — пересмотреть"
+
+        summary = (f"Сделок: {total}  Побед: {len(wins)} ({wr:.0f}%)  "
+                   f"Поражений: {len(losses)}  "
+                   f"Avg R:R: {avg_rr:.2f}  "
+                   f"Expectancy: {expectancy:+.2f}R")
+
+        result.update({
+            "ok": True, "total": total,
+            "wins": len(wins), "losses": len(losses),
+            "winrate": round(wr, 1),
+            "avg_rr": round(avg_rr, 2),
+            "expectancy": round(expectancy, 2),
+            "best_streak": best_streak,
+            "worst_streak": worst_streak,
+            "label": label,
+            "summary": summary,
+        })
+
+    except Exception as e:
+        log.error(f"backtest {symbol}: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# НОВОСТИ / КАТАЛИЗАТОРЫ — парсинг событий по монете
+# ═══════════════════════════════════════════════════════════════════
+
+def get_coin_news(symbol: str) -> dict:
+    """
+    Получает последние новости и события по монете.
+    Источники: CoinGecko events + CryptoCompare news API (бесплатные).
+    Возвращает sentiment и ключевые события.
+    """
+    result = {
+        "ok": False,
+        "news": [],
+        "sentiment": "neutral",
+        "sentiment_score": 0,
+        "catalyst": None,
+        "label": "",
+    }
+    try:
+        # CryptoCompare News (бесплатно, без API ключа)
+        url = "https://min-api.cryptocompare.com/data/v2/news/"
+        params = {
+            "categories": symbol.upper(),
+            "lang": "EN",
+            "sortOrder": "latest",
+        }
+        r = requests.get(url, params=params, timeout=8)
+        if r.status_code != 200:
+            return result
+
+        data = r.json().get("Data", [])[:5]  # топ 5 новостей
+        if not data:
+            return result
+
+        news_items = []
+        pos = neg = 0
+
+        positive_kw = ["partnership", "launch", "upgrade", "bullish", "listing",
+                       "adoption", "mainnet", "milestone", "record", "ath",
+                       "integration", "grant", "investment", "rally", "pump"]
+        negative_kw = ["hack", "exploit", "scam", "bear", "crash", "lawsuit",
+                       "sec", "ban", "dump", "delay", "concern", "risk",
+                       "sell", "drop", "plunge", "fraud", "investigation"]
+
+        for item in data:
+            title = item.get("title", "")
+            body  = (item.get("body", "") or "")[:200]
+            ts    = item.get("published_on", 0)
+            src   = item.get("source", "")
+            url_  = item.get("url", "")
+            t_lower = title.lower()
+
+            sentiment = "neutral"
+            if any(kw in t_lower for kw in positive_kw):
+                sentiment = "positive"; pos += 1
+            elif any(kw in t_lower for kw in negative_kw):
+                sentiment = "negative"; neg += 1
+
+            age_h = (datetime.now().timestamp() - ts) / 3600 if ts else 999
+            age_str = f"{int(age_h)}ч назад" if age_h < 48 else f"{int(age_h/24)}д назад"
+
+            news_items.append({
+                "title":     title[:100],
+                "source":    src,
+                "sentiment": sentiment,
+                "age":       age_str,
+                "url":       url_,
+            })
+
+        # Итоговый сентимент
+        total = pos + neg
+        if pos > neg and pos >= 2:
+            sentiment = "positive"
+            label = f"🟢 Позитивный фон ({pos} бычьих новостей)"
+            score = pos
+        elif neg > pos and neg >= 2:
+            sentiment = "negative"
+            label = f"🔴 Негативный фон ({neg} медвежьих новостей)"
+            score = -neg
+        else:
+            sentiment = "neutral"
+            label = "⚪ Нейтральный фон"
+            score = 0
+
+        # Ключевой катализатор (самая свежая позитивная/негативная)
+        catalyst = None
+        for n in news_items:
+            if n["sentiment"] != "neutral":
+                catalyst = n
+                break
+
+        result.update({
+            "ok": True,
+            "news": news_items,
+            "sentiment": sentiment,
+            "sentiment_score": score,
+            "catalyst": catalyst,
+            "label": label,
+        })
+
+    except Exception as e:
+        log.error(f"get_coin_news {symbol}: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# РАСШИРЕННАЯ ТОКЕНОМИКА
+# ═══════════════════════════════════════════════════════════════════
+
+# Расширенная база — 60+ монет
+UNLOCK_SCHEDULE: dict = {
+    # ── ВЫСОКИЙ РИСК ──
+    "ASTER": {"unlock_date": "2035-01", "unlock_pct": 60, "risk": "high",
+               "note": "Давление анлоков до 2035"},
+    "ARB":   {"unlock_date": "2024-04", "unlock_pct": 44, "risk": "high",
+               "note": "Крупные анлоки команды и инвесторов"},
+    "ZK":    {"unlock_date": "2025-06", "unlock_pct": 35, "risk": "high",
+               "note": "Крупные анлоки через год после TGE"},
+    "STRK":  {"unlock_date": "2025-02", "unlock_pct": 40, "risk": "high",
+               "note": "Высокое давление продаж от инвесторов"},
+    "WLD":   {"unlock_date": "2025-07", "unlock_pct": 45, "risk": "high",
+               "note": "Очень высокая инфляция токена"},
+    "TIA":   {"unlock_date": "2025-10", "unlock_pct": 55, "risk": "high",
+               "note": "Огромные анлоки инвесторов"},
+    "MANTA": {"unlock_date": "2025-01", "unlock_pct": 38, "risk": "high",
+               "note": "Анлоки инвесторов"},
+    "ALT":   {"unlock_date": "2025-03", "unlock_pct": 30, "risk": "high",
+               "note": "Быстрые анлоки"},
+    "EIGEN": {"unlock_date": "2025-09", "unlock_pct": 35, "risk": "high",
+               "note": "Крупные анлоки инвесторов"},
+    "SAGA":  {"unlock_date": "2025-04", "unlock_pct": 42, "risk": "high",
+               "note": "Большой процент команды"},
+    "OMNI":  {"unlock_date": "2025-05", "unlock_pct": 38, "risk": "high",
+               "note": "Ранние инвесторы выходят"},
+    "REZ":   {"unlock_date": "2025-05", "unlock_pct": 50, "risk": "high",
+               "note": "Высокая инфляция"},
+    "METIS": {"unlock_date": "2025-06", "unlock_pct": 30, "risk": "high",
+               "note": "Регулярные крупные анлоки"},
+    "LISTA": {"unlock_date": "2025-07", "unlock_pct": 35, "risk": "high",
+               "note": "Молодой проект, высокий риск"},
+    "PORTAL":{"unlock_date": "2025-03", "unlock_pct": 45, "risk": "high",
+               "note": "Gaming токен, высокая эмиссия"},
+    "PIXEL": {"unlock_date": "2025-04", "unlock_pct": 40, "risk": "high",
+               "note": "Gaming, большие анлоки"},
+    "AEVO":  {"unlock_date": "2025-06", "unlock_pct": 33, "risk": "high",
+               "note": "DEX токен, инфляция"},
+    "ETHFI": {"unlock_date": "2025-03", "unlock_pct": 36, "risk": "high",
+               "note": "LST протокол, анлоки команды"},
+    # ── СРЕДНИЙ РИСК ──
+    "OP":    {"unlock_date": "2024-05", "unlock_pct": 30, "risk": "medium",
+               "note": "Постепенные анлоки каждый месяц"},
+    "APT":   {"unlock_date": "2025-10", "unlock_pct": 25, "risk": "medium",
+               "note": "Регулярные анлоки до 2025"},
+    "SUI":   {"unlock_date": "2025-05", "unlock_pct": 20, "risk": "medium",
+               "note": "Анлоки инвесторов каждый квартал"},
+    "PYTH":  {"unlock_date": "2025-11", "unlock_pct": 22, "risk": "medium",
+               "note": "Равномерные анлоки"},
+    "JUP":   {"unlock_date": "2025-01", "unlock_pct": 30, "risk": "medium",
+               "note": "Анлоки команды и советников"},
+    "SEI":   {"unlock_date": "2025-08", "unlock_pct": 18, "risk": "medium",
+               "note": "Умеренные анлоки"},
+    "BLUR":  {"unlock_date": "2025-02", "unlock_pct": 25, "risk": "medium",
+               "note": "NFT маркетплейс, умеренно"},
+    "GMT":   {"unlock_date": "2025-04", "unlock_pct": 20, "risk": "medium",
+               "note": "Move-to-earn, постепенные анлоки"},
+    "DYDX":  {"unlock_date": "2025-12", "unlock_pct": 15, "risk": "low",
+               "note": "Умеренные анлоки, проект зрелый"},
+    "ANKR":  {"unlock_date": "2025-06", "unlock_pct": 12, "risk": "medium",
+               "note": "Небольшие регулярные анлоки"},
+    "CELR":  {"unlock_date": "2025-03", "unlock_pct": 15, "risk": "medium",
+               "note": "Layer2, умеренная инфляция"},
+    "HOOK":  {"unlock_date": "2025-04", "unlock_pct": 28, "risk": "medium",
+               "note": "GameFi, регулярные анлоки"},
+    "PERP":  {"unlock_date": "2025-05", "unlock_pct": 20, "risk": "medium",
+               "note": "DEX, умеренно"},
+    "CYBER": {"unlock_date": "2025-06", "unlock_pct": 22, "risk": "medium",
+               "note": "SocialFi, умеренные анлоки"},
+    "ACE":   {"unlock_date": "2025-07", "unlock_pct": 25, "risk": "medium",
+               "note": "Gaming, умеренные анлоки"},
+    # ── НИЗКИЙ РИСК ──
+    "BTC":   {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Фиксированная эмиссия, нет анлоков"},
+    "ETH":   {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Дефляционный после merge"},
+    "BNB":   {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Регулярный burn, нет анлоков"},
+    "SOL":   {"unlock_date": "N/A",     "unlock_pct": 5,  "risk": "low",
+               "note": "Небольшая инфляция (~5%), управляемо"},
+    "LINK":  {"unlock_date": "N/A",     "unlock_pct": 3,  "risk": "low",
+               "note": "Зрелый проект, минимальная эмиссия"},
+    "AAVE":  {"unlock_date": "N/A",     "unlock_pct": 2,  "risk": "low",
+               "note": "DeFi blue chip, низкая инфляция"},
+    "UNI":   {"unlock_date": "N/A",     "unlock_pct": 2,  "risk": "low",
+               "note": "Зрелый DEX, стабильная эмиссия"},
+    "AVAX":  {"unlock_date": "2025-07", "unlock_pct": 8,  "risk": "low",
+               "note": "Небольшие оставшиеся анлоки"},
+    "DOT":   {"unlock_date": "N/A",     "unlock_pct": 10, "risk": "low",
+               "note": "Инфляция ~10% но идёт на стейкинг"},
+    "ATOM":  {"unlock_date": "N/A",     "unlock_pct": 10, "risk": "low",
+               "note": "Инфляция компенсируется стейкингом"},
+    "MATIC": {"unlock_date": "2025-12", "unlock_pct": 8,  "risk": "low",
+               "note": "Переход на POL, небольшие анлоки"},
+    "NEAR":  {"unlock_date": "N/A",     "unlock_pct": 5,  "risk": "low",
+               "note": "Умеренная инфляция"},
+    "FTM":   {"unlock_date": "N/A",     "unlock_pct": 3,  "risk": "low",
+               "note": "Sonic апгрейд, стабильно"},
+    "INJ":   {"unlock_date": "N/A",     "unlock_pct": 5,  "risk": "low",
+               "note": "Дефляционная модель burn"},
+    "ORDI":  {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "BRC-20, фиксированная эмиссия"},
+    "RUNE":  {"unlock_date": "N/A",     "unlock_pct": 8,  "risk": "low",
+               "note": "THORChain, умеренная инфляция"},
+    "ONDO":  {"unlock_date": "2025-01", "unlock_pct": 18, "risk": "medium",
+               "note": "RWA токен, регулярные анлоки"},
+    "DOGE":  {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Нет анлоков, меметика"},
+    "SHIB":  {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Мем, нет анлоков"},
+    "PEPE":  {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Мем, нет анлоков"},
+    "WIF":   {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Мем на Solana, нет анлоков"},
+    "BONK":  {"unlock_date": "N/A",     "unlock_pct": 0,  "risk": "low",
+               "note": "Мем на Solana, нет анлоков"},
+    "BEAT":  {"unlock_date": "N/A",     "unlock_pct": 5,  "risk": "low",
+               "note": "Небольшая эмиссия"},
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# BTC CORRELATION — фильтр по рыночному контексту
+# ═══════════════════════════════════════════════════════════════════
+
+def get_btc_market_context() -> dict:
+    """
+    Анализирует текущий тренд BTC и даёт рекомендацию.
+    90% альтов коррелируют с BTC — входить против BTC опасно.
+
+    Логика профессионала:
+    - BTC падает → не открывать лонги на альты
+    - BTC растёт → лонги на альты безопаснее
+    - BTC в боковике → смотреть на индивидуальную силу монеты
+    """
+    result = {
+        "ok":         False,
+        "trend_1h":   "neutral",
+        "trend_4h":   "neutral",
+        "trend_1d":   "neutral",
+        "btc_price":  0.0,
+        "btc_ch1h":   0.0,
+        "btc_ch24h":  0.0,
+        "dominance":  0.0,
+        "signal":     "neutral",   # "bull" / "bear" / "neutral"
+        "long_ok":    True,
+        "short_ok":   True,
+        "warning":    "",
+        "label":      "",
+        "rsi_4h":     50.0,
+        "fear_greed": None,
+    }
+
+    try:
+        # BTC свечи
+        c1h = get_binance_ohlc("BTC", "1h", 50)  or []
+        c4h = get_binance_ohlc("BTC", "4h", 100) or []
+        c1d = get_binance_ohlc("BTC", "1d", 50)  or []
+
+        if not c4h:
+            return result
+
+        cl1h = [c["close"] for c in c1h]
+        cl4h = [c["close"] for c in c4h]
+        cl1d = [c["close"] for c in c1d]
+
+        btc_price = cl4h[-1]
+        result["btc_price"] = btc_price
+
+        # EMA тренд по каждому TF
+        def tf_bias(closes, fast=20, slow=50):
+            if len(closes) < slow: return "neutral"
+            ef = calc_ema(closes, fast)[-1] or closes[-1]
+            es = calc_ema(closes, slow)[-1]  or closes[-1]
+            p  = closes[-1]
+            if p > ef > es:   return "bull"
+            if p < ef < es:   return "bear"
+            if p > es:        return "neutral_bull"
+            return "neutral_bear"
+
+        t1h = tf_bias(cl1h, 9, 21)   if len(cl1h) >= 21  else "neutral"
+        t4h = tf_bias(cl4h, 20, 50)  if len(cl4h) >= 50  else "neutral"
+        t1d = tf_bias(cl1d, 50, 200) if len(cl1d) >= 200 else "neutral"
+
+        result["trend_1h"] = t1h
+        result["trend_4h"] = t4h
+        result["trend_1d"] = t1d
+
+        # RSI BTC 4H
+        rsi_btc = calc_rsi(cl4h, 14) if len(cl4h) >= 15 else 50.0
+        result["rsi_4h"] = rsi_btc
+
+        # Изменения цены
+        ch1h  = (cl4h[-1] - cl4h[-4])  / cl4h[-4]  * 100 if len(cl4h) >= 4  else 0
+        ch24h = (cl4h[-1] - cl4h[-7])  / cl4h[-7]  * 100 if len(cl4h) >= 7  else 0
+        result["btc_ch1h"]  = round(ch1h, 2)
+        result["btc_ch24h"] = round(ch24h, 2)
+
+        # Определяем общий сигнал
+        bull_count = sum(1 for t in [t1h, t4h, t1d] if "bull" in t)
+        bear_count = sum(1 for t in [t1h, t4h, t1d] if "bear" in t)
+
+        if bull_count >= 2:
+            signal   = "bull"
+            long_ok  = True
+            short_ok = False
+            label    = "🟢 BTC бычий — лонги приоритет"
+            warning  = ""
+        elif bear_count >= 2:
+            signal   = "bear"
+            long_ok  = False
+            short_ok = True
+            label    = "🔴 BTC медвежий — шорты приоритет"
+            warning  = "⚠️ BTC падает — лонги на альты высокий риск"
+        elif t4h == "bull" or t1d == "neutral_bull":
+            signal   = "neutral_bull"
+            long_ok  = True
+            short_ok = True
+            label    = "🟡 BTC нейтральный с бычьим уклоном"
+            warning  = ""
+        elif t4h == "bear" or t1d == "neutral_bear":
+            signal   = "neutral_bear"
+            long_ok  = True   # можно но осторожно
+            short_ok = True
+            label    = "🟡 BTC нейтральный с медвежьим уклоном"
+            warning  = "⚠️ BTC слабый — снижай размер лонгов"
+        else:
+            signal   = "neutral"
+            long_ok  = True
+            short_ok = True
+            label    = "⚪ BTC в боковике — смотри на альт индивидуально"
+            warning  = ""
+
+        # Дополнительный фильтр: BTC падает >3% за 1ч — не открывать лонги
+        if ch1h < -3:
+            long_ok  = False
+            warning  = f"🚨 BTC -{ abs(ch1h):.1f}% за 1ч — НЕ ВХОДИТЬ В ЛОНГ"
+            label   += f"  ⚡️ Резкое падение {ch1h:.1f}%"
+
+        # BTC растёт >5% за 1ч — осторожно с шортами
+        if ch1h > 5:
+            short_ok = False
+            label   += f"  🚀 Резкий рост +{ch1h:.1f}%"
+
+        result.update({
+            "ok":       True,
+            "signal":   signal,
+            "long_ok":  long_ok,
+            "short_ok": short_ok,
+            "label":    label,
+            "warning":  warning,
+        })
+
+    except Exception as e:
+        log.error(f"btc_market_context: {e}")
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# POSITION SIZING — расчёт размера позиции
+# Профессиональный риск-менеджмент
+# ═══════════════════════════════════════════════════════════════════
+
+def calc_position_size(
+    price: float,
+    sl: float,
+    deposit: float = 1000.0,
+    risk_pct: float = 1.0,
+    leverage: float = 1.0,
+    quality: str = "B 🟡",
+) -> dict:
+    """
+    Расчёт размера позиции по методу фиксированного % риска.
+
+    Формула профессионала:
+    Риск на сделку = депозит × risk_pct%
+    Размер позиции = Риск / (цена - SL)
+    
+    Адаптирует risk_pct под качество сигнала:
+    A+ → 2% риска, A → 1.5%, B → 1%, C → 0.5%
+    """
+    if price <= 0 or sl <= 0 or price == sl:
+        return {"ok": False}
+
+    # Адаптивный риск под качество
+    quality_risk = {
+        "A+ 🔥": 2.0,
+        "A ✅":  1.5,
+        "B 🟡":  1.0,
+        "C ⚠️":  0.5,
+    }
+    adj_risk_pct = quality_risk.get(quality, risk_pct)
+
+    risk_usd    = deposit * adj_risk_pct / 100        # $ риска на сделку
+    sl_distance = abs(price - sl) / price * 100       # % до SL
+    sl_usd      = abs(price - sl)                     # $ до SL за монету
+
+    if sl_usd <= 0:
+        return {"ok": False}
+
+    # Размер позиции в монетах
+    position_coins = risk_usd / sl_usd
+
+    # Размер позиции в USD
+    position_usd   = position_coins * price
+
+    # С учётом плеча — нужно обеспечение
+    margin_required = position_usd / leverage
+
+    # % от депозита который занимает позиция
+    deposit_pct = margin_required / deposit * 100
+
+    # Максимальный размер (не более 20% депозита без плеча)
+    max_position_usd = deposit * 0.20 * leverage
+    if position_usd > max_position_usd:
+        position_usd   = max_position_usd
+        position_coins = position_usd / price
+        margin_required = position_usd / leverage
+        deposit_pct    = margin_required / deposit * 100
+        capped = True
+    else:
+        capped = False
+
+    # DCA варианты (3 входа)
+    dca1_usd = position_usd * 0.40   # 40% сразу
+    dca2_usd = position_usd * 0.35   # 35% на откате
+    dca3_usd = position_usd * 0.25   # 25% у SL зоны
+
+    return {
+        "ok":             True,
+        "risk_usd":       round(risk_usd, 2),
+        "risk_pct":       adj_risk_pct,
+        "sl_distance_pct": round(sl_distance, 2),
+        "position_usd":   round(position_usd, 2),
+        "position_coins": round(position_coins, 6),
+        "margin_required": round(margin_required, 2),
+        "deposit_pct":    round(deposit_pct, 1),
+        "leverage":       leverage,
+        "capped":         capped,
+        "dca1_usd":       round(dca1_usd, 2),
+        "dca2_usd":       round(dca2_usd, 2),
+        "dca3_usd":       round(dca3_usd, 2),
+        "deposit":        deposit,
+    }
+
+
+def format_position_size(ps: dict, is_long: bool = True) -> str:
+    """Форматирует расчёт позиции для вставки в сигнал"""
+    if not ps.get("ok"):
+        return ""
+
+    side = "лонг" if is_long else "шорт"
+    lines = [
+        f"💼 *Размер позиции (депозит ${ps['deposit']:.0f}):*",
+        f"  Риск: `${ps['risk_usd']:.2f}` ({ps['risk_pct']}% депозита)",
+        f"  SL дистанция: `{ps['sl_distance_pct']:.2f}%`",
+        f"  Позиция: `${ps['position_usd']:.2f}` ({ps['deposit_pct']:.1f}% депозита)",
+    ]
+    if ps["leverage"] > 1:
+        lines.append(f"  Плечо: `{ps['leverage']}x`  Маржа: `${ps['margin_required']:.2f}`")
+    if ps["capped"]:
+        lines.append("  ⚠️ Размер ограничен (макс 20% депозита)")
+    lines += [
+        f"  *DCA вход:*",
+        f"    Вход 1 (40%): `${ps['dca1_usd']:.2f}`",
+        f"    Вход 2 (35%): `${ps['dca2_usd']:.2f}`",
+        f"    Вход 3 (25%): `${ps['dca3_usd']:.2f}`",
+    ]
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ICT KILLZONES — лучшее время для входа
+# ═══════════════════════════════════════════════════════════════════
+
+def get_killzone_status() -> dict:
+    """
+    ICT Killzones — временны́е окна когда институционалы наиболее активны.
+    Все в UTC+3 (Istanbul).
+
+    Asia Session:    01:00–04:00 UTC+3  (тихая зона, но часто sweep)
+    London Open:     10:00–12:00 UTC+3  (самый сильный импульс дня)
+    London Close:    18:00–19:00 UTC+3  (разворот или продолжение)
+    NY Open:         16:00–18:00 UTC+3  (второй по силе импульс)
+    NY Close:        23:00–00:00 UTC+3  (часто манипуляция перед закрытием)
+    """
+    now = datetime.now(TZ)
+    h   = now.hour
+    m   = now.minute
+    hm  = h * 60 + m  # минуты с полуночи
+
+    zones = [
+        {"name": "🌏 Asia Session",   "start": 1*60,  "end": 4*60,  "quality": "B",
+         "desc": "Sweep ликвидности, тихие движения"},
+        {"name": "🇬🇧 London Open",   "start": 10*60, "end": 12*60, "quality": "A+",
+         "desc": "Сильнейший импульс дня — лучшее время"},
+        {"name": "🇺🇸 NY Open",       "start": 16*60, "end": 18*60, "quality": "A",
+         "desc": "Второй по силе импульс, много объёма"},
+        {"name": "🔄 London Close",   "start": 18*60, "end": 19*60, "quality": "B",
+         "desc": "Разворот или продолжение лондонского движения"},
+        {"name": "🌙 NY Close",       "start": 23*60, "end": 24*60, "quality": "C",
+         "desc": "Манипуляция перед закрытием, осторожно"},
+    ]
+
+    active = None
+    for z in zones:
+        if z["start"] <= hm < z["end"]:
+            active = z
+            remaining = z["end"] - hm
+            active["remaining_min"] = remaining
+            break
+
+    # Следующая зона
+    next_zone = None
+    future = [(z, z["start"] - hm if z["start"] > hm else z["start"] + 24*60 - hm)
+              for z in zones]
+    future.sort(key=lambda x: x[1])
+    if future:
+        next_zone = future[0][0].copy()
+        next_zone["in_min"] = future[0][1]
+
+    # Оценка текущего момента
+    if active:
+        is_good = active["quality"] in ("A+", "A")
+    else:
+        is_good = False
+        # Dead zone — между сессиями
+        active = {"name": "💤 Dead Zone", "quality": "D",
+                  "desc": "Между сессиями — избегать входов", "remaining_min": 0}
+
+    return {
+        "active":    active,
+        "next":      next_zone,
+        "is_good":   is_good,
+        "hour":      h,
+        "all_zones": zones,
+    }
+
+
+def killzone_label() -> str:
+    """Короткая строка для вставки в сигнал"""
+    kz = get_killzone_status()
+    active = kz["active"]
+    nxt    = kz["next"]
+    q      = active["quality"]
+    q_e    = {"A+": "🔥", "A": "✅", "B": "🟡", "C": "⚠️", "D": "❌"}.get(q, "")
+    rem    = active.get("remaining_min", 0)
+
+    line = f"{q_e} {active['name']}  (качество входа: {q})"
+    if rem:
+        line += f"  ещё {rem} мин"
+    if nxt:
+        line += f"\n⏰ Следующая зона: {nxt['name']} через {nxt['in_min']} мин"
+    return line
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ФИЛЬТР КАЧЕСТВА СИГНАЛОВ — только A / A+
+# ═══════════════════════════════════════════════════════════════════
+
+def signal_quality_filter(a: dict, pa: dict, coin: dict) -> dict:
+    """
+    Жёсткий фильтр: сигнал проходит только если 3+ факторов совпали.
+    Возвращает {"pass": bool, "quality": str, "reasons": list, "score": int}
+    
+    Профессиональный трейдер входит только при A/A+ качестве.
+    """
+    reasons  = []
+    warnings = []
+    score    = 0
+    is_long  = a.get("is_long", True)
+    rsi_4h   = a.get("rsi_4h", 50)
+    rocket   = a.get("rocket", 0)
+
+    # ── Обязательные условия (хотя бы 1 из 2) ──
+    has_structure = False
+
+    # 1. Trend alignment (4H тренд совпадает с направлением)
+    trend_4h = a.get("trend_4h", "neutral")
+    if (is_long and trend_4h == "bullish") or (not is_long and trend_4h == "bearish"):
+        score += 15; reasons.append("✅ Тренд 4H совпадает с направлением")
+        has_structure = True
+    elif trend_4h == "neutral":
+        score += 5; reasons.append("🟡 Тренд нейтральный — осторожно")
+    else:
+        warnings.append("⚠️ Контртрендовый вход — повышенный риск")
+
+    # 2. Supertrend подтверждение
+    st_bull = a.get("supertrend_bull")
+    if (is_long and st_bull is True) or (not is_long and st_bull is False):
+        score += 12; reasons.append("✅ Supertrend подтверждает направление")
+        has_structure = True
+
+    # 3. RSI в нужной зоне
+    if is_long and rsi_4h < 35:
+        score += 15; reasons.append(f"✅ RSI перепродан ({rsi_4h:.0f}) — зона покупки")
+    elif is_long and rsi_4h < 50:
+        score += 8;  reasons.append(f"🟡 RSI нейтральный ({rsi_4h:.0f})")
+    elif is_long and rsi_4h > 70:
+        score -= 10; warnings.append(f"⚠️ RSI перекуплен ({rsi_4h:.0f}) — не входить в лонг")
+    if not is_long and rsi_4h > 65:
+        score += 15; reasons.append(f"✅ RSI перекуплен ({rsi_4h:.0f}) — зона продажи")
+    elif not is_long and rsi_4h < 30:
+        score -= 10; warnings.append(f"⚠️ RSI перепродан ({rsi_4h:.0f}) — не входить в шорт")
+
+    # 4. MACD подтверждение
+    if (is_long and a.get("macd_bullish")) or (not is_long and a.get("macd_bearish")):
+        score += 10; reasons.append("✅ MACD подтверждает")
+
+    # 5. EMA200 — ключевой фильтр
+    if is_long and a.get("above_ema200"):
+        score += 12; reasons.append("✅ Выше EMA200 — бычья структура")
+    elif is_long and not a.get("above_ema200"):
+        score += 3;  reasons.append("🟡 Ниже EMA200 — контртренд к дневному")
+    if not is_long and not a.get("above_ema200"):
+        score += 12; reasons.append("✅ Ниже EMA200 — медвежья структура")
+
+    # 6. PRO Analysis факторы
+    if pa.get("ok"):
+        pro_score = pa.get("pro_score", 0)
+        if pro_score >= 70:
+            score += 15; reasons.append(f"✅ PRO Score {pro_score}/100 — высокое качество")
+        elif pro_score >= 50:
+            score += 8;  reasons.append(f"🟡 PRO Score {pro_score}/100 — умеренное качество")
+        else:
+            score -= 5;  warnings.append(f"⚠️ PRO Score {pro_score}/100 — слабый сетап")
+
+        # ICT факторы из pro_analysis
+        if pa.get("ict_ob_bull") and is_long:
+            score += 15; reasons.append("✅ ICT Bullish Order Block")
+        if pa.get("ict_ob_bear") and not is_long:
+            score += 15; reasons.append("✅ ICT Bearish Order Block")
+        if pa.get("ict_liquidity_sweep"):
+            score += 12; reasons.append("✅ Liquidity Sweep — манипуляция завершена")
+        if pa.get("smc_choch"):
+            score += 10; reasons.append(f"✅ CHoCH {pa['smc_choch']} — смена характера")
+        if (pa.get("ict_fvg_bull") and is_long) or (pa.get("ict_fvg_bear") and not is_long):
+            score += 8; reasons.append("✅ FVG — дисбаланс заполняется")
+
+        # Wyckoff подтверждение
+        wy = pa.get("wyckoff_phase")
+        if (is_long and wy == "Accumulation") or (is_long and wy == "Markup"):
+            score += 10; reasons.append(f"✅ Wyckoff: {wy}")
+        elif (not is_long and wy == "Distribution") or (not is_long and wy == "Markdown"):
+            score += 10; reasons.append(f"✅ Wyckoff: {wy}")
+
+        # TF confluence
+        conf = pa.get("tf_confluence", 0)
+        if (is_long and conf >= 3) or (not is_long and conf <= -3):
+            score += 12; reasons.append(f"✅ {abs(conf)}/4 таймфреймов согласны")
+        elif abs(conf) >= 2:
+            score += 5
+
+        # Funding rate
+        fr = pa.get("funding_rate")
+        if fr is not None:
+            if is_long and fr < -0.03:
+                score += 8; reasons.append(f"✅ Funding отрицательный ({fr:.4f}%) — шорты платят")
+            elif not is_long and fr > 0.06:
+                score += 8; reasons.append(f"✅ Funding высокий ({fr:.4f}%) — лонги перегреты")
+
+    # 7. Rocket Score
+    if rocket >= 70:
+        score += 10; reasons.append(f"✅ Rocket Score {rocket}/100")
+    elif rocket >= 55:
+        score += 5
+    else:
+        warnings.append(f"⚠️ Rocket Score низкий ({rocket}/100)")
+
+    # 8. Подозрительный объём
+    if a.get("suspicious"):
+        score -= 25; warnings.append("❌ Аномальный объём — возможная манипуляция")
+
+    # ── BTC Корреляция ──
+    btc = get_btc_market_context()
+    if btc["ok"]:
+        if is_long and btc["signal"] == "bull":
+            score += 12; reasons.append("✅ BTC бычий — попутный ветер для лонгов")
+        elif is_long and btc["signal"] == "bear":
+            score -= 20; warnings.append("🚨 BTC медвежий — лонг ПРОТИВ рынка, высокий риск")
+        elif is_long and "neutral_bear" in btc["signal"]:
+            score -= 8;  warnings.append("⚠️ BTC слабый — снижай размер позиции")
+        elif not is_long and btc["signal"] == "bear":
+            score += 12; reasons.append("✅ BTC медвежий — попутный ветер для шортов")
+        elif not is_long and btc["signal"] == "bull":
+            score -= 15; warnings.append("⚠️ BTC бычий — шорт против тренда")
+        # Резкое падение BTC
+        if not btc["long_ok"] and is_long:
+            score -= 25; warnings.append(f"🚨 BTC резко падает ({btc['btc_ch1h']:.1f}% за 1ч) — НЕ ВХОДИТЬ")
+
+    # ── Killzone бонус/штраф ──
+    kz = get_killzone_status()
+    if kz["is_good"]:
+        score += 8; reasons.append(f"✅ {kz['active']['name']} — активная сессия")
+    elif kz["active"]["quality"] == "D":
+        score -= 5; warnings.append(f"⚠️ Dead Zone — плохое время для входа")
+
+    # ── Итог ──
+    score = max(0, min(100, score))
+
+    if score >= 75 and has_structure:    quality = "A+ 🔥"
+    elif score >= 55 and has_structure:  quality = "A ✅"
+    elif score >= 40:                    quality = "B 🟡"
+    else:                                quality = "C ⚠️"
+
+    passes = quality in ("A+ 🔥", "A ✅")
+
+    return {
+        "pass":     passes,
+        "quality":  quality,
+        "score":    score,
+        "reasons":  reasons,
+        "warnings": warnings,
+        "kz":       kz,
+    }
+
+
+
+def get_tokenomics(symbol: str) -> dict:
+    """
+    Возвращает данные о токеномике монеты.
+    Включает: анлоки, риск, рекомендацию.
+    """
+    sym = symbol.upper()
+    unlock = UNLOCK_SCHEDULE.get(sym)
+
+    result = {
+        "has_data":    False,
+        "risk":        "unknown",
+        "risk_label":  "⚪ Нет данных",
+        "note":        "",
+        "unlock_pct":  0,
+        "recommendation": "",
+        "spot_ok":     True,
+    }
+
+    if not unlock:
+        return result
+
+    risk = unlock["risk"]
+    pct  = unlock.get("unlock_pct", 0)
+    note = unlock.get("note", "")
+    date = unlock.get("unlock_date", "")
+
+    risk_labels = {
+        "high":   "🔴 Высокий риск анлоков",
+        "medium": "🟡 Умеренный риск анлоков",
+        "low":    "🟢 Низкий риск анлоков",
+    }
+
+    rec = ""
+    spot_ok = True
+    if risk == "high":
+        rec = f"⚠️ Спот нежелателен — {pct}% токенов разблокируется → давление продаж"
+        spot_ok = False
+    elif risk == "medium":
+        rec = f"🟡 Спот с осторожностью — анлоки {pct}%, держи позицию до {date}"
+    else:
+        rec = f"✅ Токеномика норм — анлоки {pct}% не критичны"
+
+    result.update({
+        "has_data":    True,
+        "risk":        risk,
+        "risk_label":  risk_labels.get(risk, "⚪"),
+        "note":        note,
+        "unlock_pct":  pct,
+        "unlock_date": date,
+        "recommendation": rec,
+        "spot_ok":     spot_ok,
+    })
+    return result
+
+
 async def check_alerts(bot: Bot):
     """Каждые 5 мин: pump/dump + zone + supertrend + watchlist + spot + entry alerts"""
     chat_ids = load_chat_ids() | user_chat_ids
@@ -3378,7 +4815,7 @@ async def check_alerts(bot: Bot):
         await check_watchlist(bot, chat_ids, coins)
         await check_supertrend_signals(bot, chat_ids, coins)
         await check_spot_alerts(bot, chat_ids)
-        await check_entry_approach(bot, chat_ids)   # алерт приближения к входу
+        await check_entry_approach(bot, chat_ids)
     except Exception as e:
         log.error(f"check_alerts: {e}")
 
@@ -4332,39 +5769,146 @@ def real_full_analysis(coin: dict) -> dict:
     if rsi_4h > 80 and is_long:  rocket -= 5
     rocket = max(0, min(100, rocket))
 
-    # TP/SL из ATR
+    # ══════════════════════════════════════════════════════
+    # ПРОФЕССИОНАЛЬНЫЙ РАСЧЁТ TP/SL — по реальным уровням
+    # Логика топ-трейдера:
+    #   SL — ЗА Order Block / swing low/high, не ATR×1.5
+    #   TP1 — ближайший Supply/Demand уровень
+    #   TP2 — следующий значимый уровень (50% FVG / предыдущий High)
+    #   TP3 — структурная цель (100% движения / EMA200 / ATH зоны)
+    # ══════════════════════════════════════════════════════
+    import math
+
     def smart_round(val):
         if val == 0: return 0
-        import math
         magnitude = math.floor(math.log10(abs(val))) if val > 0 else 0
         precision = max(8, -magnitude + 3)
         return round(val, precision)
 
-    if atr > 0:
-        tp_atr = atr * 2.0
-        sl_atr = atr * 1.5
-    else:
-        tp_atr = price * 0.04
-        sl_atr = price * 0.03
+    # ── Собираем реальные уровни из 4H свечей ──
+    try:
+        c4h_levels = get_binance_ohlc(sym, "4h", 100) or []
+        highs_4h_l = [c["high"] for c in c4h_levels]
+        lows_4h_l  = [c["low"]  for c in c4h_levels]
+
+        # Swing Highs и Lows (локальные экстремумы)
+        swing_highs = []
+        swing_lows  = []
+        for i in range(2, len(c4h_levels)-2):
+            if (c4h_levels[i]["high"] > c4h_levels[i-1]["high"] and
+                c4h_levels[i]["high"] > c4h_levels[i-2]["high"] and
+                c4h_levels[i]["high"] > c4h_levels[i+1]["high"] and
+                c4h_levels[i]["high"] > c4h_levels[i+2]["high"]):
+                swing_highs.append(c4h_levels[i]["high"])
+            if (c4h_levels[i]["low"] < c4h_levels[i-1]["low"] and
+                c4h_levels[i]["low"] < c4h_levels[i-2]["low"] and
+                c4h_levels[i]["low"] < c4h_levels[i+1]["low"] and
+                c4h_levels[i]["low"] < c4h_levels[i+2]["low"]):
+                swing_lows.append(c4h_levels[i]["low"])
+
+        # Уровни выше и ниже текущей цены
+        levels_above = sorted([h for h in swing_highs if h > price * 1.005])
+        levels_below = sorted([l for l in swing_lows  if l < price * 0.995], reverse=True)
+
+        # Ближайшие уровни
+        r1 = levels_above[0] if len(levels_above) > 0 else None
+        r2 = levels_above[1] if len(levels_above) > 1 else None
+        r3 = levels_above[2] if len(levels_above) > 2 else None
+        s1 = levels_below[0] if len(levels_below) > 0 else None
+        s2 = levels_below[1] if len(levels_below) > 1 else None
+
+    except Exception:
+        r1 = r2 = r3 = s1 = s2 = None
+        highs_4h_l = []
+        lows_4h_l  = []
+
+    # ── ATR для минимального расстояния ──
+    atr_min = atr if atr > 0 else price * 0.02
 
     if is_long:
-        tp1   = smart_round(price * 1.02  if tp_atr < price*0.001 else price + tp_atr * 0.5)
-        tp2   = smart_round(price * 1.04  if tp_atr < price*0.001 else price + tp_atr * 1.0)
-        tp3   = smart_round(price * 1.08  if tp_atr < price*0.001 else price + tp_atr * 2.0)
-        _sl_atr = price - sl_atr * 1.5
-        _sl_sup = support * 0.98 if support > 0 else price * 0.85
-        sl    = smart_round(max(_sl_atr, _sl_sup) if _sl_atr > 0 else price * 0.85)
-        swing = smart_round(support if support > 0 else price * 0.92)
-    else:
-        tp1   = smart_round(price * 0.98  if tp_atr < price*0.001 else price - tp_atr * 0.5)
-        tp2   = smart_round(price * 0.96  if tp_atr < price*0.001 else price - tp_atr * 1.0)
-        tp3   = smart_round(price * 0.92  if tp_atr < price*0.001 else price - tp_atr * 2.0)
-        _sl_atr = price + sl_atr * 1.5
-        _sl_res = resistance * 1.02 if resistance > price else price * 1.15
-        sl    = smart_round(min(_sl_atr, _sl_res) if _sl_atr > price else price * 1.15)
-        swing = smart_round(resistance if resistance > price else price * 1.08)
+        # ── SL: за ближайший Swing Low, но минимум 1×ATR ──
+        if s1 and s1 < price - atr_min * 0.5:
+            sl_raw = s1 * 0.998   # чуть ниже swing low
+        elif s2 and s2 < price - atr_min:
+            sl_raw = s2 * 0.998
+        else:
+            sl_raw = price - atr_min * 1.5
+        sl = smart_round(max(sl_raw, price * 0.80))  # не более -20%
 
-    # Гарантируем что SL не равен нулю и не равен цене
+        # ── TP1: ближайший Swing High ──
+        if r1 and r1 < price * 1.15:
+            tp1 = smart_round(r1 * 0.998)    # чуть не доходим до resistance
+        else:
+            tp1 = smart_round(price + atr_min * 1.0)
+
+        # ── TP2: второй Swing High / 1.618× движения от входа ──
+        move = price - sl_raw
+        fib_target = price + move * 1.618
+        if r2 and r2 < price * 1.30:
+            tp2 = smart_round(r2 * 0.998)
+        else:
+            tp2 = smart_round(fib_target)
+
+        # ── TP3: структурная цель (EMA200 / 2.618 Fib / max 4H) ──
+        fib_target3 = price + move * 2.618
+        if r3 and r3 < price * 1.50:
+            tp3 = smart_round(r3 * 0.998)
+        elif ema200_v > price * 1.05:
+            tp3 = smart_round(ema200_v * 0.998)
+        else:
+            tp3 = smart_round(fib_target3)
+
+        swing = smart_round(s1 if s1 else price * 0.92)
+
+    else:  # SHORT
+        # ── SL: за ближайший Swing High ──
+        if r1 and r1 > price + atr_min * 0.5:
+            sl_raw = r1 * 1.002
+        elif r2 and r2 > price + atr_min:
+            sl_raw = r2 * 1.002
+        else:
+            sl_raw = price + atr_min * 1.5
+        sl = smart_round(min(sl_raw, price * 1.20))  # не более +20%
+
+        # ── TP1: ближайший Swing Low ──
+        if s1 and s1 > price * 0.85:
+            tp1 = smart_round(s1 * 1.002)
+        else:
+            tp1 = smart_round(price - atr_min * 1.0)
+
+        # ── TP2: второй Swing Low / 1.618 Fib ──
+        move = sl_raw - price
+        fib_target = price - move * 1.618
+        if s2 and s2 > price * 0.70:
+            tp2 = smart_round(s2 * 1.002)
+        else:
+            tp2 = smart_round(fib_target)
+
+        # ── TP3: 2.618 Fib / EMA200 снизу ──
+        fib_target3 = price - move * 2.618
+        if s2 and s2 * 0.85 > price * 0.50:
+            tp3 = smart_round(s2 * 0.85)
+        elif ema200_v < price * 0.95 and ema200_v > 0:
+            tp3 = smart_round(ema200_v * 1.002)
+        else:
+            tp3 = smart_round(fib_target3)
+
+        swing = smart_round(r1 if r1 else price * 1.08)
+
+    # ── Финальные проверки ──
+    if is_long:
+        # tp1 < tp2 < tp3 и все выше цены
+        tp1 = smart_round(max(tp1, price * 1.01))
+        tp2 = smart_round(max(tp2, tp1 * 1.01))
+        tp3 = smart_round(max(tp3, tp2 * 1.01))
+        sl  = smart_round(min(sl,  price * 0.99))
+    else:
+        # tp1 > tp2 > tp3 и все ниже цены
+        tp1 = smart_round(min(tp1, price * 0.99))
+        tp2 = smart_round(min(tp2, tp1 * 0.99))
+        tp3 = smart_round(min(tp3, tp2 * 0.99))
+        sl  = smart_round(max(sl,  price * 1.01))
+
     if sl <= 0 or sl == price:
         sl = smart_round(price * 0.85 if is_long else price * 1.15)
     if swing <= 0 or swing == price:
@@ -4372,7 +5916,11 @@ def real_full_analysis(coin: dict) -> dict:
 
     rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 1.5
 
-    # Labels
+    # Метки источников уровней для отображения
+    sl_source  = "Swing Low" if is_long else "Swing High"
+    tp1_source = f"R{1 if is_long else 'S'}1 · Swing уровень"
+    tp2_source = "Fib 1.618" if not r2 else "R2 · Swing уровень"
+    tp3_source = "Fib 2.618" if not r3 else "R3 · Структурная цель"
     if rocket >= 80:   rocket_label = "🚀🔥 ROCKET"
     elif rocket >= 70: rocket_label = "🚀 СИЛЬНЫЙ"
     elif rocket >= 60: rocket_label = "✅ ХОРОШИЙ"
@@ -4403,6 +5951,8 @@ def real_full_analysis(coin: dict) -> dict:
         "rocket": rocket, "rocket_label": rocket_label,
         "price": price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "swing": swing, "rr": rr,
+        "sl_source": sl_source, "tp1_source": tp1_source,
+        "tp2_source": tp2_source, "tp3_source": tp3_source,
         "rsi_4h": rsi_4h, "rsi_1h": rsi_1h, "rsi_1d": rsi_1d,
         "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d, "ch30d": ch30d, "ch90d": ch90d,
         "vol": vol, "mcap": mcap, "vol_ratio": vol_ratio, "rank": rank,
@@ -4940,12 +6490,16 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Реальный ТА из Binance свечей для топ кандидатов
     scored = []
-    for coin in pre[:150]:  # анализируем больше монет
+    for coin in pre[:150]:
         try:
-            a = real_full_analysis(coin)
-            # Снизили порог с 50 до 40 чтобы находить монеты в боковике/медвежке
-            if a["is_long"] and not a.get("suspicious") and a["rocket"] >= 40:
-                scored.append((coin, a))
+            a  = real_full_analysis(coin)
+            pa = pro_analysis(coin["symbol"], coin)
+            sqf = signal_quality_filter(a, pa, coin)
+            # Принимаем A/A+ или если rocket высокий
+            if a["is_long"] and not a.get("suspicious"):
+                if sqf["pass"] or a["rocket"] >= 65:
+                    a["_sqf"] = sqf  # сохраняем для вывода
+                    scored.append((coin, a))
         except: pass
 
     # Сортируем по Rocket Score (ракеты автоматически наверху)
@@ -4981,25 +6535,38 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # Сводный список с ссылками
+    btc_ctx = get_btc_market_context()
+    btc_warn = ""
+    if btc_ctx["ok"] and not btc_ctx["long_ok"]:
+        btc_warn = f"\n🚨 *{btc_ctx['warning']}*\n"
+
     list_lines = [
         "🟢 *BEST TRADE — ТОП ЛОНГ*",
         f"🕐 {now_utc3()}",
-        f"📡 Аналитика BEST TRADE",
+        f"₿ {btc_ctx.get('label', '')}",
+    ]
+    if btc_warn:
+        list_lines.append(btc_warn)
+    list_lines += [
         "",
         "📋 *Лучшие лонг-сетапы прямо сейчас:*",
+        f"🕐 Killzone: {killzone_label().split(chr(10))[0]}",
         "",
     ]
     for i, (c, a) in enumerate(top_long, 1):
-        sym   = c["symbol"]
-        tv    = tv_link(sym)
+        sym    = c["symbol"]
+        tv     = tv_link(sym)
+        sqf    = a.get("_sqf", {})
+        q_lbl  = sqf.get("quality", "—")
+        tkn    = get_tokenomics(sym)
+        tkn_e  = "" if not tkn["has_data"] else ("🔴" if tkn["risk"]=="high" else ("🟡" if tkn["risk"]=="medium" else "🟢"))
         rocket_lbl = "🚀🔥" if a["rocket"] >= 80 else ("🚀" if a["rocket"] >= 68 else "✅")
         rsi_t  = "перепродан 🟢" if a["rsi_4h"] < 30 else ("нейтр." if a["rsi_4h"] < 60 else "перекуплен ⚠️")
         trend_t = "↑ бычий" if a.get("trend_4h") == "bullish" else ("↓ медвежий" if a.get("trend_4h") == "bearish" else "→ нейтр.")
-        ema_t  = "выше EMA200 ✅" if a.get("above_ema200") else "ниже EMA200"
         list_lines += [
-            f"🟢 {i}. [{sym}USDT]({tv})  {rocket_lbl}",
-            f"   💰 `{fp(a['price'])}`  ·  Score `{a['rocket']}`  ·  RSI `{a['rsi_4h']:.0f}` {rsi_t}",
-            f"   📈 Тренд: {trend_t}  ·  {ema_t}",
+            f"🟢 {i}. [{sym}USDT]({tv})  {rocket_lbl}  {tkn_e}",
+            f"   💰 `{fp(a['price'])}`  Score `{a['rocket']}`  Вход: *{q_lbl}*",
+            f"   RSI `{a['rsi_4h']:.0f}` {rsi_t}  ·  {trend_t}",
             "",
         ]
     list_lines += ["📊 Подробные сетапы ниже ↓"]
@@ -5260,6 +6827,49 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     vol_s  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"${vol24/1e3:.0f}K"
     mcap_s = fm(mcap) if mcap>0 else "—"
 
+    # ── ВСЕ 6 УРОВНЕЙ ЭКСПЕРТНОГО АНАЛИЗА ──
+    kz      = get_killzone_status()
+    sqf     = signal_quality_filter(a, pa, coin)
+    tkn     = get_tokenomics(symbol)
+    btc_ctx = get_btc_market_context()
+    news    = get_coin_news(symbol)
+    bt      = backtest_signal(symbol, is_long, lookback_candles=60)
+
+    # Уровень 1 — Confluence Matrix
+    cm  = confluence_matrix(a, pa, coin, btc_ctx, kz)
+    # Уровень 2 — Volume Profile
+    vp  = get_volume_profile(symbol)
+    # Уровень 3 — Order Book
+    ob  = get_order_book_analysis(symbol)
+    # Уровень 4 — Macro (DXY/ETH-BTC)
+    mac = get_macro_context()
+    # Уровень 5 — Сезонность
+    sea = get_seasonality()
+    # Уровень 6 — On-chain
+    onc = get_onchain_data(symbol)
+
+    ps  = calc_position_size(
+        price    = price,
+        sl       = a["sl"],
+        deposit  = 1000.0,
+        risk_pct = 1.0,
+        leverage = 3.0 if not (ch90d < -40) else 1.0,
+        quality  = sqf["quality"],
+    )
+
+    kz_e   = {"A+":"🔥","A":"✅","B":"🟡","C":"⚠️","D":"❌"}.get(kz["active"]["quality"],"")
+    sqf_e  = "🔥" if "A+" in sqf["quality"] else ("✅" if "A " in sqf["quality"] else "🟡")
+
+    # ── CONFLUENCE MATRIX — итоговая оценка ──
+    cm_bar = "▓" * (cm["hits"]) + "░" * (15 - cm["hits"])
+    parts_header_extra = [
+        "",
+        f"🎯 *CONFLUENCE MATRIX: {cm['grade']}*  ({cm['hits']}/15 факторов)",
+        f"`{cm_bar}`",
+    ]
+    if cm["factors"]:
+        parts_header_extra.append("  " + "  ·  ".join(cm["factors"][:6]))
+
     # ── ФОРМАТ ПРОФЕССИОНАЛЬНОГО ОТЧЁТА ──
     parts = [
         f"*{symbol}USDT* {side_e} *{side_t}*",
@@ -5267,6 +6877,9 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
         "",
         f"💰 *{fp(price)}*   Vol {vol_s}   MCap {mcap_s}",
     ]
+
+    # Confluence Matrix сразу после заголовка
+    parts += parts_header_extra
 
     if ath > 0:
         parts.append(f"🔺 ATH `{fp(ath)}`  потенциал `~x{x_ath:.1f}` (+{to_ath:.0f}%)")
@@ -5352,16 +6965,133 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
         for w in warnings[:3]:
             parts.append(w)
 
-    # TP/SL
+    # Volume Profile (Уровень 2)
+    if vp["ok"]:
+        parts += [
+            "",
+            f"📊 *Volume Profile:*",
+            f"  POC: `{fp(vp['poc'])}`  VAH: `{fp(vp['vah'])}`  VAL: `{fp(vp['val'])}`",
+            f"  {vp['label']}",
+        ]
+
+    # Order Book (Уровень 3)
+    if ob["ok"]:
+        parts += ["", f"📖 *Стакан:* {ob['label']}"]
+        if ob["bid_wall"]:
+            parts.append(f"  🟢 Стена покупок: `{fp(ob['bid_wall'])}`")
+        if ob["ask_wall"]:
+            parts.append(f"  🔴 Стена продаж: `{fp(ob['ask_wall'])}`")
+
+    # Macro / ETH-BTC (Уровень 4)
+    if mac["ok"]:
+        parts += ["", f"🌍 *Макро:*"]
+        if mac["altseason_label"]:
+            parts.append(f"  {mac['altseason_label']}")
+        if mac["macro_label"]:
+            parts.append(f"  {mac['macro_label']}")
+
+    # Сезонность (Уровень 5)
+    if sea["ok"]:
+        parts += [
+            "",
+            f"📅 *Сезонность:* {sea['label']}",
+            f"  {sea['month_note']}",
+            f"  🔄 Халвинг цикл: `{sea['halving_phase']}`  "
+            f"({sea['cycle_pct']:.0f}% цикла)  "
+            f"До следующего: `{sea['days_to_next_halving']}д`",
+        ]
+
+    # On-chain (Уровень 6)
+    if onc["ok"]:
+        parts += [
+            "",
+            f"🐋 *On-chain:* {onc['flow_label']}",
+            f"  {onc['whale_label']}",
+        ]
+
+    # Killzone
+    kz_active = kz["active"]
+    kz_nxt    = kz.get("next")
+    parts.append(
+        f"{kz_e} *Killzone:* {kz_active['name']}  качество `{kz_active['quality']}`"
+        + (f"  ещё {kz_active.get('remaining_min',0)} мин" if kz_active.get('remaining_min') else "")
+    )
+    if kz_nxt:
+        parts.append(f"   ⏰ Следующая: {kz_nxt['name']} через {kz_nxt.get('in_min',0)} мин")
+
+    # Качество сигнала
     parts += [
         "",
+        f"{sqf_e} *Качество входа: {sqf['quality']}*  (Score: {sqf['score']}/100)",
+    ]
+    for r_ in sqf["reasons"][:4]:
+        parts.append(f"  {r_}")
+    for w_ in sqf["warnings"][:2]:
+        parts.append(f"  {w_}")
+
+    # Новости / катализаторы
+    if news["ok"]:
+        parts += ["", f"📰 *Новости:* {news['label']}"]
+        if news["catalyst"]:
+            cat = news["catalyst"]
+            e   = "🟢" if cat["sentiment"] == "positive" else "🔴"
+            parts.append(f"  {e} {cat['title'][:80]} — _{cat['age']}_")
+        for n in news["news"][1:3]:
+            e = "🟢" if n["sentiment"]=="positive" else ("🔴" if n["sentiment"]=="negative" else "⚪")
+            parts.append(f"  {e} {n['title'][:70]}")
+
+    # Backtesting
+    if bt["ok"]:
+        bt_e = "🔥" if bt["winrate"] >= 60 else ("✅" if bt["winrate"] >= 50 else ("🟡" if bt["winrate"] >= 40 else "🔴"))
+        parts += [
+            "",
+            f"📊 *Backtesting (последние 60 свечей 4H):*",
+            f"  {bt_e} Winrate: `{bt['winrate']:.0f}%`  "
+            f"Сделок: `{bt['total']}`  "
+            f"Expectancy: `{bt['expectancy']:+.2f}R`",
+            f"  Лучшая серия: `{bt['best_streak']}` побед  "
+            f"Худшая: `{bt['worst_streak']}` поражений",
+            f"  {bt['label']}",
+        ]
+
+    # Токеномика
+    if tkn["has_data"]:
+        parts += ["", f"🔑 *Токеномика:* {tkn['risk_label']}"]
+        parts.append(f"  {tkn['note']}")
+        parts.append(f"  {tkn['recommendation']}")
+        if not tkn["spot_ok"]:
+            parts.append("  ❌ *Для спота — не рекомендуется*")
+
+    # BTC Корреляция
+    if btc_ctx["ok"]:
+        btc_ok = btc_ctx["long_ok"] if is_long else btc_ctx["short_ok"]
+        btc_e  = "✅" if btc_ok else "🚨"
+        parts += [
+            "",
+            f"₿ *BTC контекст:* {btc_ctx['label']}",
+            f"  BTC `${btc_ctx['btc_price']:,.0f}`  "
+            f"1H`{fc(btc_ctx['btc_ch1h'])}`  24H`{fc(btc_ctx['btc_ch24h'])}`  "
+            f"RSI4H`{btc_ctx['rsi_4h']:.0f}`",
+            f"  {btc_e} {'Входить можно' if btc_ok else 'НЕ ВХОДИТЬ — BTC против'}"
+        ]
+        if btc_ctx["warning"]:
+            parts.append(f"  {btc_ctx['warning']}")
+
+    # Размер позиции
+    if ps.get("ok"):
+        parts += ["", format_position_size(ps, is_long)]
+
+    parts += [""]  # разделитель перед TP/SL
+
+    # TP/SL
+    parts += [
         f"💵 *Точка входа:* `{fp(price)}`",
         "",
-        f"🎯 *TP1:* `{fp(a['tp1'])}` *({pct(a['tp1'])})*",
-        f"🎯 *TP2:* `{fp(a['tp2'])}` *({pct(a['tp2'])})*",
-        f"🎯 *TP3:* `{fp(a['tp3'])}` *({pct(a['tp3'])})*",
+        f"🎯 *TP1:* `{fp(a['tp1'])}` *({pct(a['tp1'])})* _{a.get('tp1_source','')}_",
+        f"🎯 *TP2:* `{fp(a['tp2'])}` *({pct(a['tp2'])})* _{a.get('tp2_source','')}_",
+        f"🎯 *TP3:* `{fp(a['tp3'])}` *({pct(a['tp3'])})* _{a.get('tp3_source','')}_",
         "",
-        f"🔴 *SL:* `{fp(a['sl'])}`   R:R `1:{a['rr']:.1f}`",
+        f"🔴 *SL:* `{fp(a['sl'])}` _{a.get('sl_source','')}_ · R:R `1:{a['rr']:.1f}`",
     ]
 
     # Спот DCA зоны
