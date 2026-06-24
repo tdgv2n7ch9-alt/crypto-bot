@@ -2206,11 +2206,19 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_top_spot(FakeUpdate(), ctx)
 
     elif data == "top_long":
-        await q.edit_message_text("🟢 Загружаю ТОП ЛОНГ...", parse_mode="Markdown")
-        class FakeUpdate:
+        try: await q.message.delete()
+        except: pass
+        msg_sent = await ctx.bot.send_message(q.message.chat_id, "🟢 Ищу лучшие лонг-сетапы... ~40 сек")
+        class FakeMsgLong:
+            chat_id = q.message.chat_id
+            async def reply_text(self, text, **kw):
+                return await msg_sent.edit_text(text, **kw)
+            async def edit_text(self, text, **kw):
+                return await msg_sent.edit_text(text, **kw)
+        class FakeUpdateLong:
             effective_chat = q.message.chat
-            message        = q.message
-        await cmd_top_long(FakeUpdate(), ctx)
+            message = FakeMsgLong()
+        await cmd_top_long(FakeUpdateLong(), ctx)
 
     elif data == "top_short":
         await q.edit_message_text("🔴 Загружаю ТОП ШОРТ...", parse_mode="Markdown")
