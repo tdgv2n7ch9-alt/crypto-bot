@@ -1667,53 +1667,21 @@ async def check_pump_dump(bot, chat_ids, coins):
         if len(price_cache[sym]) > 12:  # храним последний час
             price_cache[sym].pop(0)
 
-        # Pump: +5% за 1ч
+        # Pump: +5% за 1ч — только логируем, не спамим в канал
         if ch1h >= 5:
             last_alert = pump_alerted.get(sym, 0)
-            if now_ts - last_alert > 3600:  # не чаще раза в час
+            if now_ts - last_alert > 3600:
                 pump_alerted[sym] = now_ts
-                slug = coin.get("slug", sym.lower())
-                text = (f"🚀 *PUMP DETECTED!*\n"
-                        f"🕐 {now_utc3()}\n\n"
-                        f"*{sym}USDT*  +{ch1h:.2f}% за 1ч\n"
-                        f"💰 Цена: `{fp(price)}`\n"
-                        f"⚠️ Не гонись за памп-ом — жди отката!\n\n"
-                        f"#{sym}USDT")
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
-                    InlineKeyboardButton("CMC", url=cmc_link(slug)),
-                ]])
-                for cid in chat_ids:
-                    try:
-                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
-                    except Exception as e:
-                        log.error(f"Pump alert {cid}: {e}")
                 add_to_game(sym, "pump", price)
-                log.info(f"PUMP alert: {sym} +{ch1h:.2f}%")
+                log.info(f"PUMP detected (silent): {sym} +{ch1h:.2f}%")
 
-        # Dump: -5% за 1ч
+        # Dump: -5% за 1ч — только логируем, не спамим в канал
         elif ch1h <= -5:
             last_alert = pump_alerted.get(f"dump_{sym}", 0)
             if now_ts - last_alert > 3600:
                 pump_alerted[f"dump_{sym}"] = now_ts
-                slug = coin.get("slug", sym.lower())
-                text = (f"💥 *DUMP DETECTED!*\n"
-                        f"🕐 {now_utc3()}\n\n"
-                        f"*{sym}USDT*  {ch1h:.2f}% за 1ч\n"
-                        f"💰 Цена: `{fp(price)}`\n"
-                        f"⚠️ Возможна зона набора лонга!\n\n"
-                        f"#{sym}USDT")
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📈 TradingView", url=tv_link(sym)),
-                    InlineKeyboardButton("CMC", url=cmc_link(slug)),
-                ]])
-                for cid in chat_ids:
-                    try:
-                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
-                    except Exception as e:
-                        log.error(f"Dump alert {cid}: {e}")
                 add_to_game(sym, "dump", price)
-                log.info(f"DUMP alert: {sym} {ch1h:.2f}%")
+                log.info(f"DUMP detected (silent): {sym} {ch1h:.2f}%")
 
 # ═══════════════════════════════════════════
 # АЛЕРТ ВХОДА В ЗОНУ
@@ -1777,6 +1745,7 @@ def main_kb():
          InlineKeyboardButton("🔬 Полный анализ /full", callback_data="menu_full")],
         [InlineKeyboardButton("🌍 Обзор рынка",         callback_data="market_overview"),
          InlineKeyboardButton("🔥 TOP Активные сделки", callback_data="top_trades")],
+        [InlineKeyboardButton("📡 Сигналы каналов",    callback_data="channel_signals")],
     ])
 
 def back_kb():
@@ -2515,6 +2484,112 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                          for i, c in enumerate(up[:15], 1)])
         await q.edit_message_text(txt, parse_mode="Markdown",
                                   reply_markup=overview_kb(), disable_web_page_preview=True)
+
+    elif data == "channel_signals":
+        await _show_channel_signals(q)
+
+# ═══════════════════════════════════════════
+# СИГНАЛЫ ИЗ ВНЕШНИХ КАНАЛОВ (Telethon reader)
+# ═══════════════════════════════════════════
+
+_READER_SIGNALS_FILE = "/tmp/reader_signals.json"
+
+async def _show_channel_signals(q):
+    """
+    Читает сигналы собранные reader.py и показывает дайджест.
+    reader.py пишет в /tmp/reader_signals.json
+    Формат: [{"channel": str, "time": str, "text": str, "symbol": str|None, ...}]
+    """
+    nav = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Обновить", callback_data="channel_signals"),
+         InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
+    ])
+
+    try:
+        if not os.path.exists(_READER_SIGNALS_FILE):
+            await q.edit_message_text(
+                "📡 *Сигналы каналов*\n\n"
+                "⏳ Нет данных от каналов.\n"
+                "Reader ещё не собрал сигналы или не запущен.\n\n"
+                "_Убедись что reader.py работает на Railway_",
+                parse_mode="Markdown", reply_markup=nav
+            )
+            return
+
+        with open(_READER_SIGNALS_FILE) as f:
+            signals = _json.load(f)
+
+        if not signals:
+            await q.edit_message_text(
+                "📡 *Сигналы каналов*\n\n📭 Сигналов пока нет",
+                parse_mode="Markdown", reply_markup=nav
+            )
+            return
+
+        # Группируем по каналу, берём последние 24ч
+        cutoff = datetime.now(TZ).timestamp() - 86400
+        recent = [s for s in signals
+                  if s.get("ts", 0) > cutoff or not s.get("ts")]
+        recent.sort(key=lambda x: x.get("ts", 0), reverse=True)
+
+        lines = [
+            "📡 *BEST TRADE — Сигналы каналов*",
+            f"🕐 {now_utc3()}",
+            f"📊 Последние 24ч: *{len(recent)} сигналов*",
+            "",
+        ]
+
+        # Группируем по каналу
+        by_channel: dict = {}
+        for s in recent:
+            ch = s.get("channel", "Неизвестный")
+            by_channel.setdefault(ch, []).append(s)
+
+        for ch_name, ch_signals in list(by_channel.items())[:10]:
+            lines.append(f"*📺 {ch_name}*")
+            for sig in ch_signals[:3]:   # макс 3 сигнала с канала
+                t   = sig.get("time", "")
+                sym = sig.get("symbol")
+                txt = sig.get("summary", sig.get("text", ""))[:200]
+
+                if sym:
+                    # Если есть монета — форматируем как сигнал
+                    entry  = sig.get("entry")
+                    tp1    = sig.get("tp1")
+                    sl     = sig.get("sl")
+                    side   = sig.get("side", "")
+                    side_e = "🟢" if side == "long" else ("🔴" if side == "short" else "💎")
+                    tv     = tv_link(sym)
+
+                    sig_line = f"  {side_e} [{sym}USDT]({tv})"
+                    if entry: sig_line += f"  вход `{fp(float(entry))}`"
+                    if tp1:   sig_line += f"  TP `{fp(float(tp1))}`"
+                    if sl:    sig_line += f"  SL `{fp(float(sl))}`"
+                    lines.append(sig_line)
+                    if t:
+                        lines.append(f"  ⏰ {t}")
+                else:
+                    # Просто текст сигнала
+                    lines.append(f"  📝 {txt}")
+                    if t:
+                        lines.append(f"  ⏰ {t}")
+            lines.append("")
+
+        lines.append("_Данные от Telethon reader · Обновляется в реальном времени_")
+
+        text = "\n".join(lines)
+        if len(text) > 4096:
+            text = text[:4090] + "..."
+
+        await q.edit_message_text(text, parse_mode="Markdown",
+                                  reply_markup=nav, disable_web_page_preview=True)
+
+    except Exception as e:
+        log.error(f"channel_signals: {e}")
+        await q.edit_message_text(
+            f"❌ Ошибка загрузки сигналов: {e}",
+            parse_mode="Markdown", reply_markup=nav
+        )
 
 # ═══════════════════════════════════════════
 # РАССЫЛКА
