@@ -7161,9 +7161,18 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _do_full_analysis(ctx.bot, update.effective_chat.id, symbol)
 
 
+async def cmd_myid(update: Update, ctx):
+    uid = update.effective_user.id
+    cid = update.effective_chat.id
+    await update.message.reply_text(
+        f"👤 *Твой User ID:* `{uid}`\n💬 *Chat ID:* `{cid}`",
+        parse_mode="Markdown"
+    )
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
     app.add_handler(CommandHandler("long",      cmd_top_long))
     app.add_handler(CommandHandler("short",     cmd_top_short))
