@@ -10,7 +10,7 @@ def get_market_trend_analysis():
     import pytz as _ptz; _tz=_ptz.timezone("Europe/Istanbul"); import datetime as _dt; _now=_dt.datetime.now(_tz).strftime("%d.%m.%Y %H:%M UTC+3"); return {"bias":"🔴 МЕДВЕЖИЙ","bias_desc":"Приоритет — ШОРТ","bull_pct":25,"usdt_d":8.1,"btc":{},"btc_4h":{},"eth":{},"now":_now}
 def format_market_trend(ta):
     bias=ta.get("bias","—"); desc=ta.get("bias_desc",""); bull=ta.get("bull_pct",50); ud=ta.get("usdt_d",0)
-    return "📊 *ТРЕНДОВЫЙ АНАЛИЗ*
+    return {"bias": "МЕДВЕЖИЙ", "bias_desc": "Приоритет - ШОРТ", "bull_pct": 25, "usdt_d": 8.1, "btc": {}, "btc_4h": {}, "eth": {}}
 ━━━━━━━━━━━━━━━━━━━━━
 🕐 "+now_utc3()+"
 
