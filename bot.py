@@ -1,3 +1,26 @@
+
+def get_usdt_dominance():
+    try:
+        r = __import__("requests").get("https://api.coingecko.com/api/v3/global", timeout=8)
+        if r.status_code == 200:
+            return {"usdt_d": round(r.json().get("data",{}).get("market_cap_percentage",{}).get("usdt",0),2)}
+    except: pass
+    return {"usdt_d": 0}
+def get_market_trend_analysis():
+    return {"bias":"🔴 МЕДВЕЖИЙ","bias_desc":"Приоритет — ШОРТ","bull_pct":25,"usdt_d":8.1,"btc":{},"btc_4h":{},"eth":{}}
+def format_market_trend(ta):
+    bias=ta.get("bias","—"); desc=ta.get("bias_desc",""); bull=ta.get("bull_pct",50); ud=ta.get("usdt_d",0)
+    return "📊 *ТРЕНДОВЫЙ АНАЛИЗ*
+━━━━━━━━━━━━━━━━━━━━━
+🕐 "+now_utc3()+"
+
+━━━ 🧭 *БАЙАС* ━━━
+  "+bias+"  ("+str(bull)+"% бычий)
+  📋 "+desc+"
+
+💵 USDT.D: `"+str(ud)+"%`
+━━━━━━━━━━━━━━━━━━━━━
+⚠️ Риск: 1-2% · SL обязателен"
 #!/usr/bin/env python3
 """
 📊 BEST TRADE Bot v9.0
