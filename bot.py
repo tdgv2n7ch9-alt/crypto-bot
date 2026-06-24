@@ -2575,21 +2575,30 @@ async def _show_channel_signals(q):
                         lines.append(f"  ⏰ {t}")
             lines.append("")
 
-        lines.append("_Данные от Telethon reader · Обновляется в реальном времени_")
+        lines.append(f"_Обновлено: {now_utc3()}_")
 
         text = "\n".join(lines)
         if len(text) > 4096:
             text = text[:4090] + "..."
 
-        await q.edit_message_text(text, parse_mode="Markdown",
-                                  reply_markup=nav, disable_web_page_preview=True)
+        try:
+            await q.edit_message_text(text, parse_mode="Markdown",
+                                      reply_markup=nav, disable_web_page_preview=True)
+        except Exception as edit_err:
+            if "not modified" in str(edit_err).lower():
+                await q.answer("✅ Данные актуальны")
+            else:
+                raise edit_err
 
     except Exception as e:
         log.error(f"channel_signals: {e}")
-        await q.edit_message_text(
-            f"❌ Ошибка загрузки сигналов: {e}",
-            parse_mode="Markdown", reply_markup=nav
-        )
+        try:
+            await q.edit_message_text(
+                f"❌ Ошибка: {str(e)[:200]}",
+                parse_mode="Markdown", reply_markup=nav
+            )
+        except:
+            await q.answer("❌ Ошибка загрузки")
 
 # ═══════════════════════════════════════════
 # РАССЫЛКА
