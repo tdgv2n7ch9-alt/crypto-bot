@@ -4351,21 +4351,26 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Фильтр кандидатов по CMC данным (быстро)
     pre = []
-    for coin in coins:   # теперь все монеты
+    for coin in coins:
         q = coin["quote"]["USDT"]
-        vol      = q.get("volume_24h",  0) or 0
-        mcap     = q.get("market_cap",  0) or 0
-        ch24h    = q.get("percent_change_24h", 0) or 0
+        vol       = q.get("volume_24h",  0) or 0
+        mcap      = q.get("market_cap",  0) or 0
+        ch24h     = q.get("percent_change_24h", 0) or 0
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        if vol >= 3_000_000 and vol_ratio < 50 and ch24h > -8:
+        # Смягчённые фильтры — работают и в медвежий рынок
+        if vol >= 1_000_000 and vol_ratio < 60 and ch24h > -20:
             pre.append(coin)
+
+    # Сортируем: сначала те что растут, потом нейтральные
+    pre.sort(key=lambda c: c["quote"]["USDT"].get("percent_change_24h", 0) or 0, reverse=True)
 
     # Реальный ТА из Binance свечей для топ кандидатов
     scored = []
-    for coin in pre[:80]:  # анализируем топ-80 кандидатов
+    for coin in pre[:150]:  # анализируем больше монет
         try:
             a = real_full_analysis(coin)
-            if a["is_long"] and not a.get("suspicious") and a["rocket"] >= 50:
+            # Снизили порог с 50 до 40 чтобы находить монеты в боковике/медвежке
+            if a["is_long"] and not a.get("suspicious") and a["rocket"] >= 40:
                 scored.append((coin, a))
         except: pass
 
@@ -4381,10 +4386,22 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ])
 
     if not top_long:
+        # Резервный вариант — берём лучшие по RSI < 40 независимо от is_long
+        fallback = []
+        for coin in pre[:50]:
+            try:
+                a = real_full_analysis(coin)
+                if not a.get("suspicious") and a["rsi_4h"] < 45:
+                    fallback.append((coin, a))
+            except: pass
+        fallback.sort(key=lambda x: x[1]["rsi_4h"])
+        top_long = fallback[:5]
+
+    if not top_long:
         await msg.edit_text(
             "😔 *Нет лонг-сетапов сейчас*\n\n"
-            "Рынок нейтральный или медвежий.\n"
-            "Попробуй ТОП ШОРТ или вернись позже.",
+            "Все монеты перекуплены или нет данных.\n"
+            "Попробуй ТОП ШОРТ или ТОП СПОТ.",
             parse_mode="Markdown", reply_markup=nav
         )
         return
