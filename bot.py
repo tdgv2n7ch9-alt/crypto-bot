@@ -7,18 +7,65 @@ def get_usdt_dominance():
     except: pass
     return {"usdt_d": 0}
 def get_market_trend_analysis():
-    import pytz as _ptz; _tz=_ptz.timezone("Europe/Istanbul"); import datetime as _dt; _now=_dt.datetime.now(_tz).strftime("%d.%m.%Y %H:%M UTC+3"); return {"bias":" ","bias_desc":"  ","bull_pct":25,"usdt_d":8.1,"btc":{},"btc_4h":{},"eth":{},"now":_now}
-def format_market_trend(ta):
-    bias=ta.get("bias",""); desc=ta.get("bias_desc",""); bull=ta.get("bull_pct",50); ud=ta.get("usdt_d",0)
-    return {"bias": "", "bias_desc": " - ", "bull_pct": 25, "usdt_d": 8.1, "btc": {}, "btc_4h": {}, "eth": {}}
+    try:
+        import requests as _r
+        btc = _r.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=5).json()
+        btc_price = float(btc.get("lastPrice", 0))
+        btc_change = float(btc.get("priceChangePercent", 0))
+        klines = _r.get("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=200", timeout=5).json()
+        closes = [float(k[4]) for k in klines]
+        ema200 = sum(closes[-200:]) / 200
+        ema50 = sum(closes[-50:]) / 50
+        gains, losses = [], []
+        for i in range(1, 15):
+            d = closes[-i] - closes[-i-1]
+            (gains if d > 0 else losses).append(abs(d))
+        avg_g = sum(gains)/14 if gains else 0.001
+        avg_l = sum(losses)/14 if losses else 0.001
+        rsi = 100 - (100 / (1 + avg_g/avg_l))
+        if btc_price > ema200 and btc_price > ema50:
+            bias = "БЫЧИЙ"
+        elif btc_price < ema200:
+            bias = "МЕДВЕЖИЙ"
+        else:
+            bias = "НЕЙТРАЛЬНЫЙ"
+        s1 = round(ema200 * 0.98, 0)
+        s2 = round(ema200 * 0.95, 0)
+        r1 = round(ema50, 0)
+        r2 = round(ema50 * 1.04, 0)
+        drop = round((126021 - btc_price) / 126021 * 100, 1)
+        return {"bias": bias, "btc_price": round(btc_price, 0), "rsi": round(rsi, 1), "ema200": round(ema200, 0), "ema50": round(ema50, 0), "usdt_d": round(btc_change, 2), "support1": s1, "support2": s2, "resist1": r1, "resist2": r2, "drop_from_ath": drop}
+    except Exception as e:
+        return {"bias": "ОШИБКА", "btc_price": 0, "rsi": 0, "ema200": 0, "ema50": 0, "usdt_d": 0, "support1": 0, "support2": 0, "resist1": 0, "resist2": 0, "drop_from_ath": 0}
 
 def format_market_trend(ta):
     bias = ta.get("bias", "-")
-    desc = ta.get("bias_desc", "")
-    bull = ta.get("bull_pct", 50)
-    ud = ta.get("usdt_d", 0)
-    return f"БАЛАНС: {bias} {str(bull)}% бычьих\nUSDT.D: {str(ud)}%"
-
+    price = ta.get("btc_price", 0)
+    rsi = ta.get("rsi", 0)
+    ema200 = ta.get("ema200", 0)
+    ema50 = ta.get("ema50", 0)
+    change = ta.get("usdt_d", 0)
+    s1 = ta.get("support1", 0)
+    s2 = ta.get("support2", 0)
+    r1 = ta.get("resist1", 0)
+    r2 = ta.get("resist2", 0)
+    drop = ta.get("drop_from_ath", 0)
+    change_str = f"+{change}%" if change > 0 else f"{change}%"
+    if rsi < 30: signal = "RSI перепродан - потенциал лонга"
+    elif rsi > 70: signal = "RSI перекуплен - потенциал шорта"
+    elif bias == "МЕДВЕЖИЙ": signal = "Закрытие выше EMA50 = сигнал лонга"
+    else: signal = "Торговать по тренду"
+    return (f"BTC АНАЛИЗ\n"
+            f"Цена: ${price:,.0f} ({change_str} 24ч)\n"
+            f"Тренд: {bias}\n"
+            f"От ATH $126,021: -{drop}%\n\n"
+            f"EMA200: ${ema200:,.0f}\n"
+            f"EMA50:  ${ema50:,.0f}\n"
+            f"RSI(14): {rsi}\n\n"
+            f"Поддержки: ${s1:,.0f} / ${s2:,.0f}\n"
+            f"Сопротивления: ${r1:,.0f} / ${r2:,.0f}\n\n"
+            f"Сигнал: {signal}\n"
+            f"Риск 1-2% депозита. SL обязателен")
 
 
 
