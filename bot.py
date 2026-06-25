@@ -8229,3 +8229,92 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+_macro_cache={}
+_macro_ts=0.0
+_opts_cache={}
+_opts_ts=0.0
+_liq_cache={}
+_liq_ts=0.0
+
+def get_macro_data():
+    import time as _t, requests as _r
+    global _macro_cache, _macro_ts
+    if _t.time()-_macro_ts<600 and _macro_cache: return _macro_cache
+    res={'ok':False,'dxy':0,'gold':0,'sp500':0,'vix':0,'dxy_ch':0,'gold_ch':0,'sp500_ch':0,'vix_ch':0,'macro_signal':'neutral','macro_score':0}
+    try:
+        sc=0
+        for tk,k in [('DX-Y.NYB','dxy'),('GC=F','gold'),('^GSPC','sp500'),('^VIX','vix')]:
+            try:
+                r=_r.get(f'https://query1.finance.yahoo.com/v8/finance/chart/{tk}?interval=1d&range=2d',headers={'User-Agent':'Mozilla/5.0'},timeout=6)
+                if r.status_code==200:
+                    cl=[c for c in r.json()['chart']['result'][0]['indicators']['quote'][0]['close'] if c]
+                    if len(cl)>=2:
+                        ch=(cl[-1]-cl[-2])/cl[-2]*100
+                        res[k]=round(cl[-1],2); res[f'{k}_ch']=round(ch,2)
+                        if k=='dxy': sc+=(-2 if ch>0.3 else (2 if ch<-0.3 else 0))
+                        elif k=='sp500': sc+=(2 if ch>0.5 else (-2 if ch<-1 else 0))
+                        elif k=='vix': sc+=(-3 if cl[-1]>30 else (2 if cl[-1]<15 else 0))
+            except: pass
+        res['ok']=True; res['macro_score']=sc
+        res['macro_signal']='bullish' if sc>=3 else ('bearish' if sc<=-3 else 'neutral')
+    except: pass
+    _macro_cache=res; _macro_ts=_t.time(); return res
+
+def get_options_data():
+    import time as _t, requests as _r
+    global _opts_cache, _opts_ts
+    if _t.time()-_opts_ts<600 and _opts_cache: return _opts_cache
+    res={'ok':False,'put_call_ratio':1.0,'iv_1m':0,'options_signal':'neutral','total_oi_calls':0,'total_oi_puts':0}
+    try:
+        r=_r.get('https://www.deribit.com/api/v2/public/get_book_summary_by_currency',params={'currency':'BTC','kind':'option'},timeout=8)
+        if r.status_code==200:
+            items=r.json().get('result',[])
+            co=sum(i.get('open_interest',0) for i in items if 'C' in i.get('instrument_name',''))
+            po=sum(i.get('open_interest',0) for i in items if 'P' in i.get('instrument_name',''))
+            if co>0:
+                pc=po/co; res.update({'put_call_ratio':round(pc,2),'total_oi_calls':round(co),'total_oi_puts':round(po),'ok':True})
+                res['options_signal']='bearish' if pc>1.3 else ('bullish' if pc<0.7 else 'neutral')
+            if items: res['iv_1m']=round(items[0].get('mark_iv',0),1)
+    except: pass
+    _opts_cache=res; _opts_ts=_t.time(); return res
+
+def get_liq_data():
+    import time as _t, requests as _r
+    global _liq_cache, _liq_ts
+    if _t.time()-_liq_ts<300 and _liq_cache: return _liq_cache
+    res={'ok':False,'liq_long':0,'liq_short':0,'liq_ratio':1.0,'liq_signal':'neutral'}
+    try:
+        r=_r.get('https://fapi.binance.com/fapi/v1/allForceOrders',params={'symbol':'BTCUSDT','limit':200},timeout=6)
+        if r.status_code==200:
+            od=r.json()
+            ll=sum(float(o.get('origQty',0))*float(o.get('price',0)) for o in od if o.get('side')=='BUY')
+            ls=sum(float(o.get('origQty',0))*float(o.get('price',0)) for o in od if o.get('side')=='SELL')
+            rt=ll/ls if ls>0 else 1.0
+            res.update({'liq_long':round(ll),'liq_short':round(ls),'liq_ratio':round(rt,2),'ok':True})
+            res['liq_signal']='bearish' if rt>2 else ('bullish' if rt<0.5 else 'neutral')
+    except: pass
+    _liq_cache=res; _liq_ts=_t.time(); return res
+
+def get_institutional_summary():
+    macro=get_macro_data(); opts=get_options_data(); liqs=get_liq_data()
+    sc=50; sig=[]; wrn=[]
+    ms=macro.get('macro_signal','neutral')
+    if ms=='bullish': sc+=15; sig.append(f"Macro bullish DXY {macro.get('dxy_ch',0):+.1f}%")
+    elif ms=='bearish': sc-=15; wrn.append(f"Macro bearish DXY {macro.get('dxy_ch',0):+.1f}%")
+    os2=opts.get('options_signal','neutral'); pc=opts.get('put_call_ratio',1.0)
+    if os2=='bullish': sc+=10; sig.append(f'Options P/C {pc:.2f} bullish')
+    elif os2=='bearish': sc-=10; wrn.append(f'Options P/C {pc:.2f} bearish')
+    ls2=liqs.get('liq_signal','neutral'); lr=liqs.get('liq_ratio',1.0)
+    if ls2=='bullish': sc+=8; sig.append(f'Short liqs R={lr:.1f}')
+    elif ls2=='bearish': sc-=8; wrn.append(f'Long liqs R={lr:.1f}')
+    vix=macro.get('vix',0)
+    if vix>30: sc-=10; wrn.append(f'VIX {vix:.0f} extreme fear')
+    elif 0<vix<15: sc+=5; sig.append(f'VIX {vix:.0f} low fear')
+    sc=max(0,min(100,sc))
+    if sc>=70: ov='BULLISH'
+    elif sc>=55: ov='MODERATE BULLISH'
+    elif sc<=30: ov='BEARISH'
+    elif sc<=45: ov='MODERATE BEARISH'
+    else: ov='NEUTRAL'
+    return {'ok':True,'score':sc,'overall':ov,'signals':sig,'warnings':wrn,'macro':macro,'options':opts,'liquidations':liqs}
