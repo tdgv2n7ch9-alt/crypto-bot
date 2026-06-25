@@ -2099,7 +2099,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]
 
         await msg.edit_text("\n".join(lines), parse_mode="Markdown",
-                            reply_markup=overview_kb(), disable_web_page_preview=True)
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить",callback_data="market_overview"),InlineKeyboardButton("🏠 Меню",callback_data="show_menu")],[InlineKeyboardButton("📈 Тренд",callback_data="trend_analysis"),InlineKeyboardButton("🏦 Инстит.",callback_data="institutional")]]),disable_web_page_preview=True)
     except Exception as e:
         log.error(f"cmd_market: {e}")
         await msg.edit_text(
@@ -2869,6 +2869,38 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await q.edit_message_text(f"\u274c Ошибка: {e}", reply_markup=back_kb())
 
+    elif data == "x100_scan":
+        await q.edit_message_text("🚀 x100 сканер...",parse_mode="Markdown")
+        try:
+            coins2=get_top500()
+            if coins2:
+                res=_scan_x100_candidates(coins2)
+                from datetime import datetime as _d2
+                SEP2="➖"*10
+                pumps=res["pumps"]; dumps=res["dumps"]
+                lns=["🚀 *BEST TRADE — x100 СКАНЕР*",f"🕐 _{now_utc3()}_",SEP2,""]
+                if pumps:
+                    lns+=["💎 *ПАМП КАНДИДАТЫ:*",""]
+                    for i,p in enumerate(pumps[:5],1):
+                        sym=p["coin"]["symbol"]; tv=f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+                        lns.append(f"*{i}. [{sym}/USDT]({tv})*  💎 `{p['score']}pts`")
+                        lns.append(f"  90д: *{p['ch90d']:.0f}%*  MCap: ${p['mcap']/1e6:.0f}M")
+                        lns.append("")
+                if dumps:
+                    lns+=[SEP2,"","⚠️ *ДАМП КАНДИДАТЫ:*",""]
+                    for i,d in enumerate(dumps[:5],1):
+                        sym=d["coin"]["symbol"]; tv=f"https://www.tradingview.com/chart/?symbol=BINANCE:{sym}USDT"
+                        lns.append(f"*{i}. [{sym}/USDT]({tv})*  🚨 `{d['score']}pts`")
+                        lns.append(f"  30д: *+{d['ch30d']:.0f}%*  MCap: ${d['mcap']/1e6:.0f}M")
+                        lns.append("")
+                lns+=[SEP2,"⚠️ _Риск: 1-2% депозита · SL обязателен_"]
+                nav_x=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить",callback_data="x100_scan"),InlineKeyboardButton("🏠 Меню",callback_data="show_menu")],[InlineKeyboardButton("🟢 ТОП ЛОНГ",callback_data="top_long"),InlineKeyboardButton("🔴 ТОП ШОРТ",callback_data="top_short")]])
+                await q.edit_message_text("\n".join(lns),parse_mode="Markdown",reply_markup=nav_x,disable_web_page_preview=True)
+            else:
+                await q.edit_message_text("❌ Нет данных",reply_markup=back_kb())
+        except Exception as e:
+            await q.edit_message_text(f"❌ {e}",reply_markup=back_kb())
+
     elif data == "whale_status":
         await q.edit_message_text("\U0001f433 Сканирую кит-активность...", parse_mode="Markdown")
         try:
@@ -2951,7 +2983,7 @@ async def _show_channel_signals(q):
     : [{"channel": str, "time": str, "text": str, "symbol": str|None, ...}]
     """
     nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton(" ", callback_data="channel_signals"),
+        [InlineKeyboardButton("🔄 Обновить", callback_data="channel_signals"),
          InlineKeyboardButton(" ",     callback_data="show_menu")],
     ])
 
