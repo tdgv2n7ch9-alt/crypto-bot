@@ -2635,6 +2635,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             btc_p = float(btc_t.get("lastPrice", btc_t.get("last", 0)))
             eth_p = float(eth_t.get("lastPrice", eth_t.get("last", 0)))
             eth_ch = float(eth_t.get("priceChangePercent", 0))
+            eth_ch = float(eth_t.get("priceChangePercent", 0))
             be200,be50,brsi = get_ta("BTCUSDT")
             ee200,ee50,ersi = get_ta("ETHUSDT")
             cmc_key = os.environ.get("CMC_API_KEY","")
