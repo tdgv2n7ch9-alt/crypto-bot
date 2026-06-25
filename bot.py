@@ -2156,7 +2156,7 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
 
     await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
-    await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
+    await q.message.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
 
 async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2209,7 +2209,7 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines.append(" : 2%  | SL ")
 
     await msg.delete()
-    await ctx.bot.send_message(
+    await q.message.bot.send_message(
         update.effective_chat.id, "\n".join(lines),
         parse_mode="Markdown", reply_markup=nav,
         disable_web_page_preview=True
@@ -2250,7 +2250,7 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton(" /3 ", callback_data="signals"),
     ]])
     await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
-    await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
+    await q.message.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2278,7 +2278,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "top_long":
         try: await q.message.delete()
         except: pass
-        msg_sent = await ctx.bot.send_message(q.message.chat_id, "   -... ~40 ")
+        msg_sent = await q.message.bot.send_message(q.message.chat_id, "   -... ~40 ")
         class FakeMsgLong:
             chat_id = q.message.chat_id
             async def reply_text(self, text, **kw):
@@ -2486,7 +2486,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             #  FakeUpdate    cmd_market
             class FakeMsg:
                 async def reply_text(self, text, **kw):
-                    return await ctx.bot.send_message(q.message.chat_id, text, **kw)
+                    return await q.message.bot.send_message(q.message.chat_id, text, **kw)
             class FakeUpdate:
                 effective_chat = q.message.chat
                 message = FakeMsg()
@@ -2495,7 +2495,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await cmd_market(FakeUpdate(), ctx)
         except Exception as e:
             log.error(f"overview cb: {e}")
-            await ctx.bot.send_message(q.message.chat_id, "   ")
+            await q.message.bot.send_message(q.message.chat_id, "   ")
 
     elif data == "signals":
         await q.edit_message_text("  ...", parse_mode="Markdown")
@@ -2634,6 +2634,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             eth_t = _r.get("https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT",timeout=5).json()
             btc_p = float(btc_t.get("lastPrice", btc_t.get("last", 0)))
             eth_p = float(eth_t.get("lastPrice", eth_t.get("last", 0)))
+            eth_ch = float(eth_t.get("priceChangePercent", 0))
             be200,be50,brsi = get_ta("BTCUSDT")
             ee200,ee50,ersi = get_ta("ETHUSDT")
             cmc_key = os.environ.get("CMC_API_KEY","")
@@ -2718,7 +2719,7 @@ async def _show_channel_signals(q):
                 #        
                 try:
                     await q.message.delete()
-                    await ctx.bot.send_message(
+                    await q.message.bot.send_message(
                         q.message.chat_id, msg_text,
                         parse_mode="Markdown", reply_markup=nav
                     )
@@ -3397,7 +3398,7 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(2.0)
 
     # 
-    await ctx.bot.send_message(
+    await q.message.bot.send_message(
         update.effective_chat.id,
         f" *Precision  *\n"
         f": {len(top)}  \n\n"
@@ -6759,7 +6760,7 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.error(f"top_spot {sym}: {e}")
 
-    await ctx.bot.send_message(
+    await q.message.bot.send_message(
         update.effective_chat.id,
         " *BEST TRADE   *\n\n  :",
         parse_mode="Markdown", reply_markup=main_kb()
@@ -6894,7 +6895,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.error(f"top_long {sym}: {e}")
 
-    await ctx.bot.send_message(
+    await q.message.bot.send_message(
         update.effective_chat.id,
         " *BEST TRADE   *\n\n  :",
         parse_mode="Markdown", reply_markup=main_kb()
@@ -6992,7 +6993,7 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.error(f"top_short {sym}: {e}")
 
-    await ctx.bot.send_message(
+    await q.message.bot.send_message(
         update.effective_chat.id,
         " *BEST TRADE   *\n\n  :",
         parse_mode="Markdown", reply_markup=main_kb()
