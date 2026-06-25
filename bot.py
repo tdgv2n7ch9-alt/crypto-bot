@@ -2629,8 +2629,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 al = sum(losses)/14 if losses else 0.001
                 return e200, e50, round(100-(100/(1+ag/al)),1)
             btc_t = _r.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",timeout=5).json()
-            btc_p = float(btc_t["lastPrice"])
-            btc_ch = float(btc_t["priceChangePercent"])
+            btc_p = float(btc_t.get("lastPrice", 0))
+            btc_ch = float(btc_t.get("priceChangePercent", 0))
             eth_t = _r.get("https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT",timeout=5).json()
             btc_p = float(btc_t.get("lastPrice", btc_t.get("last", 0)))
             eth_p = float(eth_t.get("lastPrice", eth_t.get("last", 0)))
