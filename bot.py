@@ -1806,31 +1806,39 @@ async def check_entry_zones(bot, chat_ids, coins):
 # 
 # 
 def main_kb():
-    """  BEST TRADE v38"""
+    """Главное меню BEST TRADE — премиум дизайн"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Обзор рынка",       callback_data="market_overview"),
-         InlineKeyboardButton("Тренд анализ",      callback_data="trend_analysis")],
-        [InlineKeyboardButton("ТОП СПОТ",          callback_data="top_spot"),
-         InlineKeyboardButton("ТОП ЛОНГ",          callback_data="top_long")],
-        [InlineKeyboardButton("ТОП ШОРТ",          callback_data="top_short"),
-         InlineKeyboardButton("Полный анализ",     callback_data="menu_full")],
-        [InlineKeyboardButton("Монеты в работе",   callback_data="top_trades"),
-         InlineKeyboardButton("Сигналы каналов",   callback_data="channel_signals")],
-        [InlineKeyboardButton("\U0001f433 Whale Monitor", callback_data="whale_status"),
-         InlineKeyboardButton("On-Chain",          callback_data="onchain_info")],
+        [InlineKeyboardButton("📊 Обзор рынка",      callback_data="market_overview"),
+         InlineKeyboardButton("📈 Тренд анализ",     callback_data="trend_analysis")],
+        [InlineKeyboardButton("⭐️ ТОП СПОТ",         callback_data="top_spot"),
+         InlineKeyboardButton("🟢 ТОП ЛОНГ",         callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",         callback_data="top_short"),
+         InlineKeyboardButton("🔍 Полный анализ",    callback_data="menu_full")],
+        [InlineKeyboardButton("💼 Монеты в работе",  callback_data="top_trades"),
+         InlineKeyboardButton("📡 Сигналы каналов",  callback_data="channel_signals")],
+        [InlineKeyboardButton("🐋 Whale Monitor",    callback_data="whale_status"),
+         InlineKeyboardButton("🔗 On-Chain",         callback_data="onchain_info")],
     ])
 
 def back_kb():
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("  ", callback_data="show_menu"),
+        InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
     ]])
+
+def nav_kb(refresh_data=None):
+    """Нижняя навигация для всех разделов"""
+    row = []
+    if refresh_data:
+        row.append(InlineKeyboardButton("🔄 Обновить", callback_data=refresh_data))
+    row.append(InlineKeyboardButton("🏠 Меню", callback_data="show_menu"))
+    return InlineKeyboardMarkup([row])
 
 async def send_coin(bot, chat_id, symbol, slug, a, text):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(" TradingView",    url=tv_link(symbol)),
-         InlineKeyboardButton(" CoinMarketCap",  url=cmc_link(slug))],
-        [InlineKeyboardButton(" ",       callback_data=f"coin_{symbol}"),
-         InlineKeyboardButton(" ",           callback_data="show_menu")],
+        [InlineKeyboardButton("📊 TradingView",    url=tv_link(symbol)),
+         InlineKeyboardButton("💹 CoinMarketCap",  url=cmc_link(slug))],
+        [InlineKeyboardButton("🔄 Обновить анализ", callback_data=f"coin_{symbol}"),
+         InlineKeyboardButton("🏠 Меню",            callback_data="show_menu")],
     ])
 
     #     Supertrend    
@@ -1990,21 +1998,27 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_chat_ids.add(cid)
     with open("chat_ids.txt", "a") as f:
         f.write(f"{cid}\n")
+    SEP = "➖➖➖➖➖➖➖➖➖➖"
+    name = update.effective_user.first_name or "трейдер"
     await update.message.reply_text(
-        " *BEST TRADE v34.0*\n"
-        "\n\n"
-        " *  *\n\n"
-        " *:*\n"
-        " SMC/ICT  Order Blocks  FVG  BOS\n"
-        " EMA 20/50/200  RSI  MACD  Supertrend\n"
-        " Wyckoff  AMD  Power of Three\n"
-        " Multi-TF Confluence  Killzone\n\n"
-        " *:*\n"
-        " 11     \n"
-        " On-chain  (Lookonchain)\n"
-        "   TP/SL \n\n"
-        " *:* 12%   SL \n\n"
-        "  :",
+        f"👋 *Привет, {name}!*\n"
+        f"🚀 *BEST TRADE v38* — твой крипто-аналитик\n"
+        f"{SEP}\n\n"
+        f"🧠 *Методология:*\n"
+        f"  • SMC/ICT · Order Blocks · FVG · BOS\n"
+        f"  • EMA 20/50/200 · RSI · MACD · Supertrend\n"
+        f"  • Wyckoff · AMD · Power of Three\n"
+        f"  • Multi-TF Confluence · Killzone\n\n"
+        f"{SEP}\n\n"
+        f"📡 *Источники данных:*\n"
+        f"  • 11 Telegram-каналов аналитиков\n"
+        f"  • On-chain: Lookonchain\n"
+        f"  • 🐋 Whale Monitor: Funding Rate + OI\n"
+        f"  • CMC Топ-500 монет\n\n"
+        f"{SEP}\n\n"
+        f"⚡️ *Автосигналы каждые 30 минут*\n"
+        f"⚠️ Риск: 1–2% депозита · SL обязателен\n\n"
+        f"👇 *Выбери раздел:*",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
@@ -2259,13 +2273,14 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     #     
     if data == "show_menu":
+        SEP = "➖➖➖➖➖➖➖➖➖➖"
         await q.edit_message_text(
-            " *BEST TRADE v34.0*\n"
-            "\n\n"
-            " *  *\n\n"
-            " SMC  ICT  Wyckoff  AMD  Multi-TF\n"
-            " 11   On-chain  Killzone\n\n"
-            "  :",
+            f"🚀 *BEST TRADE v38*\n"
+            f"_{now_utc3()}_\n"
+            f"{SEP}\n\n"
+            f"🧠 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
+            f"📡 11 каналов · On-chain · 🐋 Whale Monitor\n\n"
+            f"👇 *Выбери раздел:*",
             parse_mode="Markdown", reply_markup=main_kb()
         )
 
@@ -7462,56 +7477,49 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/long   :  + -,   Rocket Score"""
-    msg = await update.message.reply_text("   -... ~40 ")
+    """/long — топ лонг кандидаты"""
+    msg = await update.message.reply_text("🟢 Анализирую рынок... ~20 сек")
     coins = get_top500()
     if not coins:
-        await msg.edit_text("  "); return
+        await msg.edit_text("❌ Нет данных CMC", reply_markup=nav_kb("top_long")); return
 
-    #    CMC  ()
     pre = []
     for coin in coins:
         q = coin["quote"]["USDT"]
-        vol       = q.get("volume_24h",  0) or 0
-        mcap      = q.get("market_cap",  0) or 0
-        ch24h     = q.get("percent_change_24h", 0) or 0
+        vol   = q.get("volume_24h", 0) or 0
+        mcap  = q.get("market_cap", 0) or 0
+        ch24h = q.get("percent_change_24h", 0) or 0
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        #        
         if vol >= 1_000_000 and vol_ratio < 60 and ch24h > -20:
             pre.append(coin)
 
-    # :    ,  
     pre.sort(key=lambda c: c["quote"]["USDT"].get("percent_change_24h", 0) or 0, reverse=True)
 
-    #    Binance    
     scored = []
-    for coin in pre[:150]:
+    for coin in pre[:50]:  # сокращено с 150 до 50
         try:
-            a  = real_full_analysis(coin)
-            pa = pro_analysis(coin["symbol"], coin)
+            a   = real_full_analysis(coin)
+            pa  = pro_analysis(coin["symbol"], coin)
             sqf = signal_quality_filter(a, pa, coin)
-            #  A/A+   rocket 
             if a["is_long"] and not a.get("suspicious"):
                 if sqf["pass"] or a["rocket"] >= 65:
-                    a["_sqf"] = sqf  #   
+                    a["_sqf"] = sqf
                     scored.append((coin, a))
         except: pass
 
-    #   Rocket Score (  )
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
-    top_long = scored[:7]
+    top_long = scored[:5]
 
     nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton(" ",     callback_data="top_long"),
-         InlineKeyboardButton("  ", callback_data="show_menu")],
-        [InlineKeyboardButton("  ",    callback_data="top_short"),
-         InlineKeyboardButton("  ",    callback_data="top_spot")],
+        [InlineKeyboardButton("🔄 Обновить", callback_data="top_long"),
+         InlineKeyboardButton("🏠 Меню",    callback_data="show_menu")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ", callback_data="top_short"),
+         InlineKeyboardButton("⭐️ ТОП СПОТ", callback_data="top_spot")],
     ])
 
     if not top_long:
-        #       RSI < 40   is_long
         fallback = []
-        for coin in pre[:50]:
+        for coin in pre[:30]:
             try:
                 a = real_full_analysis(coin)
                 if not a.get("suspicious") and a["rsi_4h"] < 45:
@@ -7522,54 +7530,46 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if not top_long:
         await msg.edit_text(
-            " * - *\n\n"
-            "     .\n"
-            "     .",
+            "🟡 *Лонг-кандидатов нет*\n\nРынок не даёт чётких сигналов.\nПопробуй позже.",
             parse_mode="Markdown", reply_markup=nav
-        )
-        return
+        ); return
 
-    #    
-    btc_ctx = get_btc_market_context()
+    btc_ctx  = get_btc_market_context()
     btc_warn = ""
     if btc_ctx["ok"] and not btc_ctx["long_ok"]:
-        btc_warn = f"\n *{btc_ctx['warning']}*\n"
+        btc_warn = f"\n⚠️ *{btc_ctx['warning']}*\n"
+
+    SEP = "➖➖➖➖➖➖➖➖➖➖"
+    kz_line = (killzone_label().split(chr(10)) or [""])[0]
 
     list_lines = [
-        "\U0001f7e2 *BEST TRADE — ТОП ЛОНГ*",
-        f"\U0001f550 {now_utc3()}",
-        f"\U0001f4ca {btc_ctx.get('label', '')}",
+        "🟢 *BEST TRADE — ТОП ЛОНГ*",
+        f"🕐 _{now_utc3()}_",
+        f"📊 {btc_ctx.get('label', '')}",
     ]
     if btc_warn:
         list_lines.append(btc_warn)
-    kz_line = (killzone_label().split(chr(10)) or [""])[0]
-    list_lines += [
-        "",
-        "\U0001f4c8 *Лучшие лонг-кандидаты:*",
-        f"\U0001f551 Killzone: {kz_line}",
-        "",
-    ]
+    list_lines += [SEP, "", "📈 *Лучшие лонг-кандидаты:*", f"⏰ {kz_line}", ""]
+
     for i, (c, a) in enumerate(top_long, 1):
         sym    = c["symbol"]
         tv     = tv_link(sym)
-        sqf    = a.get("_sqf", {})
-        q_lbl  = sqf.get("quality", "B")
         r      = a["rocket"]
         grade  = "A+" if r >= 90 else ("A" if r >= 75 else ("B" if r >= 60 else "C"))
-        rsi_e  = "\U0001f7e2" if a["rsi_4h"] < 30 else ("\U0001f7e1" if a["rsi_4h"] < 60 else "\U0001f534")
-        trend_e = "\U0001f4c8" if a.get("trend_4h") == "bullish" else ("\U0001f4c9" if a.get("trend_4h") == "bearish" else "\U000027a1")
+        rsi_e  = "🟢" if a["rsi_4h"] < 30 else ("🟡" if a["rsi_4h"] < 60 else "🔴")
+        trend_e = "📈" if a.get("trend_4h") == "bullish" else ("📉" if a.get("trend_4h") == "bearish" else "➡️")
+        score_e = "🚀" if r >= 80 else ("💪" if r >= 65 else "✅")
         list_lines += [
-            f"{i}. [{sym}/USDT]({tv}) \U0001f7e2",
-            f"   \U0001f4cd `{fp(a['price'])}`  |  Скор `{r}/100`  |  Качество *{grade}*",
-            f"   RSI {rsi_e} `{a['rsi_4h']:.0f}`  |  Тренд {trend_e}",
+            f"*{i}. [{sym}/USDT]({tv})*  {score_e}",
+            f"  💰 `{fp(a['price'])}`  •  Скор `{r}/100`  •  *{grade}*",
+            f"  RSI {rsi_e} `{a['rsi_4h']:.0f}`  •  Тренд {trend_e}",
             "",
         ]
-    list_lines += ["\U0001f4ca _Детальный анализ каждой монеты ниже_"]
+    list_lines += [SEP, "📋 _Детальный анализ каждой монеты ниже_ ⬇️"]
 
     await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
-                        reply_markup=nav, disable_web_page_preview=False)
+                        reply_markup=nav, disable_web_page_preview=True)
 
-    #     
     for coin, a in top_long:
         sym  = coin["symbol"]
         slug = coin.get("slug", sym.lower())
@@ -7578,20 +7578,18 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text  = _build_signal_post(sym, a, stats, mode="long")
             await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
             TOP_LONG_SIGNALS[sym] = {
-                "time":    datetime.now(TZ),
-                "entry":   a["price"],
+                "time":  datetime.now(TZ), "entry": a["price"],
                 "tp1": a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
-                "sl":  a["sl"], "rr": a["rr"],
-                "status":  "active",
-                "chat_id": update.effective_chat.id,
+                "sl": a["sl"], "rr": a["rr"],
+                "status": "active", "chat_id": update.effective_chat.id,
             }
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.5)
         except Exception as e:
             log.error(f"top_long {sym}: {e}")
 
     await ctx.bot.send_message(
         update.effective_chat.id,
-        " *BEST TRADE   *\n\n  :",
+        "✅ *BEST TRADE — ТОП ЛОНГ готов*\n\nВыбери следующее действие:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
@@ -7625,49 +7623,48 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except: pass
 
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
-    top_short = scored[:7]
+    top_short = scored[:5]
 
     nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton(" ",    callback_data="top_short"),
-         InlineKeyboardButton("  ", callback_data="show_menu")],
-        [InlineKeyboardButton("  ",   callback_data="top_long"),
-         InlineKeyboardButton("  ",   callback_data="top_spot")],
+        [InlineKeyboardButton("🔄 Обновить", callback_data="top_short"),
+         InlineKeyboardButton("🏠 Меню",    callback_data="show_menu")],
+        [InlineKeyboardButton("🟢 ТОП ЛОНГ", callback_data="top_long"),
+         InlineKeyboardButton("⭐️ ТОП СПОТ", callback_data="top_spot")],
     ])
 
     if not top_short:
         await msg.edit_text(
-            " * - *\n\n"
-            "   .\n"
-            "     .",
+            "🟡 *Шорт-кандидатов нет*\n\nРынок не даёт чётких сигналов.\nПопробуй позже.",
             parse_mode="Markdown", reply_markup=nav
-        )
-        return
+        ); return
 
+    SEP = "➖➖➖➖➖➖➖➖➖➖"
     list_lines = [
-        "\U0001f534 *BEST TRADE — ТОП ШОРТ*",
-        f"\U0001f550 {now_utc3()}",
-        "",
-        "\U0001f4c9 *Лучшие шорт-кандидаты:*",
-        "",
+        "🔴 *BEST TRADE — ТОП ШОРТ*",
+        f"🕐 _{now_utc3()}_",
+        SEP, "",
+        "📉 *Лучшие шорт-кандидаты:*", "",
     ]
     for i, (c, a) in enumerate(top_short, 1):
-        sym  = c["symbol"]
-        tv   = tv_link(sym)
-        rsi_e = "\U0001f534" if a["rsi_4h"] > 70 else ("\U0001f7e1" if a["rsi_4h"] > 45 else "\U0001f7e2")
-        trend_e = "\U0001f4c9" if a.get("trend_4h") == "bearish" else ("\U0001f4c8" if a.get("trend_4h") == "bullish" else "\U000027a1")
-        ema_e = "\U0001f534 Выше EMA200" if a.get("above_ema200") else "\U0001f7e2 Ниже EMA200"
-        r = a["rocket"]
+        sym   = c["symbol"]
+        tv    = tv_link(sym)
+        rsi_e = "🔴" if a["rsi_4h"] > 70 else ("🟡" if a["rsi_4h"] > 45 else "🟢")
+        trend_e = "📉" if a.get("trend_4h") == "bearish" else ("📈" if a.get("trend_4h") == "bullish" else "➡️")
+        ema_e = "🔴 Выше EMA200" if a.get("above_ema200") else "🟢 Ниже EMA200"
+        r     = a["rocket"]
         grade = "A+" if r >= 90 else ("A" if r >= 75 else ("B" if r >= 60 else "C"))
+        score_e = "🚨" if r >= 80 else ("💪" if r >= 65 else "✅")
         list_lines += [
-            f"{i}. [{sym}/USDT]({tv}) \U0001f534",
-            f"   \U0001f4cd `{fp(a['price'])}`  |  Скор `{r}/100`  |  Качество *{grade}*",
-            f"   RSI {rsi_e} `{a['rsi_4h']:.0f}`  |  Тренд {trend_e}  |  {ema_e}",
+            f"*{i}. [{sym}/USDT]({tv})*  {score_e}",
+            f"  💰 `{fp(a['price'])}`  •  Скор `{r}/100`  •  *{grade}*",
+            f"  RSI {rsi_e} `{a['rsi_4h']:.0f}`  •  Тренд {trend_e}",
+            f"  {ema_e}",
             "",
         ]
-    list_lines += ["\U0001f4ca _Детальный анализ каждой монеты ниже_"]
+    list_lines += [SEP, "📋 _Детальный анализ каждой монеты ниже_ ⬇️"]
 
     await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
-                        reply_markup=nav, disable_web_page_preview=False)
+                        reply_markup=nav, disable_web_page_preview=True)
 
     for coin, a in top_short:
         sym  = coin["symbol"]
@@ -7677,20 +7674,18 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text  = _build_signal_post(sym, a, stats, mode="short")
             await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
             TOP_SHORT_SIGNALS[sym] = {
-                "time":    datetime.now(TZ),
-                "entry":   a["price"],
+                "time":  datetime.now(TZ), "entry": a["price"],
                 "tp1": a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
-                "sl":  a["sl"], "rr": a["rr"],
-                "status":  "active",
-                "chat_id": update.effective_chat.id,
+                "sl": a["sl"], "rr": a["rr"],
+                "status": "active", "chat_id": update.effective_chat.id,
             }
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.5)
         except Exception as e:
             log.error(f"top_short {sym}: {e}")
 
     await ctx.bot.send_message(
         update.effective_chat.id,
-        " *BEST TRADE   *\n\n  :",
+        "✅ *BEST TRADE — ТОП ШОРТ готов*\n\nВыбери следующее действие:",
         parse_mode="Markdown", reply_markup=main_kb()
     )
 
