@@ -2612,6 +2612,66 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "channel_signals":
         await _show_channel_signals(q)
 
+    elif data == "trend_analysis":
+        await q.edit_message_text("Загружаю данные...", parse_mode="Markdown")
+        try:
+            import requests as _r, os
+            def get_ta(symbol):
+                k = _r.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1d&limit=200", timeout=5).json()
+                c = [float(x[4]) for x in k]
+                e200 = sum(c[-200:]) / 200
+                e50 = sum(c[-50:]) / 50
+                gains, losses = [], []
+                for i in range(1, 15):
+                    d = c[-i] - c[-i-1]
+                    (gains if d > 0 else losses).append(abs(d))
+                ag = sum(gains)/14 if gains else 0.001
+                al = sum(losses)/14 if losses else 0.001
+                return e200, e50, round(100-(100/(1+ag/al)),1)
+            btc_t = _r.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",timeout=5).json()
+            btc_p = float(btc_t["lastPrice"])
+            btc_ch = float(btc_t["priceChangePercent"])
+            eth_t = _r.get("https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT",timeout=5).json()
+            eth_p = float(eth_t["lastPrice"])
+            eth_ch = float(eth_t["priceChangePercent"])
+            be200,be50,brsi = get_ta("BTCUSDT")
+            ee200,ee50,ersi = get_ta("ETHUSDT")
+            cmc_key = os.environ.get("CMC_API_KEY","")
+            alts_text = ""
+            bull_pct = 50
+            if cmc_key:
+                cmc = _r.get("https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=20&convert=USDT",headers={"X-CMC_PRO_API_KEY":cmc_key},timeout=8).json()
+                coins = cmc.get("data",[])
+                bc,lines2 = 0,[]
+                for coin in coins[2:12]:
+                    s=coin["symbol"]; p=coin["quote"]["USDT"]["price"]; ch=coin["quote"]["USDT"]["percent_change_24h"]
+                    if ch>0: bc+=1
+                    lines2.append(f"{s}: ${p:,.3f} ({ch:+.1f}%)")
+                alts_text = "\n".join(lines2)
+                bull_pct = round(bc/10*100)
+            sentiment = "БЫЧИЙ" if bull_pct>=60 else ("МЕДВЕЖИЙ" if bull_pct<=40 else "НЕЙТРАЛЬНЫЙ")
+            btr = "БЫЧИЙ" if btc_p>be200 else "МЕДВЕЖИЙ"
+            etr = "БЫЧИЙ" if eth_p>ee200 else "МЕДВЕЖИЙ"
+            bdrop = round((126021-btc_p)/126021*100,1)
+            edrop = round((4878-eth_p)/4878*100,1)
+            bc_s = f"+{btc_ch:.1f}%" if btc_ch>0 else f"{btc_ch:.1f}%"
+            ec_s = f"+{eth_ch:.1f}%" if eth_ch>0 else f"{eth_ch:.1f}%"
+            msg = (f"РЫНОЧНЫЙ ТРЕНД\n\n"
+                   f"BTC: ${btc_p:,.0f} ({bc_s})\n"
+                   f"Тренд: {btr} | RSI: {brsi}\n"
+                   f"EMA200: ${be200:,.0f} | EMA50: ${be50:,.0f}\n"
+                   f"От ATH: -{bdrop}%\n\n"
+                   f"ETH: ${eth_p:,.2f} ({ec_s})\n"
+                   f"Тренд: {etr} | RSI: {ersi}\n"
+                   f"EMA200: ${ee200:,.0f} | EMA50: ${ee50:,.0f}\n"
+                   f"От ATH: -{edrop}%\n\n"
+                   f"ТОП АЛЬТЫ (24ч):\n{alts_text}\n\n"
+                   f"Сентимент: {sentiment} ({bull_pct}% бычьих)\n"
+                   f"Риск 1-2% SL обязателен")
+            await q.edit_message_text(msg, reply_markup=back_kb())
+        except Exception as e:
+            await q.edit_message_text(f"Ошибка: {e}", reply_markup=back_kb())
+
 # 
 #     (Telethon reader)
 # 
