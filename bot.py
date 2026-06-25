@@ -1808,15 +1808,15 @@ async def check_entry_zones(bot, chat_ids, coins):
 def main_kb():
     """  BEST TRADE v34"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("  ",          callback_data="market_overview"),
-         InlineKeyboardButton("  ",         callback_data="trend_analysis")],
-        [InlineKeyboardButton("  ",             callback_data="top_spot"),
-         InlineKeyboardButton("  ",             callback_data="top_long")],
-        [InlineKeyboardButton("  ",             callback_data="top_short"),
-         InlineKeyboardButton("  ",        callback_data="menu_full")],
-        [InlineKeyboardButton("   ",   callback_data="top_trades"),
-         InlineKeyboardButton("  ",      callback_data="channel_signals")],
-        [InlineKeyboardButton(" On-Chain (Lookonchain)", callback_data="onchain_info")],
+        [InlineKeyboardButton("Обзор рынка",     callback_data="market_overview"),
+         InlineKeyboardButton("Тренд анализ",    callback_data="trend_analysis")],
+        [InlineKeyboardButton("ТОП СПОТ",        callback_data="top_spot"),
+         InlineKeyboardButton("ТОП ЛОНГ",        callback_data="top_long")],
+        [InlineKeyboardButton("ТОП ШОРТ",        callback_data="top_short"),
+         InlineKeyboardButton("Полный анализ",   callback_data="menu_full")],
+        [InlineKeyboardButton("Монеты в работе", callback_data="top_trades"),
+         InlineKeyboardButton("Сигналы каналов", callback_data="channel_signals")],
+        [InlineKeyboardButton("On-Chain (Lookonchain)", callback_data="onchain_info")],
     ])
 
 def back_kb():
