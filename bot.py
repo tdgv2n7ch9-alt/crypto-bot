@@ -1,3 +1,5 @@
+_WHALE_WATCH = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","LINK","DOT","MATIC","UNI","ATOM","LTC","BCH"]
+
 
 # v42g
 def get_usdt_dominance():
