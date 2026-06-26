@@ -3000,353 +3000,60 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 _READER_SIGNALS_FILE = "/tmp/reader_signals.json"
 
 async def _show_channel_signals(q):
-    """
-       reader.py   .
-    reader.py   /tmp/reader_signals.json
-    : [{"channel": str, "time": str, "text": str, "symbol": str|None, ...}]
-    """
+    import json as _j, os as _os
+    from datetime import datetime as _dt
+    import pytz as _pytz
+    TZ2 = _pytz.timezone("Europe/Istanbul")
+    now_str = _dt.now(TZ2).strftime("%d.%m.%Y %H:%M UTC+3")
+    SEP = "\u2796" * 10
     nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Обновить", callback_data="channel_signals"),
-         InlineKeyboardButton(" ",     callback_data="show_menu")],
+        [InlineKeyboardButton("\U0001f504 Обновить", callback_data="channel_signals"),
+         InlineKeyboardButton("\U0001f3e0 Меню", callback_data="show_menu")],
     ])
-
     try:
-        msg_text = (
-            " * *\n"
-            "\n\n"
-            " Reader v5 \n"
-            "  *11 *   \n"
-            " On-chain: *Lookonchain* ( 10 )\n\n"
-            " * :*\n"
-            " PIXEL\n"
-            "  \n"
-            "  \n"
-            " Scalping Blog | \n"
-            " Kira | ICT\n"
-            "  \n"
-            " MANIPULATOR\n"
-            " VAGR TRADING\n"
-            " ANNA TRADE\n"
-            " 2Trade  Kirill Sobolev\n"
-            "    | \n\n"
-            "   TP/SL  **  \n\n"
-            f" {now_utc3()}"
-        )
-        try:
-            await q.edit_message_text(msg_text, parse_mode="Markdown", reply_markup=nav)
-        except Exception as e:
-            if "not modified" in str(e).lower():
-                #        
-                try:
-                    await q.message.delete()
-                    await ctx.bot.send_message(
-                        q.message.chat_id, msg_text,
-                        parse_mode="Markdown", reply_markup=nav
-                    )
-                except:
-                    await q.answer(" ")
-            else:
-                raise e
-        return
-
-        signals = []
-        if not signals:
-            pass
-
-        #   ,   24
-        cutoff = datetime.now(TZ).timestamp() - 86400
-        recent = [s for s in signals
-                  if s.get("ts", 0) > cutoff or not s.get("ts")]
+        cached = []
+        sf = "/tmp/reader_signals.json"
+        if _os.path.exists(sf):
+            with open(sf) as _f:
+                cached = _j.load(_f)
+        cutoff = _dt.now(TZ2).timestamp() - 86400
+        recent = [s for s in cached if s.get("ts", 0) > cutoff]
         recent.sort(key=lambda x: x.get("ts", 0), reverse=True)
-
-        lines = [
-            " *BEST TRADE   *",
-            f" {now_utc3()}",
-            f"  24: *{len(recent)} *",
-            "",
+        out = [
+            "\U0001f4e1 *BEST TRADE — СИГНАЛЫ КАНАЛОВ*",
+            f"\U0001f550 _{now_str}_",
+            SEP, "",
+            "\u2705 *Reader v5 активен* — 11 каналов", "",
         ]
-
-        #   
-        by_channel: dict = {}
-        for s in recent:
-            ch = s.get("channel", "")
-            by_channel.setdefault(ch, []).append(s)
-
-        for ch_name, ch_signals in list(by_channel.items())[:10]:
-            lines.append(f"* {ch_name}*")
-            for sig in ch_signals[:3]:   #  3   
-                t   = sig.get("time", "")
-                sym = sig.get("symbol")
-                txt = sig.get("summary", sig.get("text", ""))[:200]
-
-                if sym:
-                    #       
-                    entry  = sig.get("entry")
-                    tp1    = sig.get("tp1")
-                    sl     = sig.get("sl")
-                    side   = sig.get("side", "")
-                    side_e = "" if side == "long" else ("" if side == "short" else "")
-                    tv     = tv_link(sym)
-
-                    sig_line = f"  {side_e} [{sym}USDT]({tv})"
-                    if entry: sig_line += f"   `{fp(float(entry))}`"
-                    if tp1:   sig_line += f"  TP `{fp(float(tp1))}`"
-                    if sl:    sig_line += f"  SL `{fp(float(sl))}`"
-                    lines.append(sig_line)
-                    if t:
-                        lines.append(f"   {t}")
-                else:
-                    #   
-                    lines.append(f"   {txt}")
-                    if t:
-                        lines.append(f"   {t}")
-            lines.append("")
-
-        lines.append(f"_: {now_utc3()}_")
-
-        text = "\n".join(lines)
-        if len(text) > 4096:
-            text = text[:4090] + "..."
-
+        if recent:
+            out.append(f"\U0001f4e8 *Последние сигналы (24ч): {len(recent)}*")
+            out.append("")
+            by_ch = {}
+            for s in recent:
+                by_ch.setdefault(s.get("channel","?"), []).append(s)
+            for ch, sigs in list(by_ch.items())[:10]:
+                out.append(f"*• {ch}*")
+                for sig in sigs[:2]:
+                    sym = sig.get("symbol","")
+                    txt = sig.get("summary", sig.get("text",""))[:120]
+                    t = sig.get("time","")
+                    sym_part = f"\U0001f3af `{sym}`" if sym else "\U0001f4dd"
+                    out.append(f"  {sym_part} {txt}")
+                    if t: out.append(f"  _{t}_")
+                out.append("")
+        else:
+            out += ["\u23f3 Сигналов за 24ч нет","Жду публикаций из каналов...",""]
+        out += [SEP, "\u26a0\ufe0f Риск 1-2% депозита • SL обязателен"]
+        text = "\n".join(out)
+        if len(text) > 4090: text = text[:4087] + "..."
         try:
-            await q.edit_message_text(text, parse_mode="Markdown",
-                                      reply_markup=nav, disable_web_page_preview=True)
-        except Exception as edit_err:
-            if "not modified" in str(edit_err).lower():
-                await q.answer("  ")
-            else:
-                raise edit_err
-
+            await q.edit_message_text(text, parse_mode="Markdown", reply_markup=nav, disable_web_page_preview=True)
+        except Exception as e2:
+            if "not modified" not in str(e2).lower(): raise
     except Exception as e:
         log.error(f"channel_signals: {e}")
-        try:
-            await q.edit_message_text(
-                f" : {str(e)[:200]}",
-                parse_mode="Markdown", reply_markup=nav
-            )
-        except:
-            await q.answer("  ")
-
-# 
-# 
-# 
-# ═══════════════════════════════════════════════════════
-#  WHALE & MARKET ALERT DETECTOR (бесплатные источники)
-# ═══════════════════════════════════════════════════════
-
-_whale_last_alert: dict = {}   # symbol -> timestamp последнего алерта
-_whale_oi_prev:    dict = {}   # symbol -> предыдущий OI
-
-def _get_funding_rates() -> list:
-    """Binance Futures — funding rate всех монет. Бесплатно."""
-    try:
-        import requests as _r
-        r = _r.get("https://fapi.binance.com/fapi/v1/fundingRate",
-                   params={"limit": 1}, timeout=8)
-        # Получаем текущие funding для топ монет
-        r2 = _r.get("https://fapi.binance.com/fapi/v1/premiumIndex",
-                    timeout=8)
-        data = r2.json()
-        results = []
-        for item in data:
-            sym = item.get("symbol", "")
-            if not sym.endswith("USDT"): continue
-            fr = float(item.get("lastFundingRate", 0) or 0) * 100
-            mp = float(item.get("markPrice", 0) or 0)
-            results.append({"symbol": sym.replace("USDT",""), "funding": fr, "price": mp})
-        return results
-    except:
-        return []
-
-def _get_oi_change(symbol: str) -> dict:
-    """Binance — изменение Open Interest за последний час. Бесплатно."""
-    try:
-        import requests as _r
-        sym = symbol.upper() + "USDT"
-        r = _r.get("https://fapi.binance.com/futures/data/openInterestHist",
-                   params={"symbol": sym, "period": "1h", "limit": 3},
-                   timeout=8)
-        data = r.json()
-        if len(data) < 2: return {}
-        oi_now  = float(data[-1].get("sumOpenInterest", 0) or 0)
-        oi_prev = float(data[-2].get("sumOpenInterest", 0) or 0)
-        change_pct = (oi_now - oi_prev) / oi_prev * 100 if oi_prev > 0 else 0
-        return {"oi_now": oi_now, "oi_prev": oi_prev, "change_pct": round(change_pct, 2)}
-    except:
-        return {}
-
-def _get_ls_ratio(symbol: str) -> dict:
-    """Binance — Long/Short ratio топ трейдеров. Бесплатно."""
-    try:
-        import requests as _r
-        sym = symbol.upper() + "USDT"
-        r = _r.get("https://fapi.binance.com/futures/data/topLongShortAccountRatio",
-                   params={"symbol": sym, "period": "1h", "limit": 1},
-                   timeout=8)
-        data = r.json()
-        if not data: return {}
-        item = data[-1]
-        ls = float(item.get("longShortRatio", 1) or 1)
-        long_pct  = float(item.get("longAccount",  50) or 50)
-        short_pct = float(item.get("shortAccount", 50) or 50)
-        return {"ratio": round(ls, 2), "long_pct": round(long_pct,1), "short_pct": round(short_pct,1)}
-    except:
-        return {}
-
-def _get_liquidations_1h(symbol: str) -> dict:
-    """Binance — ликвидации за последний час. Бесплатно."""
-    try:
-        import requests as _r
-        sym = symbol.upper() + "USDT"
-        r = _r.get("https://fapi.binance.com/futures/data/tradingData",
-                   timeout=5)
-        # fallback: берём через force orders
-        r2 = _r.get(f"https://fapi.binance.com/fapi/v1/allForceOrders",
-                    params={"symbol": sym, "limit": 100}, timeout=8)
-        orders = r2.json()
-        long_liq = sum(float(o.get("origQty",0))*float(o.get("price",0))
-                       for o in orders if o.get("side")=="BUY")
-        short_liq = sum(float(o.get("origQty",0))*float(o.get("price",0))
-                        for o in orders if o.get("side")=="SELL")
-        return {"long_liq": round(long_liq), "short_liq": round(short_liq)}
-    except:
-        return {}
-
-def _analyze_whale_signal(sym: str, funding: float, oi: dict, ls: dict, price: float) -> dict | None:
-    """
-    Анализирует данные и возвращает сигнал кита если есть.
-    Логика:
-    - Funding < -0.05% + OI растёт + L/S ratio < 0.8 = ШОРТ КИТОВ → алерт ШОРТ
-    - Funding > +0.1% + OI падает + L/S > 1.5 = ПЕРЕГРЕВ ЛОНГОВ → алерт ШОРТ
-    - Funding < -0.08% резко = ПАНИКА → алерт ШОРТ
-    - OI растёт >3% за час + funding нейтральный + L/S > 1.2 = ЛОНГ НАРАСТАЕТ → алерт ЛОНГ
-    """
-    if not oi or not ls: return None
-
-    oi_chg    = oi.get("change_pct", 0)
-    ls_ratio  = ls.get("ratio", 1.0)
-    long_pct  = ls.get("long_pct", 50)
-    short_pct = ls.get("short_pct", 50)
-
-    signal = None
-    strength = 0
-    reasons  = []
-
-    # --- ШОРТ КИТОВ ---
-    if funding < -0.05:
-        strength += 2
-        reasons.append(f"Funding {funding:.3f}% 🔴 (киты платят за шорт)")
-    if funding < -0.08:
-        strength += 1
-        reasons.append("Экстремальный funding — паника")
-    if oi_chg > 2 and ls_ratio < 0.9:
-        strength += 2
-        reasons.append(f"OI +{oi_chg:.1f}% + шортов больше ({short_pct:.0f}%)")
-    if ls_ratio < 0.75:
-        strength += 1
-        reasons.append(f"L/S ratio {ls_ratio:.2f} — доминируют шорты")
-
-    if strength >= 3:
-        signal = "SHORT"
-
-    # --- ПЕРЕГРЕВ ЛОНГОВ (тоже шорт-сигнал) ---
-    if funding > 0.1 and ls_ratio > 1.5:
-        reasons.append(f"Funding +{funding:.3f}% перегрет + лонги {long_pct:.0f}%")
-        signal = "SHORT"
-        strength += 2
-
-    # --- ЛОНГ НАКОПЛЕНИЕ ---
-    if signal is None:
-        if funding > -0.01 and funding < 0.03 and oi_chg > 3 and ls_ratio > 1.2:
-            reasons.append(f"OI +{oi_chg:.1f}% + лонги растут ({long_pct:.0f}%)")
-            reasons.append(f"Funding нейтральный {funding:.3f}%")
-            signal = "LONG"
-            strength = 3
-
-    if signal is None or not reasons:
-        return None
-
-    return {
-        "symbol":   sym,
-        "signal":   signal,
-        "strength": min(strength, 5),
-        "funding":  funding,
-        "oi_chg":   oi_chg,
-        "ls_ratio": ls_ratio,
-        "long_pct": long_pct,
-        "short_pct":short_pct,
-        "price":    price,
-        "reasons":  reasons,
-    }
-
-def _format_whale_alert(w: dict) -> str:
-    """Форматирует алерт кита в красивое сообщение."""
-    SEP = "\u2796\u2796\u2796\u2796\u2796\u2796\u2796\u2796\u2796\u2796"
-    sym  = w["symbol"]
-    sig  = w["signal"]
-    fr   = w["funding"]
-    oi   = w["oi_chg"]
-    ls   = w["ls_ratio"]
-    lp   = w["long_pct"]
-    sp   = w["short_pct"]
-    pr   = w["price"]
-    st   = w["strength"]
-    rsns = w["reasons"]
-
-    if sig == "SHORT":
-        side_e = "\U0001f6a8"
-        side_t = "ШОРТ — ПРОДАЖА КИТОВ"
-        action = "\U0001f534 Рассмотреть ШОРТ"
-        sl_hint = f"SL: выше `{fp(pr * 1.015)}`  (+1.5%)"
-        tp_hint = f"TP1: `{fp(pr * 0.975)}`  (-2.5%)\nTP2: `{fp(pr * 0.950)}`  (-5.0%)"
-    else:
-        side_e = "\U0001f4c8"
-        side_t = "ЛОНГ — НАКОПЛЕНИЕ"
-        action = "\U0001f7e2 Рассмотреть ЛОНГ"
-        sl_hint = f"SL: ниже `{fp(pr * 0.985)}`  (-1.5%)"
-        tp_hint = f"TP1: `{fp(pr * 1.025)}`  (+2.5%)\nTP2: `{fp(pr * 1.050)}`  (+5.0%)"
-
-    stars = "\u2b50" * st + "\u26aa" * (5 - st)
-
-    lines = [
-        f"{side_e} *WHALE ALERT — {sym}/USDT*",
-        f"_{side_t}_",
-        f"_{stars}  Сила сигнала: {st}/5_",
-        SEP,
-        "",
-        f"\U0001f4cd  Цена: `{fp(pr)}`",
-        "",
-        f"\U0001f4ca  *Фьючерс-данные:*",
-        f"  Funding Rate:  `{fr:+.4f}%`",
-        f"  OI изменение:  `{oi:+.1f}%` за 1ч",
-        f"  Long/Short:    `{ls:.2f}`  ({lp:.0f}% / {sp:.0f}%)",
-        "",
-        SEP,
-        "",
-        "\U0001f9e0  *Почему сигнал:*",
-        "",
-    ]
-    for r in rsns:
-        lines.append(f"  \u2022 {r}")
-
-    lines += [
-        "",
-        SEP,
-        "",
-        f"\U0001f3af  *Сетап:*",
-        "",
-        f"  {action}",
-        f"  {sl_hint}",
-        f"  {tp_hint}",
-        "",
-        f"\u26a0\ufe0f  Риск: 1\u20132% депозита \u2022 SL обязателен",
-        SEP,
-        f"#{sym}USDT \U0001f433",
-    ]
-    return "\n".join(lines)
-
-# Топ монеты для мониторинга китов
-_WHALE_WATCH = ["BTC","ETH","SOL","BNB","XRP","ADA","AVAX","DOGE","LINK","DOT","MATIC","OP","ARB"]
+        try: await q.edit_message_text(f"Ошибка: {str(e)[:100]}", reply_markup=nav)
+        except: await q.answer(" ")
 
 async def whale_monitor(bot: Bot):
     """
