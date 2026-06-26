@@ -2949,8 +2949,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 else:
                     # Показываем базовые данные даже без сигнала
                     fr_e = "\U0001f534" if funding < -0.03 else ("\U0001f7e2" if funding > 0.05 else "\U0001f7e1")
-                    oi_chg = oi.get("change_pct", 0)
-                    ls_r   = ls.get("ratio", 1.0)
+                    oi_chg = oi.get("change_pct", 0) if isinstance(oi, dict) else (oi or 0)
+                    ls_r = ls.get("ratio", 1.0) if isinstance(ls, dict) else (ls or 1.0)
                     found_info = {"sym": sym, "funding": funding, "oi": oi_chg, "ls": ls_r, "price": price, "signal": None, "fr_e": fr_e}
 
             if found:
