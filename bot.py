@@ -3090,6 +3090,21 @@ def _get_funding_rates():
     except:
         return []
 
+
+def _get_oi_change(symbol: str) -> float:
+    """Изменение открытого интереса (заглушка — Binance недоступен на Railway)"""
+    return 0.0
+
+
+def _get_liquidations(symbol: str) -> dict:
+    """Ликвидации (заглушка — Binance недоступен на Railway)"""
+    return {"long": 0, "short": 0}
+
+
+def _get_large_trades(symbol: str) -> list:
+    """Крупные сделки (заглушка — Binance недоступен на Railway)"""
+    return []
+
 async def whale_monitor(bot: Bot):
     """
     Запускается каждые 15 минут.
