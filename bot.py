@@ -1,4 +1,5 @@
 
+# v42g
 def get_usdt_dominance():
     try:
         r = __import__("requests").get("https://api.coingecko.com/api/v3/global", timeout=8)
