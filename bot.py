@@ -1712,7 +1712,8 @@ def overview_kb():
         [InlineKeyboardButton("  ",          callback_data="top_spot"),
          InlineKeyboardButton("  ",          callback_data="top_long")],
         [InlineKeyboardButton("  ",          callback_data="top_short"),
-         InlineKeyboardButton("  ",     callback_data="menu_full")],
+          InlineKeyboardButton("\U0001f680 x100 Сканер",    callback_data="x100_scan")],
+        [InlineKeyboardButton("\U0001f4cb Полный анализ",  callback_data="menu_full")],
         [InlineKeyboardButton(" BTC Chart",          url=tv_link("BTC")),
          InlineKeyboardButton(" TOTAL",             url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
         [InlineKeyboardButton("  ",      callback_data="show_menu")],
@@ -2316,6 +2317,21 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             message = q.message
         await cmd_top_short(FakeUpdate(), ctx)
 
+    elif data == "x100_scan":
+        try: await q.message.delete()
+        except: pass
+        msg_x = await ctx.bot.send_message(q.message.chat_id, "🚀 Запускаю x100 сканер... ~15 сек")
+        class FakeX100:
+            class effective_chat:
+                id = q.message.chat_id
+            class message:
+                chat_id = q.message.chat_id
+                @staticmethod
+                async def reply_text(text, **kw):
+                    try: return await msg_x.edit_text(text, **kw)
+                    except: return await ctx.bot.send_message(q.message.chat_id, text, **kw)
+        await cmd_x100_scanner(FakeX100(), ctx)
+
     elif data == "menu_full":
         await q.edit_message_text(
             " *  *\n"
@@ -2701,26 +2717,30 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     r2 = _r.get(
                         "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
                         headers={"X-CMC_PRO_API_KEY": cmc_key},
-                        params={"limit": 30, "convert": "USDT"},
-                        timeout=10
+                        params={"limit": 100, "convert": "USDT"},
+                        timeout=12
                     )
                     coins_list = r2.json().get("data", [])
-                    alt_coins = [c for c in coins_list if c["symbol"] not in ("BTC","ETH","USDT","USDC","BNB")][:20]
-                    for c in alt_coins:
-                        ch = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
-                        p  = c["quote"]["USDT"].get("price", 0) or 0
-                        s  = c["symbol"]
+                    stables = {"USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDP","FRAX","LUSD","GUSD","USDD","PYUSD"}
+                    alt_coins_full = [c for c in coins_list if c["symbol"] not in stables]
+                    for c in alt_coins_full:
+                        ch  = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
+                        ch7 = c["quote"]["USDT"].get("percent_change_7d", 0) or 0
+                        p   = c["quote"]["USDT"].get("price", 0) or 0
+                        s   = c["symbol"]
                         if ch > 0: bull_count += 1
-                        if ch >= 3:  gainers.append((s, p, ch))
-                        if ch <= -3: losers.append((s, p, ch))
-                    bull_pct = round(bull_count / max(len(alt_coins), 1) * 100)
+                        gainers.append((s, p, ch, ch7))
+                        losers.append((s, p, ch, ch7))
+                    bull_pct = round(bull_count / max(len(alt_coins_full), 1) * 100)
                 except:
                     bull_pct = 50
             else:
                 bull_pct = 50
 
             gainers.sort(key=lambda x: x[2], reverse=True)
+            gainers = gainers[:10]
             losers.sort(key=lambda x: x[2])
+            losers = losers[:10]
 
             # --- Определяем тренды ---
             if btc_ch > 2 and btc_7d > 0:
@@ -2838,22 +2858,24 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     "",
                     SEP,
                     "",
-                    "\U0001f7e2 *ТОП РОСТА 24ч:*",
+                    "\U0001f7e2 *ТОП РОСТА 24ч (топ-100):*",
                     "",
                 ]
-                for s, p, ch in gainers[:5]:
-                    lines_out.append(f"  \u2b06\ufe0f *{s}*  {fmt_p(p)}   *+{ch:.1f}%*")
+                for i, (s, p, ch, ch7) in enumerate(gainers, 1):
+                    ch7s = f" | 7д: +{ch7:.1f}%" if ch7 > 0 else (f" | 7д: {ch7:.1f}%" if ch7 < 0 else "")
+                    lines_out.append(f"  {i}. \u2b06\ufe0f *{s}*  {fmt_p(p)}   *+{ch:.1f}%*{ch7s}")
 
             if losers:
                 lines_out += [
                     "",
                     SEP,
                     "",
-                    "\U0001f534 *ТОП ПАДЕНИЯ 24ч:*",
+                    "\U0001f534 *ТОП ПАДЕНИЯ 24ч (топ-100):*",
                     "",
                 ]
-                for s, p, ch in losers[:5]:
-                    lines_out.append(f"  \u2b07\ufe0f *{s}*  {fmt_p(p)}   *{ch:.1f}%*")
+                for i, (s, p, ch, ch7) in enumerate(losers, 1):
+                    ch7s = f" | 7д: {ch7:.1f}%" if ch7 != 0 else ""
+                    lines_out.append(f"  {i}. \u2b07\ufe0f *{s}*  {fmt_p(p)}   *{ch:.1f}%*{ch7s}")
 
             lines_out += [
                 "",
@@ -7191,6 +7213,120 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
 # BACKWARD COMPAT alias
 _old_build_signal_post = _build_signal_post
 
+# ─────────────────────────────────────────────
+# 🚀 x100 SCANNER
+# ─────────────────────────────────────────────
+async def cmd_x100_scanner(update, ctx):
+    msg = update.message
+    try:
+        await msg.reply_text("🚀 Сканирую топ-500 монет... ~15 сек", parse_mode="Markdown")
+    except:
+        pass
+    try:
+        import requests as _r, os as _os
+        cmc_key = _os.environ.get("CMC_API_KEY", "")
+        r = _r.get(
+            "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
+            headers={"X-CMC_PRO_API_KEY": cmc_key},
+            params={"limit": 500, "convert": "USDT"},
+            timeout=15
+        )
+        all_coins = r.json().get("data", [])
+        stables = {"USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDP","FRAX","LUSD","GUSD","USDD","PYUSD","WBTC","WETH","CBBTC"}
+        candidates = []
+        for c in all_coins:
+            sym = c.get("symbol", "")
+            if sym in stables: continue
+            q = c.get("quote", {}).get("USDT", {})
+            price = q.get("price", 0) or 0
+            mcap  = q.get("market_cap", 0) or 0
+            vol24 = q.get("volume_24h", 0) or 0
+            ch24  = q.get("percent_change_24h", 0) or 0
+            ch7d  = q.get("percent_change_7d", 0) or 0
+            ch30d = q.get("percent_change_30d", 0) or 0
+            slug  = c.get("slug", sym.lower())
+            name  = c.get("name", sym)
+            if price <= 0 or mcap <= 0: continue
+            score = 0
+            reasons = []
+            if mcap < 10_000_000:    score += 4; reasons.append("🔥 Микрокап <$10M")
+            elif mcap < 50_000_000:  score += 3; reasons.append("💎 Кап <$50M")
+            elif mcap < 200_000_000: score += 2; reasons.append("📊 Кап <$200M")
+            elif mcap < 500_000_000: score += 1; reasons.append("Кап <$500M")
+            vol_ratio = vol24 / mcap if mcap > 0 else 0
+            if vol_ratio > 1.0:   score += 3; reasons.append("⚡ Объём >MCap")
+            elif vol_ratio > 0.5: score += 2; reasons.append("📈 Объём >50% MCap")
+            elif vol_ratio > 0.2: score += 1; reasons.append("Объём >20% MCap")
+            if ch24 > 20:   score += 3; reasons.append(f"🚀 +{ch24:.0f}% 24ч")
+            elif ch24 > 10: score += 2; reasons.append(f"📈 +{ch24:.0f}% 24ч")
+            elif ch24 > 5:  score += 1; reasons.append(f"+{ch24:.0f}% 24ч")
+            elif ch24 < -15: score -= 1
+            if ch7d > 30:   score += 2; reasons.append(f"📊 +{ch7d:.0f}% 7д")
+            elif ch7d > 10: score += 1; reasons.append(f"+{ch7d:.0f}% 7д")
+            if ch30d > 50 and ch7d < -10: score += 2; reasons.append("♻️ Откат после роста")
+            if 0 < price < 0.01: score += 1; reasons.append("💰 <$0.01")
+            elif price < 0.1:    score += 1; reasons.append("💰 <$0.10")
+            if score >= 5 and mcap < 500_000_000:
+                def fmt_mcap(m):
+                    if m >= 1e9: return f"${m/1e9:.2f}B"
+                    if m >= 1e6: return f"${m/1e6:.1f}M"
+                    return f"${m/1e3:.0f}K"
+                def fmt_p2(v):
+                    if v >= 1000: return f"${v:,.0f}"
+                    if v >= 1:    return f"${v:,.3f}"
+                    if v >= 0.01: return f"${v:.4f}"
+                    return f"${v:.6f}"
+                candidates.append({
+                    "sym": sym, "name": name, "slug": slug,
+                    "price": fmt_p2(price), "mcap": fmt_mcap(mcap),
+                    "vol_ratio": round(vol_ratio * 100, 1),
+                    "ch24": ch24, "ch7d": ch7d, "ch30d": ch30d,
+                    "score": score, "reasons": reasons[:3],
+                })
+        candidates.sort(key=lambda x: (-x["score"]))
+        top = candidates[:15]
+        SEP = "➖➖➖➖➖➖➖➖➖➖"
+        def sign(v): return f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%"
+        lines = [
+            "🚀 *BEST TRADE — x100 СКАНЕР*",
+            f"🕐 _{now_utc3()}_",
+            f"📊 _Проанализировано: {len(all_coins)} монет_",
+            SEP,
+            "",
+            "⚠️ *ДИСКЛЕЙМЕР:* x100 — высокий риск! 0.5–1% депозита",
+            "",
+            SEP,
+        ]
+        if not top:
+            lines.append("\n❌ Кандидатов не найдено")
+        else:
+            lines.append(f"\n💎 *Найдено: {len(top)} кандидатов*\n")
+            for i, c in enumerate(top, 1):
+                grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📊")
+                lines += [
+                    SEP,
+                    f"{grade} *#{i} {c['sym']}* — {c['name']}",
+                    f"💵 Цена: *{c['price']}*  |  MCap: *{c['mcap']}*",
+                    f"📈 24ч: *{sign(c['ch24'])}* | 7д: *{sign(c['ch7d'])}* | 30д: *{sign(c['ch30d'])}*",
+                    f"⚡ {' · '.join(c['reasons'])}",
+                    f"🎯 Скор: *{c['score']}/12*",
+                ]
+        lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data="x100_scan"),
+             InlineKeyboardButton("🏠 Меню",    callback_data="show_menu")],
+        ])
+        text = "\n".join(lines)
+        if len(text) > 4090: text = text[:4087] + "..."
+        try:
+            await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+        except:
+            await msg.reply_text(text.replace("*","").replace("_",""), reply_markup=kb)
+    except Exception as e:
+        log.error(f"x100 error: {e}")
+        try: await msg.reply_text(f"❌ Ошибка: {e}")
+        except: pass
+
 async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/spot   :     """
     msg = await update.message.reply_text(
@@ -8231,6 +8367,7 @@ def main():
     app.add_handler(CommandHandler("rockets",   cmd_rockets))
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("precision", cmd_precision))
+    app.add_handler(CommandHandler("x100",      cmd_x100_scanner))
     app.add_handler(CallbackQueryHandler(callback_handler))
 
     scheduler = AsyncIOScheduler(timezone=TZ)
