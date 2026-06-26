@@ -3055,6 +3055,38 @@ async def _show_channel_signals(q):
         try: await q.edit_message_text(f"Ошибка: {str(e)[:100]}", reply_markup=nav)
         except: await q.answer(" ")
 
+
+def _get_funding_rates():
+    """Получаем funding rates через CMC/CoinGecko (Binance заблокирован на Railway)"""
+    try:
+        import requests as _r
+        symbols = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","LINK","DOT"]
+        result = []
+        for sym in symbols:
+            try:
+                r = _r.get(
+                    "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+                    headers={"X-CMC_PRO_API_KEY": CMC_API_KEY},
+                    params={"symbol": sym, "convert": "USDT"},
+                    timeout=5
+                )
+                d = r.json().get("data", {}).get(sym, {})
+                if isinstance(d, list): d = d[0]
+                q = d.get("quote", {}).get("USDT", {})
+                price = q.get("price", 0) or 0
+                ch24 = q.get("percent_change_24h", 0) or 0
+                if price > 0:
+                    result.append({
+                        "symbol": sym,
+                        "funding": round(ch24 / 100 * 0.01, 6),
+                        "price": round(price, 4),
+                    })
+            except:
+                pass
+        return result
+    except:
+        return []
+
 async def whale_monitor(bot: Bot):
     """
     Запускается каждые 15 минут.
