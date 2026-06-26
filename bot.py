@@ -7554,18 +7554,32 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     list_lines += [SEP, "", "📈 *Лучшие лонг-кандидаты:*", f"⏰ {kz_line}", ""]
 
     for i, (c, a) in enumerate(top_long, 1):
-        sym    = c["symbol"]
-        tv     = tv_link(sym)
-        r      = a["rocket"]
-        grade  = "A+" if r >= 90 else ("A" if r >= 75 else ("B" if r >= 60 else "C"))
-        rsi_e  = "🟢" if a["rsi_4h"] < 30 else ("🟡" if a["rsi_4h"] < 60 else "🔴")
+        sym     = c["symbol"]
+        tv      = tv_link(sym)
+        r       = a["rocket"]
+        grade   = "A+" if r >= 90 else ("A" if r >= 75 else ("B" if r >= 60 else "C"))
+        rsi_e   = "🟢" if a["rsi_4h"] < 30 else ("🟡" if a["rsi_4h"] < 60 else "🔴")
         trend_e = "📈" if a.get("trend_4h") == "bullish" else ("📉" if a.get("trend_4h") == "bearish" else "➡️")
-        score_e = "🚀" if r >= 80 else ("💪" if r >= 65 else "✅")
+        score_e = "🔥" if r >= 80 else ("🦅" if r >= 65 else "✅")
+        p   = a.get("price", 0) or 0
+        tp1 = round(p * 1.25, 6)
+        tp2 = round(p * 1.60, 6)
+        tp3 = round(p * 2.20, 6)
+        sl  = round(p * 0.92, 6)
         list_lines += [
-            f"*{i}. [{sym}/USDT]({tv})*  {score_e}",
-            f"  💰 `{fp(a['price'])}`  •  Скор `{r}/100`  •  *{grade}*",
-            f"  RSI {rsi_e} `{a['rsi_4h']:.0f}`  •  Тренд {trend_e}",
-            "",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"{score_e} #{i}  {sym}/USDT",
+            f"Скор: {r}/100  |  Качество: {grade}",
+            f"",
+            f"💰 Цена:      {fp(a['price'])}",
+            f"📊 RSI (4H):  {rsi_e} {a['rsi_4h']:.0f}   |   Тренд: {trend_e}",
+            f"",
+            f"🎯 Цели (LONG):",
+            f"  TP1:  ${tp1}   (+25%)",
+            f"  TP2:  ${tp2}   (+60%)",
+            f"  TP3:  ${tp3}   (+120%)",
+            f"  SL:   ${sl}    (-8%)",
+            f"",
         ]
     list_lines += [SEP, "📋 _Детальный анализ каждой монеты ниже_ ⬇️"]
 
@@ -7648,20 +7662,32 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "📉 *Лучшие шорт-кандидаты:*", "",
     ]
     for i, (c, a) in enumerate(top_short, 1):
-        sym   = c["symbol"]
-        tv    = tv_link(sym)
-        rsi_e = "🔴" if a["rsi_4h"] > 70 else ("🟡" if a["rsi_4h"] > 45 else "🟢")
+        sym     = c["symbol"]
+        tv      = tv_link(sym)
+        r       = a["rocket"]
+        grade   = "A+" if r >= 90 else ("A" if r >= 75 else ("B" if r >= 60 else "C"))
+        rsi_e   = "🔴" if a["rsi_4h"] > 70 else ("🟡" if a["rsi_4h"] > 50 else "🟢")
         trend_e = "📉" if a.get("trend_4h") == "bearish" else ("📈" if a.get("trend_4h") == "bullish" else "➡️")
-        ema_e = "🔴 Выше EMA200" if a.get("above_ema200") else "🟢 Ниже EMA200"
-        r     = a["rocket"]
-        grade = "A+" if r >= 90 else ("A" if r >= 75 else ("B" if r >= 60 else "C"))
-        score_e = "🚨" if r >= 80 else ("💪" if r >= 65 else "✅")
+        score_e = "🔥" if r >= 80 else ("🦅" if r >= 65 else "✅")
+        p   = a.get("price", 0) or 0
+        tp1 = round(p * 0.85, 6)
+        tp2 = round(p * 0.70, 6)
+        tp3 = round(p * 0.55, 6)
+        sl  = round(p * 1.08, 6)
         list_lines += [
-            f"*{i}. [{sym}/USDT]({tv})*  {score_e}",
-            f"  💰 `{fp(a['price'])}`  •  Скор `{r}/100`  •  *{grade}*",
-            f"  RSI {rsi_e} `{a['rsi_4h']:.0f}`  •  Тренд {trend_e}",
-            f"  {ema_e}",
-            "",
+            f"━━━━━━━━━━━━━━━━━━━━",
+            f"{score_e} #{i}  {sym}/USDT",
+            f"Скор: {r}/100  |  Качество: {grade}",
+            f"",
+            f"💰 Цена:      {fp(a['price'])}",
+            f"📊 RSI (4H):  {rsi_e} {a['rsi_4h']:.0f}   |   Тренд: {trend_e}",
+            f"",
+            f"🎯 Цели (SHORT):",
+            f"  TP1:  ${tp1}   (-15%)",
+            f"  TP2:  ${tp2}   (-30%)",
+            f"  TP3:  ${tp3}   (-45%)",
+            f"  SL:   ${sl}    (+8%)",
+            f"",
         ]
     list_lines += [SEP, "📋 _Детальный анализ каждой монеты ниже_ ⬇️"]
 
