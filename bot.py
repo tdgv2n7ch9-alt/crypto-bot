@@ -1807,18 +1807,19 @@ async def check_entry_zones(bot, chat_ids, coins):
 # 
 # 
 def main_kb():
-    """Главное меню BEST TRADE — премиум дизайн"""
+    """Главное меню BEST TRADE v42"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Обзор рынка",      callback_data="market_overview"),
-         InlineKeyboardButton("📈 Тренд анализ",     callback_data="trend_analysis")],
-        [InlineKeyboardButton("⭐️ ТОП СПОТ",         callback_data="top_spot"),
-         InlineKeyboardButton("🟢 ТОП ЛОНГ",         callback_data="top_long")],
-        [InlineKeyboardButton("🔴 ТОП ШОРТ",         callback_data="top_short"),
-         InlineKeyboardButton("🔍 Полный анализ",    callback_data="menu_full")],
-        [InlineKeyboardButton("💼 Монеты в работе",  callback_data="top_trades"),
-         InlineKeyboardButton("📡 Сигналы каналов",  callback_data="channel_signals")],
-        [InlineKeyboardButton("🐋 Whale Monitor",    callback_data="whale_status"),
-         InlineKeyboardButton("🔗 On-Chain",         callback_data="onchain_info")],
+        [InlineKeyboardButton("\U0001f4ca Обзор рынка",    callback_data="market_overview"),
+         InlineKeyboardButton("\U0001f4c8 Тренд анализ",   callback_data="trend_analysis")],
+        [InlineKeyboardButton("\u2b50 ТОП СПОТ",           callback_data="top_spot"),
+         InlineKeyboardButton("\U0001f7e2 ТОП ЛОНГ",       callback_data="top_long")],
+        [InlineKeyboardButton("\U0001f534 ТОП ШОРТ",       callback_data="top_short"),
+         InlineKeyboardButton("\U0001f680 x100 Сканер",    callback_data="x100_scan")],
+        [InlineKeyboardButton("\U0001f4bc Монеты в работе",callback_data="top_trades"),
+         InlineKeyboardButton("\U0001f4e1 Сигналы каналов",callback_data="channel_signals")],
+        [InlineKeyboardButton("\U0001f433 Whale Monitor",  callback_data="whale_status"),
+         InlineKeyboardButton("\U0001f517 On-Chain",       callback_data="onchain_info")],
+        [InlineKeyboardButton("\U0001f4cb Полный анализ",  callback_data="menu_full")],
     ])
 
 def back_kb():
