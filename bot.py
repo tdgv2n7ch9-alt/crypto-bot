@@ -3091,6 +3091,11 @@ def _get_funding_rates():
         return []
 
 
+
+def _get_ls_ratio(symbol: str) -> float:
+    """Long/Short ratio (заглушка — Binance недоступен на Railway)"""
+    return 1.0
+
 def _get_oi_change(symbol: str) -> float:
     """Изменение открытого интереса (заглушка — Binance недоступен на Railway)"""
     return 0.0
