@@ -2621,8 +2621,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "onchain_info":
         nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton(" ", callback_data="onchain_info"),
-             InlineKeyboardButton(" ",     callback_data="show_menu")],
+            [InlineKeyboardButton("🔄 Обновить", callback_data="onchain_info"),
+             InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
         ])
         try:
             await q.edit_message_text(
