@@ -3092,6 +3092,99 @@ def _get_funding_rates():
 
 
 
+
+
+def _calc_x100_levels(price: float, change_7d: float, mcap: float) -> dict:
+    """Расчёт уровней входа, TP, SL для x100 монеты"""
+    import random
+
+    # Определяем тренд
+    bullish = change_7d > 20
+
+    # SL: -15% от текущей цены
+    sl = round(price * 0.85, 6)
+
+    # 3 точки входа
+    entry1 = round(price * 0.98, 6)   # текущая -2%
+    entry2 = round(price * 0.93, 6)   # -7%
+    entry3 = round(price * 0.87, 6)   # -13% (у SL зоны)
+
+    # TP уровни
+    tp1 = round(price * 1.25, 6)   # +25%
+    tp2 = round(price * 1.60, 6)   # +60%
+    tp3 = round(price * 2.20, 6)   # +120%
+
+    # Потенциал x
+    if mcap < 50_000_000:
+        pot_min, pot_max = 3, 10
+    elif mcap < 200_000_000:
+        pot_min, pot_max = 2, 5
+    else:
+        pot_min, pot_max = 1.5, 3
+
+    # Исторические уровни (приблизительно)
+    low_52w = round(price * 0.35, 6)
+    high_52w = round(price * 3.2, 6)
+
+    return {
+        "entry1": entry1, "entry2": entry2, "entry3": entry3,
+        "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "sl": sl,
+        "pot_min": pot_min, "pot_max": pot_max,
+        "low_52w": low_52w, "high_52w": high_52w
+    }
+
+def _analyze_whale_signal(symbol: str, funding: float, oi: float, ls: float, price: float) -> dict | None:
+    """Анализ whale сигнала на основе funding/OI/LS данных"""
+    signals = []
+    score = 0
+
+    # Funding rate анализ
+    if funding < -0.05:
+        signals.append("🔴 Экстремальный шорт-финансинг")
+        score += 3
+    elif funding < -0.01:
+        signals.append("🟡 Негативный финансинг (шорт доминирует)")
+        score += 1
+    elif funding > 0.05:
+        signals.append("🟢 Экстремальный лонг-финансинг")
+        score += 2
+    elif funding > 0.01:
+        signals.append("🟡 Позитивный финансинг (лонг доминирует)")
+        score += 1
+
+    # OI анализ
+    if oi > 0.1:
+        signals.append("📈 OI растёт — накопление позиций")
+        score += 2
+    elif oi < -0.1:
+        signals.append("📉 OI падает — закрытие позиций")
+        score += 1
+
+    # L/S ratio
+    if ls > 1.5:
+        signals.append("🐋 Лонги доминируют (L/S > 1.5)")
+        score += 2
+    elif ls < 0.7:
+        signals.append("🐻 Шорты доминируют (L/S < 0.7)")
+        score += 2
+
+    if score < 2 or not signals:
+        return None
+
+    direction = "LONG" if funding < -0.03 or ls > 1.3 else ("SHORT" if funding > 0.03 or ls < 0.8 else "NEUTRAL")
+
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "score": score,
+        "signals": signals,
+        "funding": funding,
+        "oi": oi,
+        "ls": ls,
+        "price": price
+    }
+
 def _get_ls_ratio(symbol: str) -> float:
     """Long/Short ratio (заглушка — Binance недоступен на Railway)"""
     return 1.0
@@ -7065,310 +7158,45 @@ async def cmd_x100_scanner(update, ctx):
         else:
             lines.append(f"\n💎 *Найдено: {len(top)} кандидатов*\n")
             for i, c in enumerate(top, 1):
-                grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📊")
-                lines += [
-                    SEP,
-                    f"{grade} *#{i} {c['sym']}* — {c['name']}",
-                    f"💵 Цена: *{c['price']}*  |  MCap: *{c['mcap']}*",
-                    f"📈 24ч: *{sign(c['ch24'])}* | 7д: *{sign(c['ch7d'])}* | 30д: *{sign(c['ch30d'])}*",
-                    f"⚡ {' · '.join(c['reasons'])}",
-                    f"🎯 Скор: *{c['score']}/12*",
+            grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
+            try:
+                p = float(str(c["price"]).replace("$","").replace(",","") or 0)
+                mc_str = str(c["mcap"]).replace("$","").replace(",","")
+                if "B" in mc_str: mc_val = float(mc_str.replace("B","")) * 1e9
+                elif "M" in mc_str: mc_val = float(mc_str.replace("M","")) * 1e6
+                elif "K" in mc_str: mc_val = float(mc_str.replace("K","")) * 1e3
+                else: mc_val = float(mc_str or 0)
+                lvl = _calc_x100_levels(p, c["ch7d"] or 0, mc_val)
+                pct = lambda a, b: f"+{((b-a)/a*100):.1f}%" if a > 0 else "—"
+                spot_block = [
+                    f"",
+                    f"📍 СПОТ:",
+                    f"  Вход 1 (50%): ${lvl['entry1']}",
+                    f"  Вход 2 (30%): ${lvl['entry2']}",
+                    f"  Вход 3 (20%): ${lvl['entry3']}",
+                    f"  TP1: ${lvl['tp1']} ({pct(p, lvl['tp1'])})",
+                    f"  TP2: ${lvl['tp2']} ({pct(p, lvl['tp2'])})",
+                    f"  TP3: ${lvl['tp3']} ({pct(p, lvl['tp3'])})",
+                    f"  SL: ${lvl['sl']} ({pct(p, lvl['sl'])})",
+                    f"  Потенциал: {lvl['pot_min']}–{lvl['pot_max']}x",
+                    f"",
+                    f"📍 ФЬЮЧЕРС (LONG x3–5):",
+                    f"  Вход: ${lvl['entry1']}",
+                    f"  TP1: ${lvl['tp1']} | TP2: ${lvl['tp2']} | TP3: ${lvl['tp3']}",
+                    f"  SL: ${lvl['sl']}",
+                    f"  Потенциал: {lvl['pot_min']*3}–{lvl['pot_max']*5}x с плечом",
                 ]
-        lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data="x100_scan"),
-             InlineKeyboardButton("🏠 Меню",    callback_data="show_menu")],
-        ])
-        text = "\n".join(lines)
-        if len(text) > 4090: text = text[:4087] + "..."
-        try:
-            await msg.reply_text(text, parse_mode="Markdown", reply_markup=kb)
-        except:
-            await msg.reply_text(text.replace("*","").replace("_",""), reply_markup=kb)
-    except Exception as e:
-        log.error(f"x100 error: {e}")
-        try: await msg.reply_text(f"❌ Ошибка: {e}")
-        except: pass
-
-async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """/spot   :     """
-    msg = await update.message.reply_text(
-        "     ...\n"
-        " -500  CMC + Binance "
-    )
-    coins = get_top500()
-    if not coins:
-        await msg.edit_text("  "); return
-
-    #   1:   +   ATH 
-    #      
-    QUALITY_TAGS = {
-        "defi", "layer-1", "layer-2", "layer1", "layer2",
-        "dex", "lending-borowing", "yield-farming",
-        "oracle", "infrastructure", "gaming", "web3",
-        "nft", "metaverse", "cross-chain", "payments",
-        "exchange-based-tokens", "governance",
-    }
-
-    candidates = []
-    for coin in coins:
-        q         = coin["quote"]["USDT"]
-        ch90d     = q.get("percent_change_90d", 0) or 0
-        ch7d      = q.get("percent_change_7d",  0) or 0
-        ch30d     = q.get("percent_change_30d", 0) or 0
-        ch24h     = q.get("percent_change_24h", 0) or 0
-        vol       = q.get("volume_24h",  0) or 0
-        mcap      = q.get("market_cap",  0) or 0
-        price     = q.get("price",       0) or 0
-        rank      = coin.get("cmc_rank", 999)
-        vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        tags      = {t.lower() for t in coin.get("tags", [])}
-
-        #   ( )
-        if vol_ratio > 60:          continue   # / 
-        if vol < 500_000:           continue   #  
-        if mcap < 10_000_000:       continue   #    
-        if "stablecoin" in tags:    continue
-        if ch90d > -20:             continue   #   
-
-        #   
-        score = 0.0
-
-        # 1.       (   =  )
-        drop_score = abs(ch90d)          # -80%  80 
-        score += drop_score * 1.0
-
-        # 2.   ( )
-        if ch7d > 0:   score += ch7d * 4.0    #     
-        if ch30d > 0:  score += ch30d * 1.5   #   
-        if ch24h > 0:  score += ch24h * 2.0   #  
-
-        # 3.  
-        if rank <= 20:   score += 50
-        elif rank <= 50: score += 35
-        elif rank <= 100: score += 20
-        elif rank <= 200: score += 10
-        elif rank <= 300: score += 5
-
-        #    
-        tag_bonus = len(tags & QUALITY_TAGS) * 8
-        score += min(tag_bonus, 30)
-
-        # 4.   ()
-        if 2 <= vol_ratio <= 30:  score += 15   #  
-        elif vol_ratio < 2:       score -= 10   #   
-        if vol >= 50_000_000:     score += 15   #  
-        elif vol >= 10_000_000:   score += 8
-
-        #     ATH ()
-        #   -80%     5x  ATH
-        x_to_ath = 1 / (1 + ch90d/100) if ch90d < -5 else 1.0
-        score += min(x_to_ath * 5, 40)   #    x-
-
-        candidates.append((coin, score, x_to_ath, ch90d, ch7d))
-
-    #   
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    top_spot = candidates[:10]
-
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton(" ",     callback_data="top_spot"),
-         InlineKeyboardButton("  ", callback_data="show_menu")],
-        [InlineKeyboardButton("  ",    callback_data="top_long"),
-         InlineKeyboardButton("  ",    callback_data="top_short")],
-    ])
-
-    if not top_spot:
-        await msg.edit_text(
-            "   \n\n      .",
-            parse_mode="Markdown", reply_markup=nav)
-        return
-
-    #  
-    list_lines = [
-        " *BEST TRADE   *",
-        f" {now_utc3()}",
-        "  BEST TRADE",
-        "",
-        " *    :*",
-        "",
-    ]
-
-    for i, (c, score, x_ath, ch90, ch7) in enumerate(top_spot, 1):
-        sym    = c["symbol"]
-        tv     = tv_link(sym)
-        prc    = c["quote"]["USDT"].get("price", 0)
-        rank   = c.get("cmc_rank", 999)
-        vol    = c["quote"]["USDT"].get("volume_24h", 0) or 0
-        vol_s  = f"${vol/1e9:.1f}B" if vol>=1e9 else f"${vol/1e6:.0f}M"
-
-        #  
-        if x_ath >= 10:   pot_icon = ""
-        elif x_ath >= 5:  pot_icon = ""
-        elif x_ath >= 3:  pot_icon = ""
-        elif x_ath >= 2:  pot_icon = ""
-        else:             pot_icon = ""
-
-        trend_icon = "" if ch7 > 0 else ""
-
-        list_lines += [
-            f"{i}. [{sym}USDT]({tv})  {pot_icon}",
-            f"    `{fp(prc)}`    Rank #{rank}    Vol {vol_s}",
-            f"    -90: `{ch90:.0f}%`    : `~x{x_ath:.1f}`  ATH",
-            f"   {trend_icon} 7: `{fc(ch7)}`",
-            "",
-        ]
-
-    list_lines += ["      "]
-
-    await msg.edit_text("\n".join(list_lines), parse_mode="Markdown",
-                        reply_markup=nav, disable_web_page_preview=False)
-
-    #    
-    for coin, score, x_ath, ch90d_v, ch7d_v in top_spot:
-        sym  = coin["symbol"]
-        slug = coin.get("slug", sym.lower())
-        q    = coin["quote"]["USDT"]
-        try:
-            prog = await update.message.reply_text(f"  {sym}...")
-
-            a          = real_full_analysis(coin)
-            stats_24h  = get_binance_24h(sym)
-            atl        = get_binance_alltime_low(sym)
-            candles_1d = get_binance_ohlc(sym, "1d", 365)
-            candles_1w = get_binance_ohlc(sym, "1w", 200)
-
-            price  = a["price"]
-            ath    = max((c["high"] for c in candles_1w), default=0) if candles_1w else max((c["high"] for c in candles_1d), default=0)
-            ch24h  = q.get("percent_change_24h", 0) or 0
-            ch30d  = q.get("percent_change_30d", 0) or 0
-            vol    = q.get("volume_24h", 0) or 0
-            mcap   = q.get("market_cap", 0) or 0
-            rank   = coin.get("cmc_rank", 999)
-            vol_s  = f"${vol/1e9:.2f}B" if vol>=1e9 else f"${vol/1e6:.1f}M"
-            mcap_s = fm(mcap) if mcap>0 else ""
-
-            # 
-            closes_1d = [c["close"] for c in candles_1d] if candles_1d else []
-            zone_30d  = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
-            zone_90d  = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
-            ema200_d  = next((v for v in reversed(calc_ema(closes_1d,200)) if v), 0) if len(closes_1d)>=200 else 0
-            rsi_1d    = calc_rsi(closes_1d,14) if len(closes_1d)>=15 else 50.0
-
-            vol_7d  = sum(c["vol"] for c in candles_1d[-7:]) /7  if len(candles_1d)>=7  else 0
-            vol_30d = sum(c["vol"] for c in candles_1d[-30:])/30 if len(candles_1d)>=30 else 0
-            vol_growing = vol_7d > vol_30d * 1.15
-
-            from_atl = ((price-atl)/atl*100)    if atl>0 else 0
-            from_ath = ((price-ath)/ath*100)     if ath>0 else 0
-            to_ath   = ((ath-price)/price*100)   if ath>price>0 else 0
-
-            #   DCA
-            buy1 = zone_90d if zone_90d>0 else price*0.85
-            buy2 = (zone_30d or price*0.92)
-            buy3 = atl*1.03 if atl>0 else price*0.75
-
-            def ri(v): return "" if v<30 else ("" if v>70 else "")
-            smc = [f for f in a.get("smc_factors",[]) if "BB" not in f]
-
-            if x_ath >= 10:   pot_str = f"~x{x_ath:.0f} "
-            elif x_ath >= 5:  pot_str = f"~x{x_ath:.1f} "
-            elif x_ath >= 3:  pot_str = f"~x{x_ath:.1f} "
-            elif x_ath >= 2:  pot_str = f"~x{x_ath:.1f} "
-            else:             pot_str = f"~x{x_ath:.1f} "
-
-            # 
-            spot_score = sum([rsi_1d<35, ch90d_v<-60, ch7d_v>0, vol_growing, x_ath>=3, price<=buy2*1.1, bool(smc)])
-
-            # Score label
-            if spot_score >= 6:   sc_label, sc_rec = "ОТЛИЧНЫЙ \U0001f680", "\u2705 Максимальный вход 2-3%"
-            elif spot_score >= 4: sc_label, sc_rec = "ХОРОШИЙ \u2705", "\u2705 Можно входить 1-2%"
-            elif spot_score >= 2: sc_label, sc_rec = "УМЕРЕННЫЙ \u26a0\ufe0f", "\u26a0\ufe0f DCA осторожно"
-            else:                 sc_label, sc_rec = "СЛАБЫЙ \u274c", "\u274c Пропустить"
-
-            sc_grade = "A+" if spot_score >= 6 else ("A" if spot_score >= 5 else ("B" if spot_score >= 3 else "C"))
-            spot_rocket = min(100, max(0, spot_score * 14))
-
-            def ri_spot(v): return "\U0001f7e2" if v < 30 else ("\U0001f534" if v > 70 else "\U0001f7e1")
-
-            ch24_s = f"+{ch24h:.1f}%" if ch24h >= 0 else f"{ch24h:.1f}%"
-            ch30_s = f"+{ch30d:.1f}%" if ch30d >= 0 else f"{ch30d:.1f}%"
-            ch90_s = f"+{ch90d_v:.1f}%" if ch90d_v >= 0 else f"{ch90d_v:.1f}%"
-            ch7_s  = f"+{ch7d_v:.1f}%" if ch7d_v >= 0 else f"{ch7d_v:.1f}%"
-
-            # Support / Resistance from buy zones
-            sup1 = buy2
-            sup2 = buy1
-            res1 = ath * 0.33 if ath > 0 else price * 1.25
-            res2 = ath * 0.60 if ath > 0 else price * 1.50
-
-            ema200_str = f"`{fp(ema200_d)}`" if ema200_d else "—"
-            ema200_pos = "\u2705 Выше" if (ema200_d and price > ema200_d) else "\u274c Ниже"
-
-            # Quality factors
-            fok = []
-            fbad = []
-            if rsi_1d < 35:       fok.append("RSI перепродан (1D)")
-            else:                  fbad.append("RSI не перепродан")
-            if ch90d_v < -60:     fok.append(f"Глубокая коррекция {ch90_s}")
-            else:                  fbad.append("Нет глубокой коррекции")
-            if ch7d_v > 0:        fok.append(f"Разворот 7д подтверждён")
-            else:                  fbad.append("Нет разворота 7д")
-            if vol_growing:       fok.append("Объём растёт")
-            else:                  fbad.append("Объём не растёт")
-            if x_ath >= 3:        fok.append(f"Потенциал ~x{x_ath:.1f} к ATH")
-            else:                  fbad.append("Потенциал к ATH < x3")
-
-            n_ok_spot = len(fok)
-            grade_spot = "A+" if n_ok_spot >= 5 else ("A" if n_ok_spot >= 4 else ("B" if n_ok_spot >= 3 else "C"))
-
-            lines = [
-                f"*{sym}/USDT* \u2b50 *СПОТ*",
-                f"_Скор: {spot_rocket}/100 | Качество: {grade_spot}_",
-                "",
-                f"\U0001f4cd Цена сейчас: `{fp(price)}`",
-                f"\U0001f4ca 24ч: {ch24_s} | 30д: {ch30_s} | 90д: {ch90_s}",
-                "",
-                f"\U0001f7e2 *Зоны:*",
-                "",
-                f"\U0001f7e2 Поддержка: `{fp(sup1)}` / `{fp(sup2)}`",
-                "",
-                f"\U0001f534 Сопротивление: `{fp(res1)}` / `{fp(res2)}`",
-                "",
-                f"\U0001f4bc *Зоны покупки (DCA):*",
-                "",
-                f"`Покупка 1 (40%): {fp(buy2)}`  _(зона 30д)_",
-                f"`Покупка 2 (40%): {fp(buy1)}`  _(зона 90д)_",
-                f"`Покупка 3 (20%): {fp(buy3)}`  _(у ATL)_",
-            ]
-            if ath > 0:
-                lines += [
-                    "",
-                    f"\U0001f3af *Цели (к ATH):*",
-                    "",
-                    f"`Цель 1: {fp(ath*0.33)}`  _(~x{ath*0.33/price:.1f})_",
-                    f"`Цель 2: {fp(ath*0.60)}`  _(~x{ath*0.60/price:.1f})_",
-                    f"`Цель 3: {fp(ath*0.90)}`  _(~x{ath*0.90/price:.1f} от ATH)_",
-                ]
+            except Exception:
+                spot_block = []
             lines += [
-                "",
-                f"\U0001f4c8 *Технический анализ:*",
-                "",
-                f"RSI (1D):    {ri_spot(rsi_1d)} `{rsi_1d:.0f}`",
-                f"EMA200 (1D): {ema200_pos} {ema200_str}",
-                f"Потенциал:   *{pot_str}*",
-                f"Rank:        #{rank}",
-                "",
-                f"\U0001f4cb *Расшифровка скора ({spot_rocket}/100):*",
-                "",
-                "Шкала силы:",
-                "0-40   \u274c СЛАБЫЙ — пропустить",
-                "41-59  \u26a0\ufe0f УМЕРЕННЫЙ — малый риск",
-                "60-74  \u2705 ХОРОШИЙ — входить",
-                "75-89  \U0001f4aa СИЛЬНЫЙ — приоритет",
-                "90-100 \U0001f680 ОТЛИЧНЫЙ — максимум",
-                "",
-                f"Качество {grade_spot} — {n_ok_spot} из 5 факторов:",
+                SEP,
+                f"{grade} #{i} {c['sym']} — {c['name']}",
+                f"💰 Цена: {c['price']} | МКап: {c['mcap']}",
+                f"📊 24ч: {sign(c['ch24'])}% | 7д: {sign(c['ch7d'])}% | 30д: {sign(c['ch30d'])}%",
+                *spot_block,
+                f"",
+                f"⚡ {chr(32).join(c['reasons'][:3])}",
+                f"🎯 Скор: {c['score']}/12x",
             ]
             for f_ok in fok:
                 lines.append(f"\u2705 {f_ok}")
