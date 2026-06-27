@@ -2630,17 +2630,17 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             await q.edit_message_text(
                 " *On-Chain *\n"
-                "\n\n"
+                        "🔗 On-Chain 🔗\n"
                 " *Lookonchain* \n\n"
-                " * :*\n"
-                "   (>$1M)\n"
+                        "🔍 Lookonchain 🔍 \n\n"
+                        "💰 :≈\n"
                 " BlackRock / Grayscale ETF \n"
                 " Bitcoin ETF NetFlow ()\n"
                 " /  \n"
                 "   \n\n"
-                " *  *  \n"
+                        "📡 📡  \n"
                 " Reader   \n\n"
-                "   *10 *\n\n"
+                        "📡 Reader  \n\n"
                 f" {now_utc3()}",
                 parse_mode="Markdown", reply_markup=nav
             )
