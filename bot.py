@@ -1724,9 +1724,6 @@ def overview_kb():
         [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full_analysis")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
     ])
-        [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full_analysis")],
-        [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
-    ])
 # PUMP / DUMP 
 # 
 async def check_pump_dump(bot, chat_ids, coins):
