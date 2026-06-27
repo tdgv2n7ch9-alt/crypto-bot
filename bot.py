@@ -7124,7 +7124,7 @@ async def cmd_x100_scanner(update, ctx):
                         f"  TP1: ${lvl['tp1']} ({pct(p, lvl['tp1'])})",
                         f"  TP2: ${lvl['tp2']} ({pct(p, lvl['tp2'])})",
                         f"  TP3: ${lvl['tp3']} ({pct(p, lvl['tp3'])})",
-                        f"  SL: ${lvl['sl']} ({pct(p, lvl['sl'])})",
+                        f"  SL: ${lvl['sl']} ({pct(lvl['sl'])})",
                         f"  Потенциал: {lvl['pot_min']}–{lvl['pot_max']}x",
                         f"",
                         f"📍 ФЬЮЧЕРС (LONG x3–5):",
@@ -7140,10 +7140,10 @@ async def cmd_x100_scanner(update, ctx):
                     SEP,
                     f"{grade} #{i} {c['sym']} — {c['name']}",
                     f"💰 Цена: {c['price']} | МКап: {c['mcap']}",
-                    f"📊 24ч: {sign(c['ch24'])}% | 7д: {sign(c['ch7d'])}% | 30д: {sign(c['ch30d'])}%",
+                    f"📊 24ч: {sign(c['ch24'])} | 7д: {sign(c['ch7d'])} | 30д: {sign(c['ch30d'])}",
                     *spot,
                     f"⚡ {' · '.join(c['reasons'])}",
-                    f"🎯 Скор: {c['score']}/12x",
+                    f"🎯 Скор: {c['score']}/12",
                 ]
         lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]
         kb = InlineKeyboardMarkup([
