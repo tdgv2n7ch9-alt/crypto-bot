@@ -7493,7 +7493,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         mcap  = q.get("market_cap", 0) or 0
         ch24h = q.get("percent_change_24h", 0) or 0
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-        if vol >= 1_000_000 and vol_ratio < 60 and ch24h > -20:
+        if vol >= 500_000 and ch24h > -30:
             pre.append(coin)
 
     pre.sort(key=lambda c: c["quote"]["USDT"].get("percent_change_24h", 0) or 0, reverse=True)
