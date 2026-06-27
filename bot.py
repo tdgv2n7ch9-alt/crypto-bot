@@ -6696,6 +6696,8 @@ def real_full_analysis(coin: dict) -> dict:
 TOP_LONG_SIGNALS:  dict = {}
 TOP_SHORT_SIGNALS: dict = {}
 TOP_SPOT_SIGNALS:  dict = {}
+TOP_SPOT_SIGNALS["AAVE"] = {"time": None, "entry": 63.57, "buy_zone_lo": 60.43, "buy_zone_hi": 63.57, "sl": 59.00, "sell_target": 109.70, "status": "watching", "tp1": 73.27, "tp2": 76.55, "tp3": 82.06, "note": "DCA: 50%@63.57 / 30%@62.00 / 20%@60.43. SL $59. TP4 $109.70"}
+
 
 #       
 import json as _json
