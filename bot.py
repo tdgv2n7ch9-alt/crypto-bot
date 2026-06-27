@@ -2007,7 +2007,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "трейдер"
     await update.message.reply_text(
         f"👋 *Привет, {name}!*\n"
-        f"🚀 *BEST TRADE v38* — твой крипто-аналитик\n"
+        f"🚀 *BEST TRADE v42* — твой крипто-аналитик\n"
         f"{SEP}\n\n"
         f"🧠 *Методология:*\n"
         f"  • SMC/ICT · Order Blocks · FVG · BOS\n"
@@ -2280,7 +2280,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "show_menu":
         SEP = "➖➖➖➖➖➖➖➖➖➖"
         await q.edit_message_text(
-            f"🚀 *BEST TRADE v38*\n"
+            f"🚀 *BEST TRADE v42*\n"
             f"_{now_utc3()}_\n"
             f"{SEP}\n\n"
             f"🧠 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
