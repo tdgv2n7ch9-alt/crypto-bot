@@ -1822,6 +1822,7 @@ def main_kb():
          InlineKeyboardButton("\U0001f4e1 Сигналы каналов",callback_data="channel_signals")],
         [InlineKeyboardButton("\U0001f433 Whale Monitor",  callback_data="whale_status"),
          InlineKeyboardButton("\U0001f517 On-Chain",       callback_data="onchain_info")],
+        [InlineKeyboardButton("\U0001f3e6 Институционал",  callback_data="institutional")],
         [InlineKeyboardButton("\U0001f4cb Полный анализ",  callback_data="menu_full")],
     ])
 
