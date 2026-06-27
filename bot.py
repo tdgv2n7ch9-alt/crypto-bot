@@ -6695,7 +6695,13 @@ def real_full_analysis(coin: dict) -> dict:
 #     
 TOP_LONG_SIGNALS:  dict = {}
 TOP_SHORT_SIGNALS: dict = {}
+TOP_SHORT_SIGNALS["BTC"] = {"time": None, "entry": 61700, "buy_zone_lo": 61500, "buy_zone_hi": 61930, "sl": 62200, "sell_target": 58073, "status": "watching", "tp1": 59200, "tp2": 58073, "note": "Шорт $61500-61930. SL $62200. Условие: цена ниже $61930"}
+TOP_SHORT_SIGNALS["SOL"] = {"time": None, "entry": 74.50, "buy_zone_lo": 73.50, "buy_zone_hi": 74.92, "sl": 75.50, "sell_target": 62.00, "status": "watching", "tp1": 68.00, "tp2": 65.00, "tp3": 62.00, "note": "Шорт $73.5-74.92. SL $75.50. Хай $74.92 не пробивать"}
+TOP_SHORT_SIGNALS["ETH"] = {"time": None, "entry": 1610, "buy_zone_lo": 1600, "buy_zone_hi": 1620, "sl": 1645, "sell_target": 1504, "status": "watching", "tp1": 1537, "tp2": 1504, "note": "4H имбаланс $1569-1620. Условие: пробой $1565. SL $1645"}
+
 TOP_SPOT_SIGNALS:  dict = {}
+TOP_SPOT_SIGNALS["CAKE"] = {"time": None, "entry": 1.1829, "buy_zone_lo": 1.1533, "buy_zone_hi": 1.1829, "sl": 1.12, "sell_target": 1.45, "status": "watching", "tp1": 1.30, "tp2": 1.40, "tp3": 1.45, "note": "DCA: 50%@1.1829 / 30%@1.168 / 20%@1.1533. SL $1.12"}
+
 TOP_SPOT_SIGNALS["AAVE"] = {"time": None, "entry": 63.57, "buy_zone_lo": 60.43, "buy_zone_hi": 63.57, "sl": 59.00, "sell_target": 109.70, "status": "watching", "tp1": 73.27, "tp2": 76.55, "tp3": 82.06, "note": "DCA: 50%@63.57 / 30%@62.00 / 20%@60.43. SL $59. TP4 $109.70"}
 
 
