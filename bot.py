@@ -1710,19 +1710,23 @@ def build_overview_text(ms: dict) -> str:
 
 def overview_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(" ",          callback_data="market_overview"),
-         InlineKeyboardButton("  ",      callback_data="trend_analysis")],
-        [InlineKeyboardButton("  ",          callback_data="top_spot"),
-        [InlineKeyboardButton("⭐ ТОП СПОТ",        callback_data="top_spot"),
-         InlineKeyboardButton("🟢 ТОП ЛОНГ",    callback_data="top_long")],
-        [InlineKeyboardButton("🔴 ТОП ШОРТ",   callback_data="top_short"),
-         InlineKeyboardButton("🚀 x100 Сканер",     callback_data="x100_scan")],
-        [InlineKeyboardButton(" BTC Chart",          url=tv_link("BTC")),
-         InlineKeyboardButton(" TOTAL",             url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
-        [InlineKeyboardButton("  ",      callback_data="show_menu")],
+        [InlineKeyboardButton("📊 Обзор рынка", callback_data="market_overview")],
+        [InlineKeyboardButton("📈 Тренд анализ", callback_data="trend_analysis")],
+        [InlineKeyboardButton("⭐️ ТОП СПОТ", callback_data="top_spot")],
+        [InlineKeyboardButton("🟢 ТОП ЛОНГ", callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ", callback_data="top_short")],
+        [InlineKeyboardButton("🚀 x100 Сканер", callback_data="x100_scan")],
+        [InlineKeyboardButton("🏦 Институционал", callback_data="menu_full")],
+        [InlineKeyboardButton("🐋 Whale Monitor", callback_data="whale_monitor")],
+        [InlineKeyboardButton("💼 Монеты в работе", callback_data="coins_work")],
+        [InlineKeyboardButton("📡 Сигналы каналов", callback_data="channel_signals")],
+        [InlineKeyboardButton("🔗 On-Chain", callback_data="onchain_info")],
+        [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full_analysis")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
     ])
-        [InlineKeyboardButton("🏠 Главное меню",   callback_data="show_menu")],
-# 
+        [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full_analysis")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
+    ])
 # PUMP / DUMP 
 # 
 async def check_pump_dump(bot, chat_ids, coins):
