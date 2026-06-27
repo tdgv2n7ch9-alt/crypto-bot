@@ -4928,20 +4928,21 @@ def get_btc_market_context() -> dict:
     }
 
     try:
-        # BTC 
+        # BTC price + change via CMC (Binance blocked on Railway)
+        btc_q = get_cmc_quote("BTC")
+        btc_price = btc_q.get("price", 0) if btc_q else 0
+        ch24h = btc_q.get("percent_change_24h", 0) if btc_q else 0
+        result["btc_price"] = btc_price
+        result["btc_ch24h"] = round(ch24h, 2)
+
+        # BTC OHLC for trend/EMA (Binance, may be empty on Railway)
         c1h = get_binance_ohlc("BTC", "1h", 50)  or []
         c4h = get_binance_ohlc("BTC", "4h", 100) or []
         c1d = get_binance_ohlc("BTC", "1d", 50)  or []
 
-        if not c4h:
-            return result
-
         cl1h = [c["close"] for c in c1h]
-        cl4h = [c["close"] for c in c4h]
-        cl1d = [c["close"] for c in c1d]
-
-        btc_price = cl4h[-1]
-        result["btc_price"] = btc_price
+        cl4h = [c["close"] for c in c4h] or [btc_price]
+        cl1d = [c["close"] for c in c1d] or [btc_price]
 
         # EMA    TF
         def tf_bias(closes, fast=20, slow=50):
