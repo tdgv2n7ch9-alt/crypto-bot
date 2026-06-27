@@ -1713,15 +1713,15 @@ def overview_kb():
         [InlineKeyboardButton(" ",          callback_data="market_overview"),
          InlineKeyboardButton("  ",      callback_data="trend_analysis")],
         [InlineKeyboardButton("  ",          callback_data="top_spot"),
-         InlineKeyboardButton("  ",          callback_data="top_long")],
-        [InlineKeyboardButton("  ",          callback_data="top_short"),
-          InlineKeyboardButton("\U0001f680 x100 Сканер",    callback_data="x100_scan")],
-        [InlineKeyboardButton("\U0001f4cb Полный анализ",  callback_data="menu_full")],
+        [InlineKeyboardButton("⭐ ТОП СПОТ",        callback_data="top_spot"),
+         InlineKeyboardButton("🟢 ТОП ЛОНГ",    callback_data="top_long")],
+        [InlineKeyboardButton("🔴 ТОП ШОРТ",   callback_data="top_short"),
+         InlineKeyboardButton("🚀 x100 Сканер",     callback_data="x100_scan")],
         [InlineKeyboardButton(" BTC Chart",          url=tv_link("BTC")),
          InlineKeyboardButton(" TOTAL",             url="https://www.tradingview.com/chart/?symbol=CRYPTOCAP:TOTAL")],
         [InlineKeyboardButton("  ",      callback_data="show_menu")],
     ])
-
+        [InlineKeyboardButton("🏠 Главное меню",   callback_data="show_menu")],
 # 
 # PUMP / DUMP 
 # 
