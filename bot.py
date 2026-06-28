@@ -2081,28 +2081,36 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if vol >= 2_000_000:
                 short_lines.append(f"   *{sym}*  `{fp(p)}`  `{fc(ch)}`")
 
-        ta = trend_arrow
+        SEP2 = chr(0x2796)*10
+        btc_e = chr(0x1F7E2) if btc_ch24 >= 2 else (chr(0x1F534) if btc_ch24 <= -2 else chr(0x1F7E1))
+        eth_e = chr(0x1F7E2) if eth_ch24 >= 2 else (chr(0x1F534) if eth_ch24 <= -2 else chr(0x1F7E1))
+        sent_e = chr(0x1F7E2) if pct >= 65 else (chr(0x1F534) if pct <= 35 else chr(0x1F7E1))
+        mcap_str = fm(total_mcap) if total_mcap else "н/д"
         lines = [
-            " *   BEST TRADE*",
-            "",
-            f" {now_utc3()}",
-            "",
-            f" *Bitcoin*   `${btc_price:,.0f}`  {ta(btc_ch24)} `{fc(btc_ch24)}`",
-            f" *Ethereum*  `${eth_price:,.0f}`   {ta(eth_ch24)} `{fc(eth_ch24)}`",
-            "",
-            f" *:*  BTC `{btc_dom:.1f}%`    ETH `{eth_dom:.1f}%`",
-            f" *Total MCap:*  `{fm(total_mcap)}`  `{fc(mcap_ch)}`",
-            f" *:*  {sentiment}    `{pct:.0f}%`   ",
-            "",
-            "  *  24* ",
+            chr(0x1F4CA)+" *BEST TRADE — ОБЗОР РЫНКА*",
+            chr(0x1F550)+" _"+now_utc3()+"_",
+            SEP2, "",
+            chr(0x1FAB2)+" *БИТКОИН / BTC*", "",
+            chr(0x1F4CD)+"  Цена:       *$"+"{:,.0f}".format(btc_price)+"*",
+            btc_e+"  24ч:        *"+fc(btc_ch24)+"*",
+            chr(0x1F4AA)+"  Доминация: *"+str(btc_dom)+"%*",
+            "", SEP2, "",
+            chr(0x1F48E)+" *ЭФИРИУМ / ETH*", "",
+            chr(0x1F4CD)+"  Цена:  *$"+"{:,.0f}".format(eth_price)+"*",
+            eth_e+"  24ч:   *"+fc(eth_ch24)+"*",
+            "", SEP2, "",
+            chr(0x1F30D)+" *РЫНОК*", "",
+            chr(0x1F4B0)+"  Total MCap:  *"+mcap_str+"*",
+            sent_e+"  Сентимент:  *"+sentiment+"* ("+str(round(pct))+"% бычьих)",
+            "", SEP2, "",
+            chr(0x1F7E2)+" *ТОП РОСТА 24ч:*",
         ]
-        lines += long_lines if long_lines else ["  "]
-        lines += ["", "  *  24* "]
-        lines += short_lines if short_lines else ["  "]
+        lines += long_lines if long_lines else ["  нет данных"]
+        lines += ["", chr(0x1F534)+" *ТОП ПАДЕНИЯ 24ч:*"]
+        lines += short_lines if short_lines else ["  нет данных"]
         lines += [
-            "",
-            "",
-            " *:* 12%     SL      35x",
+            "", SEP2,
+            chr(0x26A0)+chr(0xFE0F)+" _Риск: 1-2% депозита · SL обязателен_",
         ]
 
         await msg.edit_text("\n".join(lines), parse_mode="Markdown",
