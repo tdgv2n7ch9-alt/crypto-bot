@@ -2889,6 +2889,43 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"\u26a0\ufe0f  Риск: 1\u20132% депозита \u2022 SL обязателен",
             ]
 
+            # === ФАЗА РЫНКА + ЛИКВИДНОСТЬ ===
+            phase_lines = []
+            if btc_7d > 5:
+                market_phase = '📈 АПТРЕНД — highs и lows обновляются вверх'
+            elif btc_7d < -5:
+                market_phase = '📉 ДАУНТРЕНД — highs и lows обновляются вниз'
+            else:
+                market_phase = '⇔ ДИАПАЗОН / БАЗА — рынок в консолидации'
+            phase_lines.append(f'🔄 *ФАЗА РЫНКА:* {market_phase}')
+            try:
+                btcd_val = float(str(btc_dom).replace('%','').strip())
+            except Exception:
+                btcd_val = None
+            if btcd_val and btc_ch > 0 and btcd_val > 50:
+                liq_line = '🔵 BTC.D↑ + BTC↑ → капитал в BTC, алты под давлением'
+            elif btcd_val and btc_ch < 0 and btcd_val > 50:
+                liq_line = '🔴 BTC.D↑ + BTC↓ → паника, алты сыплются'
+            elif btcd_val and btc_ch > 0 and btcd_val < 50:
+                liq_line = '🟢 BTC.D↓ + BTC↑ → альт-сезон, ротация в алты'
+            elif btcd_val and btc_ch < 0 and btcd_val < 50:
+                liq_line = '🟡 BTC.D↓ + BTC↓ → алты консолидируют'
+            else:
+                liq_line = '⚪ Недостаточно данных'
+            phase_lines.append(f'🔀 *ЛИКВИДНОСТЬ:* {liq_line}')
+            if btc_7d > 15:
+                wave_line = 'Возможная волна 3 или 5 (импульс вверх) — осторожно на хаях'
+            elif btc_7d > 5:
+                wave_line = 'Возможная волна 1 или 3 (начало движения вверх)'
+            elif btc_7d < -15:
+                wave_line = 'Возможная волна C или 3 вниз — избегать лонгов'
+            elif btc_7d < -5:
+                wave_line = 'Возможная коррекционная волна A/B/C'
+            else:
+                wave_line = 'Волна не определена — рынок в базе'
+            phase_lines.append(f'🌊 *ЭЛЛИОТТ (1D):* {wave_line}')
+            lines_out += ['', SEP, ''] + phase_lines
+
             nav_trend = InlineKeyboardMarkup([
                 [InlineKeyboardButton("\U0001f504 Обновить", callback_data="trend_analysis"),
                  InlineKeyboardButton("\U0001f3e0 Меню",    callback_data="show_menu")],
