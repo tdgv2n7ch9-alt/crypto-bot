@@ -2032,7 +2032,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
     try:
-        prices = get_btc_eth_prices()
+        prices = get_btc_eth_price()
         gm = get_global_metrics()
         coins = get_all_coins()
         if not prices or not coins:
