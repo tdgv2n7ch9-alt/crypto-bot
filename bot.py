@@ -2030,100 +2030,141 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("   ...")
+    msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
     try:
-        prices = get_btc_eth_price()
-        gm     = get_global_metrics()
-        coins  = get_all_coins()
+        prices = get_btc_eth_prices()
+        gm = get_global_metrics()
+        coins = get_all_coins()
         if not prices or not coins:
-            await msg.edit_text("    API"); return
-
-        btc = prices.get("BTC", {})
-        eth = prices.get("ETH", {})
-        btc_price = btc.get("price", 0)
-        eth_price = eth.get("price", 0)
-        btc_ch24  = btc.get("percent_change_24h", 0) or 0
-        eth_ch24  = eth.get("percent_change_24h", 0) or 0
-
-        # 
-        btc_dom    = gm.get("btc_dominance", 0)
-        eth_dom    = gm.get("eth_dominance", 0)
-        total_mcap = gm.get("total_market_cap", 0)
-        mcap_ch    = gm.get("total_market_cap_yesterday_percentage_change", 0) or 0
-
-        #     CMC 
-        pos = sum(1 for c in coins[:200]
-                  if (c["quote"]["USDT"].get("percent_change_24h") or 0) > 0)
-        pct = pos / 200 * 100
-        if pct >= 65:    sentiment = " "
-        elif pct >= 50:  sentiment = " "
-        else:            sentiment = " "
-
-        #  /    CMC  ()
-        long_lines  = []
-        short_lines = []
-        sorted_ch = sorted(coins[:100],
-                           key=lambda c: c["quote"]["USDT"].get("percent_change_24h",0) or 0,
-                           reverse=True)
-        for c in sorted_ch[:5]:
-            sym = c["symbol"]
-            ch  = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
-            p   = c["quote"]["USDT"].get("price", 0)
-            vol = c["quote"]["USDT"].get("volume_24h", 0) or 0
-            if vol >= 2_000_000:
-                long_lines.append(f"   *{sym}*  `{fp(p)}`  `{fc(ch)}`")
-        for c in sorted(coins[:100],
-                        key=lambda c: c["quote"]["USDT"].get("percent_change_24h",0) or 0)[:5]:
-            sym = c["symbol"]
-            ch  = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
-            p   = c["quote"]["USDT"].get("price", 0)
-            vol = c["quote"]["USDT"].get("volume_24h", 0) or 0
-            if vol >= 2_000_000:
-                short_lines.append(f"   *{sym}*  `{fp(p)}`  `{fc(ch)}`")
-
-        SEP2 = chr(0x2796)*10
-        btc_e = chr(0x1F7E2) if btc_ch24 >= 2 else (chr(0x1F534) if btc_ch24 <= -2 else chr(0x1F7E1))
-        eth_e = chr(0x1F7E2) if eth_ch24 >= 2 else (chr(0x1F534) if eth_ch24 <= -2 else chr(0x1F7E1))
-        sent_e = chr(0x1F7E2) if pct >= 65 else (chr(0x1F534) if pct <= 35 else chr(0x1F7E1))
-        mcap_str = fm(total_mcap) if total_mcap else "н/д"
-        lines = [
-            chr(0x1F4CA)+" *BEST TRADE — ОБЗОР РЫНКА*",
-            chr(0x1F550)+" _"+now_utc3()+"_",
-            SEP2, "",
-            chr(0x1FAB2)+" *БИТКОИН / BTC*", "",
-            chr(0x1F4CD)+"  Цена:       *$"+"{:,.0f}".format(btc_price)+"*",
-            btc_e+"  24ч:        *"+fc(btc_ch24)+"*",
-            chr(0x1F4AA)+"  Доминация: *"+str(btc_dom)+"%*",
-            "", SEP2, "",
-            chr(0x1F48E)+" *ЭФИРИУМ / ETH*", "",
-            chr(0x1F4CD)+"  Цена:  *$"+"{:,.0f}".format(eth_price)+"*",
-            eth_e+"  24ч:   *"+fc(eth_ch24)+"*",
-            "", SEP2, "",
-            chr(0x1F30D)+" *РЫНОК*", "",
-            chr(0x1F4B0)+"  Total MCap:  *"+mcap_str+"*",
-            sent_e+"  Сентимент:  *"+sentiment+"* ("+str(round(pct))+"% бычьих)",
-            "", SEP2, "",
-            chr(0x1F7E2)+" *ТОП РОСТА 24ч:*",
+            await msg.edit_text("❌ API"); return
+        btc=prices.get("BTC",{}); eth=prices.get("ETH",{})
+        btc_price=btc.get("price",0); btc_ch24=btc.get("percent_change_24h",0) or 0
+        btc_ch7d=btc.get("percent_change_7d",0) or 0
+        eth_price=eth.get("price",0); eth_ch24=eth.get("percent_change_24h",0) or 0
+        eth_ch7d=eth.get("percent_change_7d",0) or 0
+        sq=next((c for c in coins if c["symbol"]=="SOL"),{})
+        sol_price=sq.get("quote",{}).get("USDT",{}).get("price",0) or 0
+        sol_ch24=sq.get("quote",{}).get("USDT",{}).get("percent_change_24h",0) or 0
+        sol_ch7d=sq.get("quote",{}).get("USDT",{}).get("percent_change_7d",0) or 0
+        bq=next((c for c in coins if c["symbol"]=="BTC"),{})
+        b30=bq.get("quote",{}).get("USDT",{}).get("percent_change_30d",0) or 0
+        btc_dom=gm.get("btc_dominance",0); eth_dom=gm.get("eth_dominance",0)
+        total_mcap=gm.get("total_market_cap",0)
+        mcap_ch=gm.get("total_market_cap_yesterday_percentage_change",0) or 0
+        pos=sum(1 for c in coins[:200] if (c["quote"]["USDT"].get("percent_change_24h") or 0)>0)
+        pct=pos/200*100
+        if pct>=65: sentiment="🟢 БЫЧИЙ"
+        elif pct>=50: sentiment="🟡 НЕЙТРАЛЬНЫЙ"
+        else: sentiment="🔴 МЕДВЕЖИЙ"
+        fv=50; fl="Neutral"
+        try:
+            fg=_r.get("https://api.alternative.me/fng/?limit=1",timeout=5).json()
+            fv=int(fg["data"][0]["value"]); fl=fg["data"][0]["value_classification"]
+        except: pass
+        if fv>=75: fg_em="🟢"; fg_z="ЖАДНОСТЬ"
+        elif fv>=55: fg_em="🟡"; fg_z="УМ. ЖАДНОСТЬ"
+        elif fv>=45: fg_em="⚪"; fg_z="НЕЙТРАЛЬНО"
+        elif fv>=25: fg_em="🟠"; fg_z="СТРАХ"
+        else: fg_em="🔴"; fg_z="КРАЙНИЙ СТРАХ"
+        fg_bar="█"*(fv//10)+"░"*(10-fv//10)
+        br=50.0
+        try:
+            kl=_r.get("https://api.binance.com/api/v3/klines",
+                params={"symbol":"BTCUSDT","interval":"1d","limit":16},timeout=6).json()
+            br=calc_rsi([float(k[4]) for k in kl],14)
+        except: pass
+        if br>=70: rsi_z="🔴 ПЕРЕКУПЛЕН"
+        elif br>=55: rsi_z="🟡 БЫЧИЙ"
+        elif br>=45: rsi_z="⚪ НЕЙТРАЛЬНЫЙ"
+        elif br>=30: rsi_z="🟠 МЕДВЕЖИЙ"
+        else: rsi_z="🔴 ПЕРЕПРОДАН"
+        if btc_dom>50 and btc_ch24>0: liq="🔴 Капитал в BTC"
+        elif btc_dom>50 and btc_ch24<0: liq="🔴 BTC.D+BTC паника"
+        elif btc_dom<50 and btc_ch24>0: liq="🟢 Альт-сезон"
+        else: liq="🟡 Консолидация"
+        if btc_ch7d>5 and b30>10: phase="📈 АПТРЕНД"
+        elif btc_ch7d<-5 and b30<-10: phase="📉 ДАУНТРЕНД"
+        elif abs(btc_ch7d)<3: phase="↔4️ БОКОВИК"
+        else: phase="🔄 КОРРЕКЦИЯ"
+        import datetime
+        now_h=(datetime.datetime.utcnow().hour+3)%24
+        if 2<=now_h<10: kz="🌙 Азия (02-10) — низкая волатильность"
+        elif 10<=now_h<18: kz="🇬🇧 Лондон (10-18) — задаёт направление"
+        elif 15<=now_h<23: kz="🇺🇸 Нью-Йорк (15-23) — макс. волатильность"
+        else: kz="🌃 Ночная сессия"
+        s24=sorted(coins[:100],key=lambda c:c["quote"]["USDT"].get("percent_change_24h",0) or 0,reverse=True)
+        def fc(v): return ("+"+str(round(v,1)) if v>=0 else str(round(v,1)))+"%"
+        def fp(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
+        def fe(v): return "🟢" if v>=2 else ("🔴" if v<=-2 else "🟡")
+        ll=[]; sl=[]
+        for c in s24[:5]:
+            sym=c["symbol"]; ch=c["quote"]["USDT"].get("percent_change_24h",0) or 0
+            v=c["quote"]["USDT"].get("volume_24h",0) or 0
+            if v>=2000000: ll.append("  🟢 "+sym+" "+fc(ch))
+        for c in s24[-5:]:
+            sym=c["symbol"]; ch=c["quote"]["USDT"].get("percent_change_24h",0) or 0
+            v=c["quote"]["USDT"].get("volume_24h",0) or 0
+            if v>=2000000: sl.append("  🔴 "+sym+" "+fc(ch))
+        s7d=sorted(coins[:100],key=lambda c:c["quote"]["USDT"].get("percent_change_7d",0) or 0,reverse=True)
+        ll7=[]; sl7=[]
+        for c in s7d[:3]:
+            sym=c["symbol"]; ch=c["quote"]["USDT"].get("percent_change_7d",0) or 0
+            v=c["quote"]["USDT"].get("volume_24h",0) or 0
+            if v>=2000000: ll7.append("  🟢 "+sym+" "+fc(ch))
+        for c in s7d[-3:]:
+            sym=c["symbol"]; ch=c["quote"]["USDT"].get("percent_change_7d",0) or 0
+            v=c["quote"]["USDT"].get("volume_24h",0) or 0
+            if v>=2000000: sl7.append("  🔴 "+sym+" "+fc(ch))
+        score=0
+        if btc_ch24>2: score+=2
+        elif btc_ch24>0: score+=1
+        elif btc_ch24<-2: score-=2
+        if fv>=55: score+=1
+        elif fv<35: score-=1
+        if 55<=br<70: score+=1
+        elif br>=70 or br<35: score-=1
+        if btc_dom<50 and btc_ch24>0: score+=2
+        if score>=5: verdict="A+ 🚀 Сильный бычий"
+        elif score>=3: verdict="A  📈 Бычий"
+        elif score>=1: verdict="B  🟡 Нейтрально-бычий"
+        elif score>=-1: verdict="C  ⚪ Нейтральный"
+        else: verdict="D  📉 Медвежий"
+        SEP="➖"*18
+        out=[
+            "⭐ BEST TRADE — ОБЗОР РЫНКА",SEP,"",
+            "💰 КАПИТАЛИЗАЦИЯ",
+            "  Общая: $"+str(round(total_mcap/1e12,2))+"T  "+fp(mcap_ch),
+            "  BTC.D: "+str(round(btc_dom,1))+"%   ETH.D: "+str(round(eth_dom,1))+"%","",
+            "📊 ЦЕНЫ",
+            "  BTC  $"+f"{round(btc_price,0):,.0f}"+"  "+fe(btc_ch24)+" "+fp(btc_ch24)+"  7d: "+fp(btc_ch7d),
+            "  ETH  $"+f"{round(eth_price,2):,.2f}"+"  "+fe(eth_ch24)+" "+fp(eth_ch24)+"  7d: "+fp(eth_ch7d),
+            "  SOL  $"+f"{round(sol_price,2):,.2f}"+"  "+fe(sol_ch24)+" "+fp(sol_ch24)+"  7d: "+fp(sol_ch7d),"",
+            "🧠 ИНДИКАТОРЫ",
+            "  RSI BTC 1D: "+str(round(br,1))+"  "+rsi_z,
+            "  Fear&Greed: "+str(fv)+"/100  "+fg_em+" "+fg_z,
+            "  ["+fg_bar+"]",
+            "  Сентимент:  "+sentiment+" ("+str(int(round(pct,0)))+"% растут)","",
+            "🌊 ЛИКВИДНОСТЬ",
+            "  BTC.D "+str(round(btc_dom,1))+"% — "+liq,"",
+            "📈 ФАЗА РЫНКА","  "+phase,"",
+            "⏰ ICT KILLZONE","  "+kz,"",
+            "🔥 ТОП 24H","  Рост:"
+        ]+ll+["  Падение:"]+sl+["",
+            "📅 ТОП 7D","  Рост:"
+        ]+ll7+["  Падение:"]+sl7+["",
+            SEP,"🏆 ВЕРДИКТ: "+verdict,SEP
         ]
-        lines += long_lines if long_lines else ["  нет данных"]
-        lines += ["", chr(0x1F534)+" *ТОП ПАДЕНИЯ 24ч:*"]
-        lines += short_lines if short_lines else ["  нет данных"]
-        lines += [
-            "", SEP2,
-            chr(0x26A0)+chr(0xFE0F)+" _Риск: 1-2% депозита · SL обязателен_",
-        ]
-
-        await msg.edit_text("\n".join(lines), parse_mode="Markdown",
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить",callback_data="market_overview"),InlineKeyboardButton("🏠 Меню",callback_data="show_menu")]]),disable_web_page_preview=True)
+        await msg.edit_text("\n".join(out),parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Обновить",callback_data="market_overview"),
+                InlineKeyboardButton("🏠 Меню",callback_data="show_menu")
+            ],[
+                InlineKeyboardButton("📈 Тренд",callback_data="trend_analysis"),
+                InlineKeyboardButton("🏛 Институционал",callback_data="institutional")
+            ]]),disable_web_page_preview=True)
     except Exception as e:
         log.error(f"cmd_market: {e}")
-        await msg.edit_text(
-            f"   \n\n  ",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(" ", callback_data="market_overview"),
-                InlineKeyboardButton(" ",     callback_data="show_menu"),
-            ]])
-        )
+        await msg.edit_text(f"❌ {e}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Меню",callback_data="show_menu")]]))
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
