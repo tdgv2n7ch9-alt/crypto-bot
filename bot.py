@@ -2106,7 +2106,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]
 
         await msg.edit_text("\n".join(lines), parse_mode="Markdown",
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить",callback_data="market_overview"),InlineKeyboardButton("🏠 Меню",callback_data="show_menu")],[InlineKeyboardButton("📈 Тренд",callback_data="trend_analysis"),InlineKeyboardButton("🏦 Инстит.",callback_data="institutional")]]),disable_web_page_preview=True)
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить",callback_data="market_overview"),InlineKeyboardButton("🏠 Меню",callback_data="show_menu")]]),disable_web_page_preview=True)
     except Exception as e:
         log.error(f"cmd_market: {e}")
         await msg.edit_text(
