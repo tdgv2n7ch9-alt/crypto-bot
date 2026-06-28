@@ -2038,10 +2038,10 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not prices or not coins:
             await msg.edit_text("❌ API"); return
         btc=prices.get("BTC",{}); eth=prices.get("ETH",{})
-        btc_price=btc.get("price",0); btc_ch24=btc.get("percent_change_24h",0) or 0
-        btc_ch7d=btc.get("percent_change_7d",0) or 0
-        eth_price=eth.get("price",0); eth_ch24=eth.get("percent_change_24h",0) or 0
-        eth_ch7d=eth.get("percent_change_7d",0) or 0
+        btc_price=btc.get("price",0); btc_ch24=btc.get("ch24h",0) or 0
+        btc_ch7d=0 or 0
+        eth_price=eth.get("price",0); eth_ch24=eth.get("ch24h",0) or 0
+        eth_ch7d=0 or 0
         sq=next((c for c in coins if c["symbol"]=="SOL"),{})
         sol_price=sq.get("quote",{}).get("USDT",{}).get("price",0) or 0
         sol_ch24=sq.get("quote",{}).get("USDT",{}).get("percent_change_24h",0) or 0
