@@ -8756,9 +8756,9 @@ def get_macro_data():
             try:
                 r=_r.get(f'https://query2.finance.yahoo.com/v8/finance/chart/{tk}?interval=1d&range=2d',headers={'User-Agent':'Mozilla/5.0'},timeout=6)
                 if r.status_code==200:
-            _jr=r.json().get('chart',{}).get('result',[])
-            _closes=_jr[0].get('indicators',{}).get('quote',[{}])[0].get('close',[]) if _jr else []
-            cl=[c for c in _closes if c]
+                _jr=r.json().get('chart',{}).get('result',[])
+                _closes=_jr[0].get('indicators',{}).get('quote',[{}])[0].get('close',[]) if _jr else []
+                cl=[c for c in _closes if c]
                     if len(cl)>=2:
                         ch=(cl[-1]-cl[-2])/cl[-2]*100
                         res[k]=round(cl[-1],2); res[f'{k}_ch']=round(ch,2)
