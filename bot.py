@@ -3231,7 +3231,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # DXY
             dxy=0; dxy_ch=0
             try:
-                dx=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
+                dx=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
                 dc=dx["chart"]["result"][0]["indicators"]["quote"][0]["close"]
                 dc=[x for x in dc if x]
                 dxy=dc[-1]; dxy_ch=(dc[-1]-dc[-2])/dc[-2]*100 if len(dc)>=2 else 0
@@ -3336,7 +3336,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "  Fear&Greed: "+str(fv)+"/100 — "+fl,
                 "  BTC 7d: "+fp(btc_ch7d)+" | 30d: "+fp(btc_ch30),"",
                 SEP,
-                "💡 ВЫвод:",
+                "💡 Вывод:",
             ]
             # Conclusion
             signals=[]
@@ -8754,7 +8754,7 @@ def get_macro_data():
         sc=0
         for tk,k in [('DX-Y.NYB','dxy'),('GC=F','gold'),('^GSPC','sp500'),('^VIX','vix')]:
             try:
-                r=_r.get(f'https://query1.finance.yahoo.com/v8/finance/chart/{tk}?interval=1d&range=2d',headers={'User-Agent':'Mozilla/5.0'},timeout=6)
+                r=_r.get(f'https://query2.finance.yahoo.com/v8/finance/chart/{tk}?interval=1d&range=2d',headers={'User-Agent':'Mozilla/5.0'},timeout=6)
                 if r.status_code==200:
                     cl=[c for c in r.json()['chart']['result'][0]['indicators']['quote'][0]['close'] if c]
                     if len(cl)>=2:
