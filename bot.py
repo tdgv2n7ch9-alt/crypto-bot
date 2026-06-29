@@ -1880,7 +1880,7 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
         try:
             chart.seek(0)
             await bot.send_photo(chat_id=chat_id, photo=chart,
-                                 caption=caption, parse_mode="Markdown",
+                                 caption=caption, parse_mode="HTML",
                                  reply_markup=kb)
             log.info(f"send_photo OK: {symbol}")
             return
@@ -1889,13 +1889,13 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
             try:
                 chart.seek(0)
                 await bot.send_photo(chat_id=chat_id, photo=chart)
-                await bot.send_message(chat_id, text, parse_mode="Markdown",
+                await bot.send_message(chat_id, text, parse_mode="HTML",
                                        reply_markup=kb, disable_web_page_preview=True)
                 return
             except Exception as e2:
                 log.error(f"send_photo split FAILED {symbol}: {e2}")
 
-    await bot.send_message(chat_id, text, parse_mode="Markdown",
+    await bot.send_message(chat_id, text, parse_mode="HTML",
                            reply_markup=kb, disable_web_page_preview=True)
 
 async def send_signals_batch(bot, chat_id, coins):
@@ -2293,7 +2293,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text(": `/2 BTC`", parse_mode="Markdown")
+        await update.message.reply_text(": `/2 BTC`", parse_mode="HTML")
         return
     symbol = ctx.args[0].upper()
     msg    = await update.message.reply_text(f"  {symbol}...")
