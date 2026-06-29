@@ -2172,7 +2172,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         dxy_ch=0
         try:
             _ydxy=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
-            _dc=_ydxy.get("chart",{}).get("result",[{}])[0].get("indicators",{}).get("quote",[{}])[0].get("close",[])
+            _res=_ydxy.get("chart",{}).get("result",[]); _dc=_res[0].get("indicators",{}).get("quote",[{}])[0].get("close",[]) if _res else []
             _dc=[x for x in _dc if x]
             if len(_dc)>=2: dxy_ch=(_dc[-1]-_dc[-2])/_dc[-2]*100
         except: pass
