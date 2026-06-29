@@ -2160,7 +2160,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === DXY ===
         dxy_ch=0
         try:
-            _ydxy=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
+            _ydxy=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX=F?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
             _dc=_ydxy.get("chart",{}).get("result",[{}])[0].get("indicators",{}).get("quote",[{}])[0].get("close",[])
             _dc=[x for x in _dc if x]
             if len(_dc)>=2: dxy_ch=(_dc[-1]-_dc[-2])/_dc[-2]*100
@@ -3220,7 +3220,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # DXY
             dxy=0; dxy_ch=0
             try:
-                dx=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
+                dx=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/DX=F?interval=1d&range=5d",timeout=6).json()
                 dc=dx["chart"]["result"][0]["indicators"]["quote"][0]["close"]
                 dc=[x for x in dc if x]
                 dxy=dc[-1]; dxy_ch=(dc[-1]-dc[-2])/dc[-2]*100 if len(dc)>=2 else 0
