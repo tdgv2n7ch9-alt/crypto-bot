@@ -2006,7 +2006,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_chat_ids.add(cid)
     with open("chat_ids.txt", "a") as f:
         f.write(f"{cid}\n")
-    SEP = "➖➖➖➖➖➖➖➖➖➖"
+    SEP = "━━━━━━━━━━━━━━━━━━━━"
     name = update.effective_user.first_name or "трейдер"
     await update.message.reply_text(
         f"👋 *Привет, {name}!*\n"
@@ -2180,7 +2180,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else: pcr_z="⚪ НЕЙТРАЛЬНЫЙ"
 
         # === BTC.D liquidity ===
-        if btc_dom>50 and btc_ch24>0: liq="🔴 Капитал в BTC, альты под давлением"
+        if btc_dom>55 and btc_ch24>1.5: liq="🔴 Капитал в BTC, альты под давлением"
         elif btc_dom>50 and btc_ch24<0: liq="🔴 BTC.D+BTC паника"
         elif btc_dom<50 and btc_ch24>0: liq="🟢 Альт-сезон формируется"
         else: liq="🟡 Консолидация"
@@ -2454,7 +2454,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     #     
     if data == "show_menu":
-        SEP = "➖➖➖➖➖➖➖➖➖➖"
+        SEP = "━━━━━━━━━━━━━━━━━━━━"
         await q.edit_message_text(
             f"🚀 *BEST TRADE v42*\n"
             f"_{now_utc3()}_\n"
@@ -3262,7 +3262,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # USDT market cap (stablecoin flow)
             usdt_mcap=0
             try:
-                usdt_q=next((c for c in coins if c["symbol"]=="USDT"),{})
+                usdt_q=next((c for c in coins if c["symbol"]=="USDT" or c.get("slug","")=="tether"),{})
                 usdt_mcap=usdt_q.get("quote",{}).get("USDT",{}).get("market_cap",0) or 0
             except: pass
 
@@ -3278,7 +3278,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 else: oi_signal="🟡 Цена↓ OI↓ — выход из позиций, движение слабеет"
 
             # BTC.D liquidity direction
-            if btc_dom>50 and btc_ch24>0: liq_dir="🔴 Капитал в BTC — альты под давлением"
+            if btc_dom>55 and btc_ch24>1.5: liq_dir="🔴 Капитал в BTC — альты под давлением"
             elif btc_dom<50 and btc_ch24>0: liq_dir="🟢 Капитал в альты — альт-сезон"
             elif btc_dom>50 and btc_ch24<0: liq_dir="🔴 BTC.D+BTC паника"
             else: liq_dir="🟡 Консолидация"
@@ -7521,7 +7521,7 @@ async def cmd_x100_scanner(update, ctx):
                 })
         candidates.sort(key=lambda x: (-x["score"]))
         top = candidates[:15]
-        SEP = "➖➖➖➖➖➖➖➖➖➖"
+        SEP = "━━━━━━━━━━━━━━━━━━━━"
         def sign(v): return f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%"
         lines = [
             "🚀 *BEST TRADE — x100 СКАНЕР*",
@@ -7975,7 +7975,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if btc_ctx["ok"] and not btc_ctx["long_ok"]:
         btc_warn = f"\n⚠️ *{btc_ctx['warning']}*\n"
 
-    SEP = "➖➖➖➖➖➖➖➖➖➖"
+    SEP = "━━━━━━━━━━━━━━━━━━━━"
     kz_line = (killzone_label().split(chr(10)) or [""])[0]
 
     list_lines = [
@@ -8088,7 +8088,7 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown", reply_markup=nav
         ); return
 
-    SEP = "➖➖➖➖➖➖➖➖➖➖"
+    SEP = "━━━━━━━━━━━━━━━━━━━━"
     list_lines = [
         "🔴 *BEST TRADE — ТОП ШОРТ*",
         f"🕐 _{now_utc3()}_",
@@ -8707,7 +8707,7 @@ def get_macro_data():
     res={'ok':False,'dxy':0,'gold':0,'sp500':0,'vix':0,'dxy_ch':0,'gold_ch':0,'sp500_ch':0,'vix_ch':0,'macro_signal':'neutral','macro_score':0}
     try:
         sc=0
-        for tk,k in [('DX-Y.NYB','dxy'),('GC=F','gold'),('^GSPC','sp500'),('^VIX','vix')]:
+        for tk,k in [('DX=F','dxy'),('GC=F','gold'),('^GSPC','sp500'),('^VIX','vix')]:
             try:
                 r=_r.get(f'https://query1.finance.yahoo.com/v8/finance/chart/{tk}?interval=1d&range=2d',headers={'User-Agent':'Mozilla/5.0'},timeout=6)
                 if r.status_code==200:
