@@ -2686,7 +2686,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer(f"{result}  {sym}USDT")
         await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(f"{'  ' if action=='tp' else ''} {result}  {sym}", callback_data="noop"),
-            InlineKeyboardButton(" ", callback_data="show_menu"),
+            InlineKeyboardButton("🏠 Меню", callback_data="show_menu"),
         ]]))
     elif data.startswith("full_"):
         symbol = data[5:]
