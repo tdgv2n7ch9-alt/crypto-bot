@@ -2150,17 +2150,20 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === S&P500 context ===
         sp_ch=0
         try:
-            if TWELVE_API_KEY:
-                _td=_r.get(f"https://api.twelvedata.com/quote?symbol=SPX&apikey={TWELVE_API_KEY}",timeout=6).json()
-                sp_ch=float(_td.get("percent_change",0) or 0)
+            _ysp=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
+            _yc=_ysp.get("chart",{}).get("result",[{}])[0]
+            _yq=_yc.get("indicators",{}).get("quote",[{}])[0].get("close",[])
+            _yq=[x for x in _yq if x]
+            if len(_yq)>=2: sp_ch=(_yq[-1]-_yq[-2])/_yq[-2]*100
         except: pass
 
         # === DXY ===
         dxy_ch=0
         try:
-            if TWELVE_API_KEY:
-                _td2=_r.get(f"https://api.twelvedata.com/quote?symbol=DXY&apikey={TWELVE_API_KEY}",timeout=6).json()
-                dxy_ch=float(_td2.get("percent_change",0) or 0)
+            _ydxy=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
+            _dc=_ydxy.get("chart",{}).get("result",[{}])[0].get("indicators",{}).get("quote",[{}])[0].get("close",[])
+            _dc=[x for x in _dc if x]
+            if len(_dc)>=2: dxy_ch=(_dc[-1]-_dc[-2])/_dc[-2]*100
         except: pass
 
         # === Put/Call ratio Deribit ===
@@ -3205,10 +3208,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # S&P500
             sp_price=0; sp_ch=0
             try:
-                if TWELVE_API_KEY:
-                    _td=_r.get(f"https://api.twelvedata.com/quote?symbol=SPX&apikey={TWELVE_API_KEY}",timeout=6).json()
-                    sp_price=float(_td.get("close",0) or 0)
-                    sp_ch=float(_td.get("percent_change",0) or 0)
+                _ysp=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
+                _ym=_ysp.get("chart",{}).get("result",[{}])[0].get("meta",{})
+                sp_price=float(_ym.get("regularMarketPrice",0) or 0)
+                _yq=_ysp.get("chart",{}).get("result",[{}])[0].get("indicators",{}).get("quote",[{}])[0].get("close",[])
+                _yq=[x for x in _yq if x]
+                if len(_yq)>=2: sp_ch=(_yq[-1]-_yq[-2])/_yq[-2]*100
             except: pass
 
             # DXY
@@ -3223,18 +3228,19 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Gold
             gold=0; gold_ch=0
             try:
-                if TWELVE_API_KEY:
-                    _td3=_r.get(f"https://api.twelvedata.com/quote?symbol=XAU%2FUSD&apikey={TWELVE_API_KEY}",timeout=6).json()
-                    gold=float(_td3.get("close",0) or 0)
-                    gold_ch=float(_td3.get("percent_change",0) or 0)
+                _ygold=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
+                _gm=_ygold.get("chart",{}).get("result",[{}])[0].get("meta",{})
+                gold=float(_gm.get("regularMarketPrice",0) or 0)
+                _gc=_ygold.get("chart",{}).get("result",[{}])[0].get("indicators",{}).get("quote",[{}])[0].get("close",[])
+                _gc=[x for x in _gc if x]
+                if len(_gc)>=2: gold_ch=(_gc[-1]-_gc[-2])/_gc[-2]*100
             except: pass
 
             # VIX
             vix=0
             try:
-                if TWELVE_API_KEY:
-                    _td4=_r.get(f"https://api.twelvedata.com/quote?symbol=VIX&apikey={TWELVE_API_KEY}",timeout=6).json()
-                    vix=float(_td4.get("close",0) or 0)
+                _yvix=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=2d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
+                vix=float(_yvix.get("chart",{}).get("result",[{}])[0].get("meta",{}).get("regularMarketPrice",0) or 0)
             except: pass
 
             # EMA 50/200
