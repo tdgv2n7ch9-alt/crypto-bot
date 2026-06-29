@@ -2149,19 +2149,19 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === S&P500 context ===
         sp_ch=0
         try:
-            sp=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d",timeout=6).json()
-            sp_closes=sp["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            sp_closes=[x for x in sp_closes if x]
+            sp=_r.get("https://stooq.com/q/d/l/?s=%5Espx&i=d",timeout=6).text.strip().split("\n")
+            sp_rows=[r.split(",") for r in sp[1:] if len(r.split(","))>=5]
+            sp_closes=[float(r[4]) for r in sp_rows if r[4] not in ("null","")]
             if len(sp_closes)>=2: sp_ch=(sp_closes[-1]-sp_closes[-2])/sp_closes[-2]*100
         except: pass
 
         # === DXY ===
         dxy_ch=0
         try:
-            dxy=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
-            dxy_c=dxy["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            dxy_c=[x for x in dxy_c if x]
-            if len(dxy_c)>=2: dxy_ch=(dxy_c[-1]-dxy_c[-2])/dxy_c[-2]*100
+            dx=_r.get("https://stooq.com/q/d/l/?s=usdx.fx&i=d",timeout=6).text.strip().split("\n")
+            dx_rows=[r.split(",") for r in dx[1:] if len(r.split(","))>=5]
+            dx_closes=[float(r[4]) for r in dx_rows if r[4] not in ("null","")]
+            if len(dx_closes)>=2: dxy_ch=(dx_closes[-1]-dx_closes[-2])/dx_closes[-2]*100
         except: pass
 
         # === Put/Call ratio Deribit ===
@@ -3206,10 +3206,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # S&P500
             sp_price=0; sp_ch=0
             try:
-                sp=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d",timeout=6).json()
-                sp_c=sp["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-                sp_c=[x for x in sp_c if x]
-                sp_price=sp_c[-1]; sp_ch=(sp_c[-1]-sp_c[-2])/sp_c[-2]*100 if len(sp_c)>=2 else 0
+                sp=_r.get("https://stooq.com/q/d/l/?s=%5Espx&i=d",timeout=6).text.strip().split("\n")
+                sp_rows=[r.split(",") for r in sp[1:] if len(r.split(","))>=5]
+                sp_closes=[float(r[4]) for r in sp_rows if r[4] not in ("null","")]
+                sp_price=sp_closes[-1] if sp_closes else 0
+                sp_ch=(sp_closes[-1]-sp_closes[-2])/sp_closes[-2]*100 if len(sp_closes)>=2 else 0
             except: pass
 
             # DXY
@@ -3224,19 +3225,20 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Gold
             gold=0; gold_ch=0
             try:
-                gd=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1d&range=5d",timeout=6).json()
-                gc=gd["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-                gc=[x for x in gc if x]
-                gold=gc[-1]; gold_ch=(gc[-1]-gc[-2])/gc[-2]*100 if len(gc)>=2 else 0
+                gd=_r.get("https://stooq.com/q/d/l/?s=xauusd&i=d",timeout=6).text.strip().split("\n")
+                gd_rows=[r.split(",") for r in gd[1:] if len(r.split(","))>=5]
+                gc=[float(r[4]) for r in gd_rows if r[4] not in ("null","")]
+                gold=gc[-1] if gc else 0
+                gold_ch=(gc[-1]-gc[-2])/gc[-2]*100 if len(gc)>=2 else 0
             except: pass
 
             # VIX
             vix=0
             try:
-                vi=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d",timeout=6).json()
-                vc=vi["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-                vc=[x for x in vc if x]
-                vix=vc[-1]
+                vi=_r.get("https://stooq.com/q/d/l/?s=%5Evix&i=d",timeout=6).text.strip().split("\n")
+                vi_rows=[r.split(",") for r in vi[1:] if len(r.split(","))>=5]
+                vc=[float(r[4]) for r in vi_rows if r[4] not in ("null","")]
+                vix=vc[-1] if vc else 0
             except: pass
 
             # EMA 50/200
