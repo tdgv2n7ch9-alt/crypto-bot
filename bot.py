@@ -3144,6 +3144,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⏳ Загружаю институциональный анализ...", parse_mode="Markdown")
         try:
             import datetime
+            import requests as _r
             coins=get_all_coins()
             gm=get_global_metrics()
             prices=get_btc_eth_price()
