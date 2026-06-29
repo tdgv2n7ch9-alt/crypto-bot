@@ -406,38 +406,49 @@ def get_btc_eth_price() -> dict:
         return {}
 
 def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
-    """   Binance.    ."""
-    def _fetch(ticker):
-        try:
-            url    = "https://api.binance.com/api/v3/klines"
-            params = {"symbol": ticker, "interval": interval, "limit": limit}
-            r      = requests.get(url, params=params, timeout=12)
-            if r.status_code != 200:
-                return []
+    """OHLC через CoinGecko (Binance заблокирован на Railway)"""
+    import requests as _r2
+    # Map symbol to CoinGecko slug
+    _slug_map = {
+        "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+        "BNB": "binancecoin", "XRP": "ripple", "ADA": "cardano",
+        "AVAX": "avalanche-2", "DOT": "polkadot", "MATIC": "matic-network",
+        "LINK": "chainlink", "UNI": "uniswap", "ATOM": "cosmos",
+        "LTC": "litecoin", "BCH": "bitcoin-cash", "DOGE": "dogecoin",
+        "SHIB": "shiba-inu", "TRX": "tron", "TON": "the-open-network",
+        "NEAR": "near", "APT": "aptos", "ARB": "arbitrum",
+        "OP": "optimism", "SUI": "sui", "INJ": "injective-protocol",
+        "FTM": "fantom", "ALGO": "algorand", "ICP": "internet-computer",
+        "AAVE": "aave", "CAKE": "pancakeswap-token", "MANA": "decentraland",
+        "SAND": "the-sandbox", "AXS": "axie-infinity", "PEPE": "pepe",
+        "WIF": "dogwifcoin", "BONK": "bonk", "JUP": "jupiter-exchange-solana",
+    }
+    sym = symbol.upper().replace("USDT","").replace("BUSD","").replace("USD","")
+    slug = _slug_map.get(sym, sym.lower())
+    # days based on interval and limit
+    if interval in ("1h","1H"):
+        days = max(2, limit // 24)
+    elif interval in ("1d","1D"):
+        days = min(365, limit)
+    else:  # 4h default
+        days = min(90, max(14, limit // 6))
+    try:
+        r = _r2.get(
+            f"https://api.coingecko.com/api/v3/coins/{slug}/ohlc",
+            params={"vs_currency": "usd", "days": str(days)},
+            timeout=10)
+        if r.status_code == 200 and isinstance(r.json(), list) and r.json():
             data = r.json()
-            if not data or isinstance(data, dict):
-                return []
-            return [
-                {
-                    "time":  datetime.fromtimestamp(d[0] / 1000, tz=TZ),
-                    "open":  float(d[1]),
-                    "high":  float(d[2]),
-                    "low":   float(d[3]),
-                    "close": float(d[4]),
-                    "vol":   float(d[5]),
-                }
-                for d in data
-            ]
-        except:
-            return []
-
-    #    
-    sym_upper = symbol.upper().replace("USDT", "")
-    for ticker in [f"{sym_upper}USDT", f"{sym_upper}BUSD", f"{sym_upper}BTC"]:
-        result = _fetch(ticker)
-        if result and len(result) >= 10:
-            return result
-    log.warning(f"Binance OHLC not found: {symbol} ({interval})")
+            result = []
+            for d in data:
+                result.append({
+                    "open": str(d[1]), "high": str(d[2]),
+                    "low": str(d[3]), "close": str(d[4]),
+                    "vol": "0", "timestamp": d[0]
+                })
+            return result[-limit:] if len(result) > limit else result
+    except Exception:
+        pass
     return []
 
 def get_binance_24h(symbol: str) -> dict:
