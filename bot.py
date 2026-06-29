@@ -2123,9 +2123,9 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === OI + Funding BTC ===
         oi_btc=0; fund_btc=0
         try:
-            oi_r=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"BTCUSDT"},timeout=5).json()
-            oi_btc=float(oi_r.get("openInterest",0))*btc_price/1e9
-        except: pass
+            oi_r=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"BTCUSDT"},timeout=8).json()
+            oi_btc=float(oi_r.get("openInterest",0) or 0)*btc_price/1e9
+        except Exception as _e: log.error(f"OI BTC: {_e}")
         try:
             fr=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",
                 params={"symbol":"BTCUSDT","limit":1},timeout=5).json()
