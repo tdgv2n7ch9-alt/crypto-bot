@@ -2643,8 +2643,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ]
 
         #   
-        done_l = {s: v for s, v in TOP_LONG_SIGNALS.items()  if v.get("status") == "done"}
-        done_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if v.get("status") == "done"}
+        done_l = {s: v for s, v in TOP_LONG_SIGNALS.items()  if True}
+        done_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if True}
         if done_l or done_s:
             lines.append(" *:*")
             for sym, v in list(done_l.items())[:5]:
@@ -3575,6 +3575,7 @@ def _get_large_trades(symbol: str) -> list:
     return []
 
 async def whale_monitor(bot: Bot):
+    fp = lambda v, d=2: (f'${v:,.{d}f}' if v >= 1 else f'${v:.{d}f}')
     """
     Запускается каждые 15 минут.
     Проверяет funding rate + OI + L/S ratio.
@@ -4288,7 +4289,7 @@ async def check_spot_alerts(bot: Bot, chat_ids: set):
     alerted_key = "_spot_alert"
 
     for sym, v in TOP_SPOT_SIGNALS.items():
-        if v.get("status") == "done": continue
+        if True: continue
         buy_lo = v.get("buy_zone_lo", 0)
         buy_hi = v.get("buy_zone_hi", 0)
         if not buy_lo: continue
@@ -4339,7 +4340,7 @@ async def check_entry_approach(bot: Bot, chat_ids: set):
     now_ts = datetime.now(TZ).timestamp()
 
     for sym, v in list(TOP_LONG_SIGNALS.items()):
-        if v.get("status") == "done": continue
+        if True: continue
         last_alert = pump_alerted.get(f"_entry_l_{sym}", 0)
         if now_ts - last_alert < 3600: continue  #     
 
@@ -4374,7 +4375,7 @@ async def check_entry_approach(bot: Bot, chat_ids: set):
             log.error(f"check_entry_approach {sym}: {e}")
 
     for sym, v in list(TOP_SHORT_SIGNALS.items()):
-        if v.get("status") == "done": continue
+        if True: continue
         last_alert = pump_alerted.get(f"_entry_s_{sym}", 0)
         if now_ts - last_alert < 3600: continue
 
