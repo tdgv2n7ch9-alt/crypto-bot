@@ -105,6 +105,7 @@ import pytz
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
+TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -2149,19 +2150,17 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === S&P500 context ===
         sp_ch=0
         try:
-            sp=_r.get("https://stooq.com/q/d/l/?s=%5Espx&i=d",timeout=6).text.strip().split("\n")
-            sp_rows=[r.split(",") for r in sp[1:] if len(r.split(","))>=5]
-            sp_closes=[float(r[4]) for r in sp_rows if r[4] not in ("null","")]
-            if len(sp_closes)>=2: sp_ch=(sp_closes[-1]-sp_closes[-2])/sp_closes[-2]*100
+            if TWELVE_API_KEY:
+                _td=_r.get(f"https://api.twelvedata.com/quote?symbol=SPX&apikey={TWELVE_API_KEY}",timeout=6).json()
+                sp_ch=float(_td.get("percent_change",0) or 0)
         except: pass
 
         # === DXY ===
         dxy_ch=0
         try:
-            dx=_r.get("https://stooq.com/q/d/l/?s=usdx.fx&i=d",timeout=6).text.strip().split("\n")
-            dx_rows=[r.split(",") for r in dx[1:] if len(r.split(","))>=5]
-            dx_closes=[float(r[4]) for r in dx_rows if r[4] not in ("null","")]
-            if len(dx_closes)>=2: dxy_ch=(dx_closes[-1]-dx_closes[-2])/dx_closes[-2]*100
+            if TWELVE_API_KEY:
+                _td2=_r.get(f"https://api.twelvedata.com/quote?symbol=DXY&apikey={TWELVE_API_KEY}",timeout=6).json()
+                dxy_ch=float(_td2.get("percent_change",0) or 0)
         except: pass
 
         # === Put/Call ratio Deribit ===
@@ -3206,11 +3205,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # S&P500
             sp_price=0; sp_ch=0
             try:
-                sp=_r.get("https://stooq.com/q/d/l/?s=%5Espx&i=d",timeout=6).text.strip().split("\n")
-                sp_rows=[r.split(",") for r in sp[1:] if len(r.split(","))>=5]
-                sp_closes=[float(r[4]) for r in sp_rows if r[4] not in ("null","")]
-                sp_price=sp_closes[-1] if sp_closes else 0
-                sp_ch=(sp_closes[-1]-sp_closes[-2])/sp_closes[-2]*100 if len(sp_closes)>=2 else 0
+                if TWELVE_API_KEY:
+                    _td=_r.get(f"https://api.twelvedata.com/quote?symbol=SPX&apikey={TWELVE_API_KEY}",timeout=6).json()
+                    sp_price=float(_td.get("close",0) or 0)
+                    sp_ch=float(_td.get("percent_change",0) or 0)
             except: pass
 
             # DXY
@@ -3225,20 +3223,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Gold
             gold=0; gold_ch=0
             try:
-                gd=_r.get("https://stooq.com/q/d/l/?s=xauusd&i=d",timeout=6).text.strip().split("\n")
-                gd_rows=[r.split(",") for r in gd[1:] if len(r.split(","))>=5]
-                gc=[float(r[4]) for r in gd_rows if r[4] not in ("null","")]
-                gold=gc[-1] if gc else 0
-                gold_ch=(gc[-1]-gc[-2])/gc[-2]*100 if len(gc)>=2 else 0
+                if TWELVE_API_KEY:
+                    _td3=_r.get(f"https://api.twelvedata.com/quote?symbol=XAU%2FUSD&apikey={TWELVE_API_KEY}",timeout=6).json()
+                    gold=float(_td3.get("close",0) or 0)
+                    gold_ch=float(_td3.get("percent_change",0) or 0)
             except: pass
 
             # VIX
             vix=0
             try:
-                vi=_r.get("https://stooq.com/q/d/l/?s=%5Evix&i=d",timeout=6).text.strip().split("\n")
-                vi_rows=[r.split(",") for r in vi[1:] if len(r.split(","))>=5]
-                vc=[float(r[4]) for r in vi_rows if r[4] not in ("null","")]
-                vix=vc[-1] if vc else 0
+                if TWELVE_API_KEY:
+                    _td4=_r.get(f"https://api.twelvedata.com/quote?symbol=VIX&apikey={TWELVE_API_KEY}",timeout=6).json()
+                    vix=float(_td4.get("close",0) or 0)
             except: pass
 
             # EMA 50/200
