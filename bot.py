@@ -3574,6 +3574,39 @@ def _get_large_trades(symbol: str) -> list:
     """Крупные сделки (заглушка — Binance недоступен на Railway)"""
     return []
 
+def _format_whale_alert(w: dict) -> str:
+    """Форматирует алерт кита для отправки"""
+    fp = lambda v, d=2: (f"${v:,.{d}f}" if v >= 1 else f"${v:.{d}f}")
+    sym = w.get("symbol", "?")
+    direction = w.get("direction", "NEUTRAL")
+    score = w.get("score", 0)
+    signals = w.get("signals", [])
+    funding = w.get("funding", 0)
+    oi = w.get("oi", 0)
+    ls = w.get("ls", 1.0)
+    price = w.get("price", 0)
+
+    dir_emoji = "🟢 ЛОНГ" if direction == "LONG" else ("🔴 ШОРТ" if direction == "SHORT" else "⚪ НЕЙТРАЛЬНО")
+    lines_out = [
+        f"🐋 *WHALE MONITOR — {sym}*",
+        f"━━━━━━━━━━━━━━━━━━━━",
+        f"📍 Цена: {fp(price)}",
+        f"📊 Направление: {dir_emoji}",
+        f"💯 Скор: {score}/10",
+        f"",
+        f"📋 Сигналы:",
+    ]
+    for s in signals:
+        lines_out.append(f"  • {s}")
+    lines_out += [
+        f"",
+        f"📈 Funding: {funding:.4f}%",
+        f"📊 OI изменение: {oi:.2f}%",
+        f"⚖️ L/S Ratio: {ls:.2f}",
+        f"━━━━━━━━━━━━━━━━━━━━",
+    ]
+    return "\n".join(lines_out)
+
 async def whale_monitor(bot: Bot):
     fp = lambda v, d=2: (f'${v:,.{d}f}' if v >= 1 else f'${v:.{d}f}')
     """
