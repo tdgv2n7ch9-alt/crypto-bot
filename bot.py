@@ -2032,30 +2032,46 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
     try:
+        import datetime, math
         prices = get_btc_eth_price()
         gm = get_global_metrics()
         coins = get_all_coins()
         if not prices or not coins:
             await msg.edit_text("❌ API"); return
+
         btc=prices.get("BTC",{}); eth=prices.get("ETH",{})
-        btc_price=btc.get("price",0); btc_ch24=btc.get("ch24h",0) or 0
-        btc_ch7d=0 or 0
-        eth_price=eth.get("price",0); eth_ch24=eth.get("ch24h",0) or 0
-        eth_ch7d=0 or 0
+        btc_price=btc.get("price",0) or 0
+        btc_ch24=btc.get("ch24h",0) or 0
+        eth_price=eth.get("price",0) or 0
+        eth_ch24=eth.get("ch24h",0) or 0
+
         sq=next((c for c in coins if c["symbol"]=="SOL"),{})
         sol_price=sq.get("quote",{}).get("USDT",{}).get("price",0) or 0
         sol_ch24=sq.get("quote",{}).get("USDT",{}).get("percent_change_24h",0) or 0
         sol_ch7d=sq.get("quote",{}).get("USDT",{}).get("percent_change_7d",0) or 0
+
         bq=next((c for c in coins if c["symbol"]=="BTC"),{})
-        b30=bq.get("quote",{}).get("USDT",{}).get("percent_change_30d",0) or 0
-        btc_dom=gm.get("btc_dominance",0); eth_dom=gm.get("eth_dominance",0)
-        total_mcap=gm.get("total_market_cap",0)
-        mcap_ch=gm.get("total_market_cap_yesterday_percentage_change",0) or 0
+        bq_u=bq.get("quote",{}).get("USDT",{})
+        btc_ch7d=bq_u.get("percent_change_7d",0) or 0
+        btc_ch30=bq_u.get("percent_change_30d",0) or 0
+        btc_vol24=bq_u.get("volume_24h",0) or 0
+
+        eq=next((c for c in coins if c["symbol"]=="ETH"),{})
+        eth_ch7d=eq.get("quote",{}).get("USDT",{}).get("percent_change_7d",0) or 0
+
+        btc_dom=gm.get("btc_dominance",0) or 0
+        eth_dom=gm.get("eth_dominance",0) or 0
+        total_mcap=gm.get("total_mcap",0) or 0
+        mcap_ch=gm.get("mcap_change_24h",0) or 0
+
+        # === SENTIMENT ===
         pos=sum(1 for c in coins[:200] if (c["quote"]["USDT"].get("percent_change_24h") or 0)>0)
         pct=pos/200*100
         if pct>=65: sentiment="🟢 БЫЧИЙ"
         elif pct>=50: sentiment="🟡 НЕЙТРАЛЬНЫЙ"
         else: sentiment="🔴 МЕДВЕЖИЙ"
+
+        # === FEAR & GREED ===
         fv=50; fl="Neutral"
         try:
             fg=_r.get("https://api.alternative.me/fng/?limit=1",timeout=5).json()
@@ -2067,6 +2083,8 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif fv>=25: fg_em="🟠"; fg_z="СТРАХ"
         else: fg_em="🔴"; fg_z="КРАЙНИЙ СТРАХ"
         fg_bar="█"*(fv//10)+"░"*(10-fv//10)
+
+        # === RSI BTC 1D via Binance ===
         br=50.0
         try:
             kl=_r.get("https://api.binance.com/api/v3/klines",
@@ -2078,20 +2096,107 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif br>=45: rsi_z="⚪ НЕЙТРАЛЬНЫЙ"
         elif br>=30: rsi_z="🟠 МЕДВЕЖИЙ"
         else: rsi_z="🔴 ПЕРЕПРОДАН"
-        if btc_dom>50 and btc_ch24>0: liq="🔴 Капитал в BTC"
+
+        # === RSI 4H ===
+        br4=50.0
+        try:
+            kl4=_r.get("https://api.binance.com/api/v3/klines",
+                params={"symbol":"BTCUSDT","interval":"4h","limit":16},timeout=6).json()
+            br4=calc_rsi([float(k[4]) for k in kl4],14)
+        except: pass
+
+        # === EMA 50/200 trend ===
+        ema_trend="N/A"
+        try:
+            kl_d=_r.get("https://api.binance.com/api/v3/klines",
+                params={"symbol":"BTCUSDT","interval":"1d","limit":210},timeout=8).json()
+            closes=[float(k[4]) for k in kl_d]
+            def ema(data,n):
+                k2=2/(n+1); e=data[0]
+                for p in data[1:]: e=p*k2+e*(1-k2)
+                return e
+            e50=ema(closes[-50:],50); e200=ema(closes,200)
+            if e50>e200: ema_trend="🟢 EMA50 > EMA200 (ГОЛДЕН КРОСС)"
+            else: ema_trend="🔴 EMA50 < EMA200 (ДЕАТКРОСС)"
+        except: pass
+
+        # === OI + Funding BTC ===
+        oi_btc=0; fund_btc=0
+        try:
+            oi_r=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"BTCUSDT"},timeout=5).json()
+            oi_btc=float(oi_r.get("openInterest",0))*btc_price/1e9
+        except: pass
+        try:
+            fr=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",
+                params={"symbol":"BTCUSDT","limit":1},timeout=5).json()
+            fund_btc=float(fr[0].get("fundingRate",0))*100 if fr else 0
+        except: pass
+        if fund_btc>0.05: fund_z="🔴 ЛОНГИ ПЕРЕГРЕТЫ"
+        elif fund_btc<-0.05: fund_z="🟢 ШОРТЫ ПЕРЕГРЕТЫ"
+        else: fund_z="⚪ НОРМА"
+
+        # === Liquidations 24h ===
+        liq_long=0; liq_short=0
+        try:
+            liq_r=_r.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                params={"symbol":"BTCUSDT","period":"1h","limit":1},timeout=5).json()
+            ls_ratio=float(liq_r[0].get("longShortRatio",1)) if liq_r else 1
+        except: ls_ratio=1
+        if ls_ratio>1.5: ls_z="🔴 Лонгов слишком много"
+        elif ls_ratio<0.7: ls_z="🟢 Шортов слишком много"
+        else: ls_z="⚪ Баланс"
+
+        # === S&P500 context ===
+        sp_ch=0
+        try:
+            sp=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d",timeout=6).json()
+            sp_closes=sp["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            sp_closes=[x for x in sp_closes if x]
+            if len(sp_closes)>=2: sp_ch=(sp_closes[-1]-sp_closes[-2])/sp_closes[-2]*100
+        except: pass
+
+        # === DXY ===
+        dxy_ch=0
+        try:
+            dxy=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
+            dxy_c=dxy["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            dxy_c=[x for x in dxy_c if x]
+            if len(dxy_c)>=2: dxy_ch=(dxy_c[-1]-dxy_c[-2])/dxy_c[-2]*100
+        except: pass
+
+        # === Put/Call ratio Deribit ===
+        pcr=0
+        try:
+            pcr_r=_r.get("https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+                params={"currency":"BTC","kind":"option"},timeout=6).json()
+            calls=sum(1 for x in pcr_r.get("result",[]) if x.get("instrument_name","").endswith("C"))
+            puts=sum(1 for x in pcr_r.get("result",[]) if x.get("instrument_name","").endswith("P"))
+            pcr=round(puts/calls,2) if calls>0 else 0
+        except: pass
+        if pcr>1.2: pcr_z="🔴 МЕДВЕЖИЙ (PCR>1.2)"
+        elif pcr<0.7: pcr_z="🟢 БЫЧИЙ (PCR<0.7)"
+        else: pcr_z="⚪ НЕЙТРАЛЬНЫЙ"
+
+        # === BTC.D liquidity ===
+        if btc_dom>50 and btc_ch24>0: liq="🔴 Капитал в BTC, альты под давлением"
         elif btc_dom>50 and btc_ch24<0: liq="🔴 BTC.D+BTC паника"
-        elif btc_dom<50 and btc_ch24>0: liq="🟢 Альт-сезон"
+        elif btc_dom<50 and btc_ch24>0: liq="🟢 Альт-сезон формируется"
         else: liq="🟡 Консолидация"
-        if btc_ch7d>5 and b30>10: phase="📈 АПТРЕНД"
-        elif btc_ch7d<-5 and b30<-10: phase="📉 ДАУНТРЕНД"
-        elif abs(btc_ch7d)<3: phase="↔4️ БОКОВИК"
+
+        # === Market phase ===
+        if btc_ch7d>5 and btc_ch30>10: phase="📈 АПТРЕНД"
+        elif btc_ch7d<-5 and btc_ch30<-10: phase="📉 ДАУНТРЕНД"
+        elif abs(btc_ch7d)<3: phase="↔ БОКОВИК / АККУМУЛЯЦИЯ"
         else: phase="🔄 КОРРЕКЦИЯ"
-        import datetime
+
+        # === ICT Killzone ===
         now_h=(datetime.datetime.utcnow().hour+3)%24
         if 2<=now_h<10: kz="🌙 Азия (02-10) — низкая волатильность"
         elif 10<=now_h<18: kz="🇬🇧 Лондон (10-18) — задаёт направление"
         elif 15<=now_h<23: kz="🇺🇸 Нью-Йорк (15-23) — макс. волатильность"
         else: kz="🌃 Ночная сессия"
+
+        # === Top 24h / 7d ===
         s24=sorted(coins[:100],key=lambda c:c["quote"]["USDT"].get("percent_change_24h",0) or 0,reverse=True)
         def fc(v): return ("+"+str(round(v,1)) if v>=0 else str(round(v,1)))+"%"
         def fp(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
@@ -2115,6 +2220,8 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sym=c["symbol"]; ch=c["quote"]["USDT"].get("percent_change_7d",0) or 0
             v=c["quote"]["USDT"].get("volume_24h",0) or 0
             if v>=2000000: sl7.append("  🔴 "+sym+" "+fc(ch))
+
+        # === VERDICT SCORE ===
         score=0
         if btc_ch24>2: score+=2
         elif btc_ch24>0: score+=1
@@ -2124,26 +2231,42 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if 55<=br<70: score+=1
         elif br>=70 or br<35: score-=1
         if btc_dom<50 and btc_ch24>0: score+=2
-        if score>=5: verdict="A+ 🚀 Сильный бычий"
-        elif score>=3: verdict="A  📈 Бычий"
-        elif score>=1: verdict="B  🟡 Нейтрально-бычий"
+        if fund_btc>0.05: score-=1
+        if sp_ch>0: score+=1
+        elif sp_ch<-1: score-=1
+        if pcr>1.2: score-=1
+        elif pcr<0.7: score+=1
+        if score>=6: verdict="A+ 🚀 Сильный бычий"
+        elif score>=4: verdict="A  📈 Бычий"
+        elif score>=2: verdict="B  🟡 Нейтрально-бычий"
         elif score>=-1: verdict="C  ⚪ Нейтральный"
         else: verdict="D  📉 Медвежий"
+
         SEP="➖"*18
+        mcap_str="$"+str(round(total_mcap/1e12,2))+"T" if total_mcap>0 else "N/A"
+        oi_str=str(round(oi_btc,1))+"B" if oi_btc>0 else "N/A"
         out=[
             "⭐ BEST TRADE — ОБЗОР РЫНКА",SEP,"",
             "💰 КАПИТАЛИЗАЦИЯ",
-            "  Общая: $"+str(round(total_mcap/1e12,2))+"T  "+fp(mcap_ch),
+            "  Общая: "+mcap_str+"  "+fp(mcap_ch),
             "  BTC.D: "+str(round(btc_dom,1))+"%   ETH.D: "+str(round(eth_dom,1))+"%","",
             "📊 ЦЕНЫ",
             "  BTC  $"+f"{round(btc_price,0):,.0f}"+"  "+fe(btc_ch24)+" "+fp(btc_ch24)+"  7d: "+fp(btc_ch7d),
             "  ETH  $"+f"{round(eth_price,2):,.2f}"+"  "+fe(eth_ch24)+" "+fp(eth_ch24)+"  7d: "+fp(eth_ch7d),
             "  SOL  $"+f"{round(sol_price,2):,.2f}"+"  "+fe(sol_ch24)+" "+fp(sol_ch24)+"  7d: "+fp(sol_ch7d),"",
             "🧠 ИНДИКАТОРЫ",
-            "  RSI BTC 1D: "+str(round(br,1))+"  "+rsi_z,
+            "  RSI 1D: "+str(round(br,1))+"  "+rsi_z,
+            "  RSI 4H: "+str(round(br4,1)),
+            "  "+ema_trend,
             "  Fear&Greed: "+str(fv)+"/100  "+fg_em+" "+fg_z,
             "  ["+fg_bar+"]",
-            "  Сентимент:  "+sentiment+" ("+str(int(round(pct,0)))+"% растут)","",
+            "  Сентимент: "+sentiment+" ("+str(int(round(pct,0)))+"% растут)","",
+            "🏛 ИНСТИТУЦИОНАЛЫ",
+            "  OI BTC: $"+oi_str,
+            "  Funding: "+str(round(fund_btc,4))+"% — "+fund_z,
+            "  L/S Ratio: "+str(round(ls_ratio,2))+" — "+ls_z,
+            "  Put/Call: "+str(pcr)+" — "+pcr_z,
+            "  S&P500: "+fp(sp_ch)+"  DXY: "+fp(dxy_ch),"",
             "🌊 ЛИКВИДНОСТЬ",
             "  BTC.D "+str(round(btc_dom,1))+"% — "+liq,"",
             "📈 ФАЗА РЫНКА","  "+phase,"",
@@ -3014,6 +3137,215 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text("❌ Нет данных",reply_markup=back_kb())
         except Exception as e:
             await q.edit_message_text(f"❌ {e}",reply_markup=back_kb())
+
+    elif data == "institutional":
+        await q.edit_message_text("⏳ Загружаю институциональный анализ...", parse_mode="Markdown")
+        try:
+            import datetime
+            coins=get_all_coins()
+            gm=get_global_metrics()
+            prices=get_btc_eth_price()
+            btc_dom=gm.get("btc_dominance",0) or 0
+            eth_dom=gm.get("eth_dominance",0) or 0
+            total_mcap=gm.get("total_mcap",0) or 0
+            btc=prices.get("BTC",{}); btc_price=btc.get("price",0) or 0
+            btc_ch24=btc.get("ch24h",0) or 0
+            bq=next((c for c in coins if c["symbol"]=="BTC"),{})
+            btc_ch7d=bq.get("quote",{}).get("USDT",{}).get("percent_change_7d",0) or 0
+            btc_ch30=bq.get("quote",{}).get("USDT",{}).get("percent_change_30d",0) or 0
+            btc_vol=bq.get("quote",{}).get("USDT",{}).get("volume_24h",0) or 0
+
+            # Fear & Greed
+            fv=50; fl="Neutral"
+            try:
+                fg=_r.get("https://api.alternative.me/fng/?limit=1",timeout=5).json()
+                fv=int(fg["data"][0]["value"]); fl=fg["data"][0]["value_classification"]
+            except: pass
+
+            # OI BTC + ETH
+            oi_btc=0; oi_eth=0
+            try:
+                r1=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"BTCUSDT"},timeout=5).json()
+                oi_btc=float(r1.get("openInterest",0))*btc_price/1e9
+            except: pass
+            try:
+                eth_price=prices.get("ETH",{}).get("price",0) or 0
+                r2=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"ETHUSDT"},timeout=5).json()
+                oi_eth=float(r2.get("openInterest",0))*eth_price/1e9
+            except: pass
+
+            # Funding rates BTC + ETH
+            fund_btc=0; fund_eth=0
+            try:
+                fr=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",params={"symbol":"BTCUSDT","limit":1},timeout=5).json()
+                fund_btc=float(fr[0].get("fundingRate",0))*100 if fr else 0
+            except: pass
+            try:
+                fr2=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",params={"symbol":"ETHUSDT","limit":1},timeout=5).json()
+                fund_eth=float(fr2[0].get("fundingRate",0))*100 if fr2 else 0
+            except: pass
+
+            # Long/Short ratio
+            ls_ratio=1.0
+            try:
+                lsr=_r.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                    params={"symbol":"BTCUSDT","period":"1h","limit":1},timeout=5).json()
+                ls_ratio=float(lsr[0].get("longShortRatio",1)) if lsr else 1
+            except: pass
+
+            # Put/Call ratio Deribit
+            pcr=0
+            try:
+                pcr_r=_r.get("https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
+                    params={"currency":"BTC","kind":"option"},timeout=6).json()
+                calls=sum(1 for x in pcr_r.get("result",[]) if x.get("instrument_name","").endswith("C"))
+                puts=sum(1 for x in pcr_r.get("result",[]) if x.get("instrument_name","").endswith("P"))
+                pcr=round(puts/calls,2) if calls>0 else 0
+            except: pass
+
+            # S&P500
+            sp_price=0; sp_ch=0
+            try:
+                sp=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d",timeout=6).json()
+                sp_c=sp["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+                sp_c=[x for x in sp_c if x]
+                sp_price=sp_c[-1]; sp_ch=(sp_c[-1]-sp_c[-2])/sp_c[-2]*100 if len(sp_c)>=2 else 0
+            except: pass
+
+            # DXY
+            dxy=0; dxy_ch=0
+            try:
+                dx=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
+                dc=dx["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+                dc=[x for x in dc if x]
+                dxy=dc[-1]; dxy_ch=(dc[-1]-dc[-2])/dc[-2]*100 if len(dc)>=2 else 0
+            except: pass
+
+            # Gold
+            gold=0; gold_ch=0
+            try:
+                gd=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?interval=1d&range=5d",timeout=6).json()
+                gc=gd["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+                gc=[x for x in gc if x]
+                gold=gc[-1]; gold_ch=(gc[-1]-gc[-2])/gc[-2]*100 if len(gc)>=2 else 0
+            except: pass
+
+            # VIX
+            vix=0
+            try:
+                vi=_r.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d",timeout=6).json()
+                vc=vi["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+                vc=[x for x in vc if x]
+                vix=vc[-1]
+            except: pass
+
+            # EMA 50/200
+            ema_cross="N/A"
+            try:
+                kl=_r.get("https://api.binance.com/api/v3/klines",
+                    params={"symbol":"BTCUSDT","interval":"1d","limit":210},timeout=8).json()
+                cl=[float(k[4]) for k in kl]
+                def ema_f(d,n):
+                    k2=2/(n+1); e=d[0]
+                    for p in d[1:]: e=p*k2+e*(1-k2)
+                    return e
+                e50=ema_f(cl[-50:],50); e200=ema_f(cl,200)
+                if e50>e200: ema_cross="🟢 EMA50 > EMA200 (ГОЛДЕН КРОСС)"
+                else: ema_cross="🔴 EMA50 < EMA200 (ДЕАД КРОСС)"
+            except: pass
+
+            # USDT market cap (stablecoin flow)
+            usdt_mcap=0
+            try:
+                usdt_q=next((c for c in coins if c["symbol"]=="USDT"),{})
+                usdt_mcap=usdt_q.get("quote",{}).get("USDT",{}).get("market_cap",0) or 0
+            except: pass
+
+            def fp(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
+            def fe(v): return "🟢" if v>=0.5 else ("🔴" if v<=-0.5 else "⚪")
+
+            # OI matrix
+            if btc_ch24>0 and oi_btc>0:
+                if fund_btc>0: oi_signal="🟢 Цена↑ OI↑ — новые лонги, сильный тренд"
+                else: oi_signal="🟡 Цена↑ OI↓ — шорт-сквиз, может исчерпаться"
+            else:
+                if fund_btc<0: oi_signal="🔴 Цена↓ OI↑ — новые шорты, реальное давление"
+                else: oi_signal="🟡 Цена↓ OI↓ — выход из позиций, движение слабеет"
+
+            # BTC.D liquidity direction
+            if btc_dom>50 and btc_ch24>0: liq_dir="🔴 Капитал в BTC — альты под давлением"
+            elif btc_dom<50 and btc_ch24>0: liq_dir="🟢 Капитал в альты — альт-сезон"
+            elif btc_dom>50 and btc_ch24<0: liq_dir="🔴 BTC.D+BTC паника"
+            else: liq_dir="🟡 Консолидация"
+
+            # S&P correlation signal
+            if sp_ch<-1 and btc_ch24>0: sp_sig="⚠️ BTC игнорирует падение S&P — риск разворота"
+            elif sp_ch<-1 and btc_ch24<0: sp_sig="🔴 BTC следует S&P — корреляция подтверждена"
+            elif sp_ch>0.5 and btc_ch24>0: sp_sig="🟢 Синхронный рост"
+            else: sp_sig="⚪ Нейтральная корреляция"
+
+            if fund_btc>0.1: fund_warn="🚨 КРИТИЧЕСКИЙ ПЕРЕГРЕВ ЛОНГОВ"
+            elif fund_btc>0.05: fund_warn="⚠️ Лонги перегреты"
+            elif fund_btc<-0.05: fund_warn="🟢 Шорты перегреты — возможен разворот вверх"
+            else: fund_warn="⚪ Норма"
+
+            if vix>30: vix_z="🔴 ВЫСОКИЙ (паника на рынке)"
+            elif vix>20: vix_z="🟠 ПОВЫШЕННЫЙ"
+            else: vix_z="🟢 НИЗКИЙ (рынок спокоен)"
+
+            SEP="➖"*18
+            out=[
+                "🏛 BEST TRADE — ИНСТИТУЦИОНАЛЬНЫЙ АНАЛИЗ",SEP,"",
+                "💰 МАКРО РЫНОК",
+                "  Общая кап: $"+str(round(total_mcap/1e12,2))+"T",
+                "  BTC.D: "+str(round(btc_dom,1))+"% | ETH.D: "+str(round(eth_dom,1))+"%",
+                "  USDT мкап: $"+str(round(usdt_mcap/1e9,1))+"B",
+                "  "+liq_dir,"",
+                "📈 ФОНДОВЫЕ РЫНКИ",
+                "  S&P500: $"+str(round(sp_price,0))[:-2]+"  "+fe(sp_ch)+" "+fp(sp_ch),
+                "  DXY:    "+str(round(dxy,2))+"  "+fe(-dxy_ch)+" "+fp(dxy_ch),
+                "  Gold:   $"+str(round(gold,0))[:-2]+"  "+fe(gold_ch)+" "+fp(gold_ch),
+                "  VIX:    "+str(round(vix,1))+"  "+vix_z,
+                "  "+sp_sig,"",
+                "🏛 ОПЦИОНЫ И ОИ",
+                "  OI BTC: $"+str(round(oi_btc,1))+"B",
+                "  OI ETH: $"+str(round(oi_eth,1))+"B",
+                "  "+oi_signal,
+                "  Funding BTC: "+str(round(fund_btc,4))+"% — "+fund_warn,
+                "  Funding ETH: "+str(round(fund_eth,4))+"%",
+                "  Put/Call (BTC): "+str(pcr),
+                "  L/S Ratio: "+str(round(ls_ratio,2)),"",
+                "🧠 ТЕХНИЧЕСКИЙ АНАЛИЗ",
+                "  "+ema_cross,
+                "  Fear&Greed: "+str(fv)+"/100 — "+fl,
+                "  BTC 7d: "+fp(btc_ch7d)+" | 30d: "+fp(btc_ch30),"",
+                SEP,
+                "💡 ВЫвод:",
+            ]
+            # Conclusion
+            signals=[]
+            if fund_btc>0.05: signals.append("⚠️ Лонги перегреты — жди флаша вниз")
+            if fund_btc<-0.05: signals.append("🟢 Шорты перегреты — возможен шорт-сквиз")
+            if sp_ch<-1.5: signals.append("🔴 S&P падает — риск для BTC")
+            if vix>25: signals.append("⚠️ VIX повышен — рынок нервничает")
+            if pcr>1.2: signals.append("🔴 Put/Call > 1.2 — ожидают падение")
+            if pcr<0.7: signals.append("🟢 Put/Call < 0.7 — ожидают рост")
+            if not signals: signals.append("⚪ Сигналов нет, рынок в равновесии")
+            out+=["  "+s for s in signals]
+            out+=[SEP]
+
+            nav=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Обновить",callback_data="institutional"),
+                InlineKeyboardButton("🏠 Меню",callback_data="show_menu")
+            ],[
+                InlineKeyboardButton("📊 Обзор",callback_data="market_overview"),
+                InlineKeyboardButton("📈 Тренд",callback_data="trend_analysis")
+            ]])
+            await q.edit_message_text("\n".join(out),parse_mode="Markdown",reply_markup=nav,disable_web_page_preview=True)
+        except Exception as e:
+            log.error(f"institutional: {e}")
+            await q.edit_message_text(f"❌ {e}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Меню",callback_data="show_menu")]]))
+
 
     elif data == "whale_status":
         await q.edit_message_text("\U0001f433 Сканирую кит-активность...", parse_mode="Markdown")
