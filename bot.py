@@ -3286,11 +3286,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 else: ema_cross="🔴 EMA50 < EMA200 (ДЕАД КРОСС)"
             except: pass
 
-            # USDT market cap (stablecoin flow)
+            # USDT market cap (stablecoin flow) — через CoinGecko, старый источник отдавал $0.0B
             usdt_mcap=0
             try:
-                usdt_q=next((c for c in coins if c["symbol"]=="USDT" or c.get("slug","")=="tether"),{})
-                usdt_mcap=usdt_q.get("quote",{}).get("USDT",{}).get("market_cap",0) or 0
+                usdt_mcap=get_usdt_mcap().get("usdt_mcap",0)*1e9
             except: pass
 
             def fp(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
@@ -8836,6 +8835,47 @@ def get_liq_data():
             res['liq_signal']='bearish' if rt>2 else ('bullish' if rt<0.5 else 'neutral')
     except: pass
     _liq_cache=res; _liq_ts=_t.time(); return res
+
+_usdt_mcap_cache={"ts":0,"data":None}
+
+def get_usdt_mcap():
+    """USDT market cap через CoinGecko /coins/markets (замена источника, отдававшего $0.0B). Кэш 5 мин."""
+    import time as _t, requests as _r
+    global _usdt_mcap_cache
+    if _t.time()-_usdt_mcap_cache["ts"]<300 and _usdt_mcap_cache["data"]:
+        return _usdt_mcap_cache["data"]
+    res={"ok":False,"usdt_mcap":0.0,"usdt_mcap_change_24h":0.0}
+    try:
+        r=_r.get("https://api.coingecko.com/api/v3/coins/markets",
+                 params={"vs_currency":"usd","ids":"tether","price_change_percentage":"24h"},timeout=8)
+        if r.status_code==200:
+            data=r.json()
+            if data:
+                coin=data[0]
+                mcap=float(coin.get("market_cap") or 0)
+                mcap_change=float(coin.get("market_cap_change_percentage_24h") or 0)
+                res.update({"ok":True,"usdt_mcap":round(mcap/1e9,2),"usdt_mcap_change_24h":round(mcap_change,2)})
+    except: pass
+    if res["ok"]:
+        _usdt_mcap_cache={"ts":_t.time(),"data":res}
+    return res
+
+def get_stablecoin_dominance():
+    """Доля USDT/USDC/DAI в общем рынке через CoinGecko (Framework v3, блок Stablecoin Market Share)."""
+    import requests as _r
+    res={"ok":False}
+    try:
+        r=_r.get("https://api.coingecko.com/api/v3/coins/markets",
+                 params={"vs_currency":"usd","ids":"tether,usd-coin,dai"},timeout=8)
+        if r.status_code==200:
+            coins={c["id"]:float(c.get("market_cap") or 0) for c in r.json()}
+            total=sum(coins.values()) or 1.0
+            res={"ok":True,
+                 "usdt_share":round(coins.get("tether",0)/total*100,1),
+                 "usdc_share":round(coins.get("usd-coin",0)/total*100,1),
+                 "dai_share":round(coins.get("dai",0)/total*100,1)}
+    except: pass
+    return res
 
 def get_institutional_summary():
     macro=get_macro_data(); opts=get_options_data(); liqs=get_liq_data()
