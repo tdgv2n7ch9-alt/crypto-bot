@@ -365,7 +365,14 @@ def get_all_coins():
 def get_top500():
     return get_all_coins()
 
+_global_metrics_cache = {"ts": 0, "data": {}}
+
 def get_global_metrics() -> dict:
+    """BTC.D/ETH.D/total_mcap — единый источник (CMC) с общим кэшем на 60с,
+    чтобы /market, Тренд и Институционал не расходились между собой."""
+    import time as _t
+    if _t.time() - _global_metrics_cache["ts"] < 60 and _global_metrics_cache["data"]:
+        return _global_metrics_cache["data"]
     try:
         url     = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
@@ -373,15 +380,18 @@ def get_global_metrics() -> dict:
         r.raise_for_status()
         d = r.json().get("data", {})
         q = d.get("quote", {}).get("USD", {})
-        return {
+        result = {
             "total_mcap":      q.get("total_market_cap", 0),
             "btc_dominance":   d.get("btc_dominance", 0),
             "eth_dominance":   d.get("eth_dominance", 0),
             "mcap_change_24h": q.get("total_market_cap_yesterday_percentage_change", 0),
         }
+        _global_metrics_cache["ts"] = _t.time()
+        _global_metrics_cache["data"] = result
+        return result
     except Exception as e:
         log.error(f"Global metrics error: {e}")
-        return {}
+        return _global_metrics_cache["data"]
 
 def get_btc_eth_price() -> dict:
     try:
@@ -2089,6 +2099,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
     try:
         import datetime, math
+        import requests as _r
         prices = get_btc_eth_price()
         gm = get_global_metrics()
         coins = get_all_coins()
@@ -2919,12 +2930,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sol_p   = sol_q.get("price", 0) or 0
             sol_ch  = sol_q.get("percent_change_24h", 0) or 0
 
-            # --- Доминация BTC через CoinGecko (бесплатно) ---
+            # --- Доминация BTC/ETH — единый источник get_global_metrics() (как /market и Институционал) ---
             try:
-                g = _r.get("https://api.coingecko.com/api/v3/global", timeout=6).json()
-                btc_dom = round(g.get("data", {}).get("market_cap_percentage", {}).get("btc", 0), 1)
-                eth_dom = round(g.get("data", {}).get("market_cap_percentage", {}).get("eth", 0), 1)
-                total_mcap = g.get("data", {}).get("total_market_cap", {}).get("usd", 0)
+                gm = get_global_metrics()
+                btc_dom = round(gm.get("btc_dominance", 0) or 0, 1)
+                eth_dom = round(gm.get("eth_dominance", 0) or 0, 1)
+                total_mcap = gm.get("total_mcap", 0) or 0
             except:
                 eth_dom = 0; total_mcap = 0
 
@@ -3263,7 +3274,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # DXY
             dxy=0; dxy_ch=0
             try:
-                dx=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6).json()
+                dx=_r.get("https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d",timeout=6,headers={"User-Agent":"Mozilla/5.0"}).json()
                 dc=dx["chart"]["result"][0]["indicators"]["quote"][0]["close"]
                 dc=[x for x in dc if x]
                 dxy=dc[-1]; dxy_ch=(dc[-1]-dc[-2])/dc[-2]*100 if len(dc)>=2 else 0
