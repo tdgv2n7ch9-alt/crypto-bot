@@ -406,8 +406,21 @@ def get_btc_eth_price() -> dict:
         log.error(f"BTC/ETH price error: {e}")
         return {}
 
+def _snap_cg_days(days: int) -> str:
+    """CoinGecko /ohlc (free tier) принимает только days из {1,7,14,30,90,180,365} — иначе HTTP 400"""
+    for allowed in (1, 7, 14, 30, 90, 180, 365):
+        if days <= allowed:
+            return str(allowed)
+    return "365"
+
 def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
-    """OHLC через CoinGecko (Binance заблокирован на Railway)"""
+    """OHLC через CoinGecko (Binance заблокирован на Railway).
+
+    CoinGecko free /ohlc отдаёт фиксированную гранулярность по диапазону days,
+    а не по нашему interval: 1д -> 30-мин бары, 7-30д -> 4ч бары, 90-365д -> 4-дневные бары.
+    days подобран так, чтобы попасть в нужную гранулярность и получить максимум точек,
+    а не просто округлён вверх до ближайшего валидного значения (иначе 4ч-интервал
+    случайно попадает в 4-дневную гранулярность и почти не даёт свечей)."""
     import requests as _r2
     # Map symbol to CoinGecko slug
     _slug_map = {
@@ -426,26 +439,29 @@ def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> lis
     }
     sym = symbol.upper().replace("USDT","").replace("BUSD","").replace("USD","")
     slug = _slug_map.get(sym, sym.lower())
-    # days based on interval and limit
+    # days подобран под гранулярность CoinGecko, см. докстринг
     if interval in ("1h","1H"):
-        days = max(2, limit // 24)
-    elif interval in ("1d","1D"):
-        days = min(365, limit)
-    else:  # 4h default
-        days = min(90, max(14, limit // 6))
+        days = "1"                 # 30-мин бары — ближайшая гранулярность к часовой
+    elif interval in ("4h",):
+        days = "30"                # 4ч бары, макс. точек в этой гранулярности (~180)
+    elif interval in ("1d","1D","1w","1W"):
+        days = "365"               # макс. история, ~92 точки по 4 дня
+    else:
+        raw = max(2, limit // 24) if (interval and interval[-1] in ("h","H")) else min(365, limit)
+        days = _snap_cg_days(raw)  # неизвестный interval — старый расчёт, но без HTTP 400
     try:
         r = _r2.get(
             f"https://api.coingecko.com/api/v3/coins/{slug}/ohlc",
-            params={"vs_currency": "usd", "days": str(days)},
+            params={"vs_currency": "usd", "days": days},
             timeout=10)
         if r.status_code == 200 and isinstance(r.json(), list) and r.json():
             data = r.json()
             result = []
             for d in data:
                 result.append({
-                    "open": str(d[1]), "high": str(d[2]),
-                    "low": str(d[3]), "close": str(d[4]),
-                    "vol": "0", "timestamp": d[0]
+                    "open": float(d[1]), "high": float(d[2]),
+                    "low": float(d[3]), "close": float(d[4]),
+                    "vol": 0.0, "timestamp": d[0]
                 })
             return result[-limit:] if len(result) > limit else result
     except Exception:
@@ -6765,24 +6781,24 @@ def real_ta(symbol: str) -> dict:
         demand_zones = []  # [(low, high), ...]
         supply_zones = []
 
-        for i in range(5, len(candles) - 5):
-            c = candles[i]
-            #  
+        for i in range(5, len(c4h) - 5):
+            c = c4h[i]
+            #
             body = abs(c["close"] - c["open"])
             rng  = c["high"] - c["low"]
             if rng == 0: continue
 
             #     Demand  ()
-            if (c["close"] > c["open"]                         # 
-                    and body / rng > 0.6                       #  
-                    and body > sum(abs(candles[j]["close"] - candles[j]["open"])
-                                   for j in range(i-3, i)) / 3):  #  
+            if (c["close"] > c["open"]                         #
+                    and body / rng > 0.6                       #
+                    and body > sum(abs(c4h[j]["close"] - c4h[j]["open"])
+                                   for j in range(i-3, i)) / 3):  #
                 demand_zones.append((c["low"], c["open"]))
 
             #     Supply  ()
             if (c["close"] < c["open"]
                     and body / rng > 0.6
-                    and body > sum(abs(candles[j]["close"] - candles[j]["open"])
+                    and body > sum(abs(c4h[j]["close"] - c4h[j]["open"])
                                    for j in range(i-3, i)) / 3):
                 supply_zones.append((c["close"], c["high"]))
 
