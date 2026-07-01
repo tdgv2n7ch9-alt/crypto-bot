@@ -1772,12 +1772,12 @@ def overview_kb():
         [InlineKeyboardButton("🟢 ТОП ЛОНГ", callback_data="top_long")],
         [InlineKeyboardButton("🔴 ТОП ШОРТ", callback_data="top_short")],
         [InlineKeyboardButton("🚀 x100 Сканер", callback_data="x100_scan")],
-        [InlineKeyboardButton("🏦 Институционал", callback_data="menu_full")],
-        [InlineKeyboardButton("🐋 Whale Monitor", callback_data="whale_monitor")],
-        [InlineKeyboardButton("💼 Монеты в работе", callback_data="coins_work")],
+        [InlineKeyboardButton("🏦 Институционал", callback_data="institutional")],
+        [InlineKeyboardButton("🐋 Whale Monitor", callback_data="whale_status")],
+        [InlineKeyboardButton("💼 Монеты в работе", callback_data="top_trades")],
         [InlineKeyboardButton("📡 Сигналы каналов", callback_data="channel_signals")],
         [InlineKeyboardButton("🔗 On-Chain", callback_data="onchain_info")],
-        [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full_analysis")],
+        [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
     ])
 # PUMP / DUMP 
@@ -3308,7 +3308,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 usdt_mcap=get_usdt_mcap().get("usdt_mcap",0)*1e9
             except: pass
 
-            def fp(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
+            def fpct(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
             def fe(v): return "🟢" if v>=0.5 else ("🔴" if v<=-0.5 else "⚪")
 
             # OI matrix
@@ -3349,9 +3349,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "  USDT мкап: $"+str(round(usdt_mcap/1e9,1))+"B",
                 "  "+liq_dir,"",
                 "📈 ФОНДОВЫЕ РЫНКИ",
-                "  S&P500: $"+str(round(sp_price,0))[:-2]+"  "+fe(sp_ch)+" "+fp(sp_ch),
-                "  DXY:    "+str(round(dxy,2))+"  "+fe(-dxy_ch)+" "+fp(dxy_ch),
-                "  Gold:   $"+str(round(gold,0))[:-2]+"  "+fe(gold_ch)+" "+fp(gold_ch),
+                "  S&P500: $"+str(round(sp_price,0))[:-2]+"  "+fe(sp_ch)+" "+fpct(sp_ch),
+                "  DXY:    "+str(round(dxy,2))+"  "+fe(-dxy_ch)+" "+fpct(dxy_ch),
+                "  Gold:   $"+str(round(gold,0))[:-2]+"  "+fe(gold_ch)+" "+fpct(gold_ch),
                 "  VIX:    "+str(round(vix,1))+"  "+vix_z,
                 "  "+sp_sig,"",
                 "🏛 ОПЦИОНЫ И ОИ",
@@ -3365,7 +3365,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "🧠 ТЕХНИЧЕСКИЙ АНАЛИЗ",
                 "  "+ema_cross,
                 "  Fear&Greed: "+str(fv)+"/100 — "+fl,
-                "  BTC 7d: "+fp(btc_ch7d)+" | 30d: "+fp(btc_ch30),"",
+                "  BTC 7d: "+fpct(btc_ch7d)+" | 30d: "+fpct(btc_ch30),"",
                 SEP,
                 "💡 Вывод:",
             ]
