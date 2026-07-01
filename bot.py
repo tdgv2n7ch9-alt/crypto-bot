@@ -2882,7 +2882,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             # --- Доминация BTC через CoinGecko (бесплатно) ---
             try:
-                g = _r.get("https://api.coingecko.com/api/v3/global", timeout=6).json()
+                g = r.get("https://api.coingecko.com/api/v3/global", timeout=6).json()
                 btc_dom = round(g.get("data", {}).get("market_cap_percentage", {}).get("btc", 0), 1)
                 eth_dom = round(g.get("data", {}).get("market_cap_percentage", {}).get("eth", 0), 1)
                 total_mcap = g.get("data", {}).get("total_market_cap", {}).get("usd", 0)
