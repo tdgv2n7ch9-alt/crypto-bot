@@ -508,27 +508,51 @@ def get_funding_rate(symbol: str) -> dict:
     except:
         return {"rate": 0, "signal": "", "mark": 0, "basis": 0, "ok": False}
 
-def get_open_interest(symbol: str) -> dict:
-    """Open Interest  Binance Futures   OI  24"""
-    try:
-        #  OI
-        url = "https://fapi.binance.com/fapi/v1/openInterest"
-        r   = requests.get(url, params={"symbol": f"{symbol}USDT"}, timeout=8)
-        r.raise_for_status()
-        oi_now = float(r.json().get("openInterest", 0))
+_OI_CG_CACHE = {"ts": 0, "data": {}}
+_OI_CG_TTL = 90  # seconds — one shared fetch of the full derivatives list serves every symbol
+_OI_HISTORY = {}  # symbol -> (timestamp, oi_usd) snapshot from the previous poll
 
-        # OI Statistics ()
-        url2 = "https://fapi.binance.com/futures/data/openInterestHist"
-        r2   = requests.get(url2, params={
-            "symbol": f"{symbol}USDT", "period": "1h", "limit": 25
-        }, timeout=8)
-        r2.raise_for_status()
-        hist = r2.json()
-        if hist and len(hist) >= 2:
-            oi_24h_ago = float(hist[0].get("sumOpenInterest", oi_now))
-            oi_change  = (oi_now - oi_24h_ago) / oi_24h_ago * 100 if oi_24h_ago > 0 else 0
-        else:
-            oi_change = 0
+def _fetch_coingecko_oi_map() -> dict:
+    """OI + funding + price по символам через CoinGecko /derivatives (замена fapi.binance.com,
+    заблокированного на Railway). Берёт тикер Binance (Futures), либо крупнейший по OI на других
+    биржах, если Binance для монеты нет. Кэш на _OI_CG_TTL секунд."""
+    now_ts = time.time()
+    if now_ts - _OI_CG_CACHE["ts"] < _OI_CG_TTL and _OI_CG_CACHE["data"]:
+        return _OI_CG_CACHE["data"]
+    result = {}
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/derivatives", timeout=10)
+        r.raise_for_status()
+        for item in r.json():
+            sym = item.get("index_id")
+            if not sym or item.get("contract_type") != "perpetual":
+                continue
+            oi = float(item.get("open_interest") or 0)
+            if oi <= 0:
+                continue
+            is_binance = "Binance" in (item.get("market") or "")
+            prev = result.get(sym)
+            if prev is None or (is_binance and not prev["is_binance"]) or (is_binance == prev["is_binance"] and oi > prev["oi"]):
+                result[sym] = {"oi": oi, "funding": float(item.get("funding_rate") or 0),
+                               "price": float(item.get("price") or 0), "is_binance": is_binance}
+        _OI_CG_CACHE["ts"] = now_ts
+        _OI_CG_CACHE["data"] = result
+    except Exception as e:
+        log.error(f"[OI] coingecko derivatives fetch: {e}")
+        return _OI_CG_CACHE["data"]
+    return result
+
+def _get_oi_usd(symbol: str) -> float:
+    """Текущий Open Interest в USD для symbol (BTC, ETH, ...) через CoinGecko."""
+    return _fetch_coingecko_oi_map().get(symbol, {}).get("oi", 0.0)
+
+def get_open_interest(symbol: str) -> dict:
+    """Open Interest через CoinGecko derivatives (замена fapi.binance.com, заблокированного на Railway)"""
+    try:
+        oi_now = _get_oi_usd(symbol)
+        if oi_now <= 0:
+            return {"oi": 0, "change": 0, "signal": "", "ok": False}
+        oi_change = _get_oi_change(symbol)
 
         if oi_change > 5:    oi_signal = " OI    "
         elif oi_change > 1:  oi_signal = " OI  "
@@ -2136,8 +2160,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === OI + Funding BTC ===
         oi_btc=0; fund_btc=0
         try:
-            oi_r=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"BTCUSDT"},timeout=8).json()
-            oi_btc=float(oi_r.get("openInterest",0) or 0)*btc_price/1e9
+            oi_btc=_get_oi_usd("BTC")/1e9
         except Exception as _e: log.error(f"OI BTC: {_e}")
         try:
             fr=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",
@@ -3180,13 +3203,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # OI BTC + ETH
             oi_btc=0; oi_eth=0
             try:
-                r1=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"BTCUSDT"},timeout=5).json()
-                oi_btc=float(r1.get("openInterest",0))*btc_price/1e9
+                oi_btc=_get_oi_usd("BTC")/1e9
             except: pass
             try:
-                eth_price=prices.get("ETH",{}).get("price",0) or 0
-                r2=_r.get("https://fapi.binance.com/fapi/v1/openInterest",params={"symbol":"ETHUSDT"},timeout=5).json()
-                oi_eth=float(r2.get("openInterest",0))*eth_price/1e9
+                oi_eth=_get_oi_usd("ETH")/1e9
             except: pass
 
             # Funding rates BTC + ETH
@@ -3573,8 +3593,16 @@ def _get_ls_ratio(symbol: str) -> float:
     return 1.0
 
 def _get_oi_change(symbol: str) -> float:
-    """Изменение открытого интереса (заглушка — Binance недоступен на Railway)"""
-    return 0.0
+    """Изменение OI в % с момента предыдущего опроса через CoinGecko
+    (approximation — CoinGecko не отдаёт бесплатную историю OI, в отличие от Binance)"""
+    oi_now = _get_oi_usd(symbol)
+    if oi_now <= 0:
+        return 0.0
+    prev = _OI_HISTORY.get(symbol)
+    _OI_HISTORY[symbol] = (time.time(), oi_now)
+    if not prev or prev[1] <= 0:
+        return 0.0
+    return (oi_now - prev[1]) / prev[1] * 100
 
 
 def _get_liquidations(symbol: str) -> dict:
@@ -6398,26 +6426,18 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
             if r_fr.status_code == 200:
                 d = r_fr.json()
                 funding_rate = float(d.get("lastFundingRate", 0)) * 100
-            # OI
-            r_oi = requests.get(
-                "https://fapi.binance.com/futures/data/openInterestHist",
-                params={"symbol": f"{symbol}USDT", "period": "4h", "limit": 2}, timeout=5
-            )
-            if r_oi.status_code == 200:
-                oi_data = r_oi.json()
-                if len(oi_data) >= 2:
-                    oi_now  = float(oi_data[-1].get("sumOpenInterestValue", 0))
-                    oi_prev = float(oi_data[-2].get("sumOpenInterestValue", 1))
-                    oi_change = (oi_now - oi_prev) / oi_prev * 100 if oi_prev else 0
-                    # 
-                    if oi_change > 3 and ch1h > 0:
-                        oi_signal = " OI  +     "
-                    elif oi_change > 3 and ch1h < 0:
-                        oi_signal = " OI  +     "
-                    elif oi_change < -3 and ch1h > 0:
-                        oi_signal = " OI  +    -"
-                    elif oi_change < -3 and ch1h < 0:
-                        oi_signal = " OI  +    -"
+            # OI (CoinGecko — fapi.binance.com заблокирован на Railway)
+            if _get_oi_usd(symbol) > 0:
+                oi_change = _get_oi_change(symbol)
+                #
+                if oi_change > 3 and ch1h > 0:
+                    oi_signal = " OI  +     "
+                elif oi_change > 3 and ch1h < 0:
+                    oi_signal = " OI  +     "
+                elif oi_change < -3 and ch1h > 0:
+                    oi_signal = " OI  +    -"
+                elif oi_change < -3 and ch1h < 0:
+                    oi_signal = " OI  +    -"
         except: pass
 
         result["funding_rate"] = funding_rate
