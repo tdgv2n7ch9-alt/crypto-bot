@@ -8819,11 +8819,18 @@ def get_liq_data():
     if _t.time()-_liq_ts<300 and _liq_cache: return _liq_cache
     res={'ok':False,'liq_long':0,'liq_short':0,'liq_ratio':1.0,'liq_signal':'neutral'}
     try:
-        r=_r.get('https://fapi.binance.com/fapi/v1/allForceOrders',params={'symbol':'BTCUSDT','limit':200},timeout=6)
+        # OKX liquidation-orders (замена fapi.binance.com/allForceOrders, заблокированного на Railway)
+        r=_r.get('https://www.okx.com/api/v5/public/liquidation-orders',
+                 params={'instType':'SWAP','uly':'BTC-USDT','state':'filled','limit':'100'},timeout=8)
         if r.status_code==200:
-            od=r.json()
-            ll=sum(float(o.get('origQty',0))*float(o.get('price',0)) for o in od if o.get('side')=='BUY')
-            ls=sum(float(o.get('origQty',0))*float(o.get('price',0)) for o in od if o.get('side')=='SELL')
+            od=r.json().get('data',[])
+            ct_val=0.01  # BTC-USDT-SWAP contract size = 0.01 BTC
+            ll=ls=0.0
+            for row in od:
+                for d in row.get('details',[]):
+                    notional=float(d.get('sz',0))*ct_val*float(d.get('bkPx',0))
+                    if d.get('side')=='buy': ll+=notional
+                    elif d.get('side')=='sell': ls+=notional
             rt=ll/ls if ls>0 else 1.0
             res.update({'liq_long':round(ll),'liq_short':round(ls),'liq_ratio':round(rt,2),'ok':True})
             res['liq_signal']='bearish' if rt>2 else ('bullish' if rt<0.5 else 'neutral')
