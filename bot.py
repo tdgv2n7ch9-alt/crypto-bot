@@ -5,9 +5,8 @@ _whale_last_alert = {}
 # v42g
 def get_usdt_dominance():
     try:
-        r = __import__("requests").get("https://api.coingecko.com/api/v3/global", timeout=8)
-        if r.status_code == 200:
-            return {"usdt_d": round(r.json().get("data",{}).get("market_cap_percentage",{}).get("usdt",0),2)}
+        data = _cg_get("https://api.coingecko.com/api/v3/global", timeout=8)
+        return {"usdt_d": round(data.get("data",{}).get("market_cap_percentage",{}).get("usdt",0),2)}
     except: pass
     return {"usdt_d": 0}
 def get_market_trend_analysis():
@@ -112,7 +111,37 @@ TZ          = pytz.timezone("Europe/Istanbul")
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
 
-#   
+# === Общий rate-limiter + кэш для CoinGecko (free tier легко ловит 429 при частых вызовах) ===
+import threading
+_cg_lock = threading.Lock()
+_cg_last_call_ts = 0.0
+_CG_MIN_INTERVAL = 1.3          # мин. пауза между запросами к CoinGecko (~45/мин, с запасом от лимита)
+_cg_cache = {}                  # (url, params_tuple) -> (ts, data)
+_CG_CACHE_TTL = 60              # сек — одинаковые запросы в этом окне не бьют сеть повторно
+
+def _cg_get(url: str, params: dict = None, timeout: int = 10):
+    """Единая точка входа для GET-запросов к api.coingecko.com: делит один rate-limit
+    и один кэш на все функции бота, чтобы параллельные экраны (OI/funding/OHLC/USDT mcap/
+    dominance) не выбивали друг друга 429-й ошибкой при рендере."""
+    global _cg_last_call_ts
+    params = params or {}
+    cache_key = (url, tuple(sorted(params.items())))
+    now = time.time()
+    cached = _cg_cache.get(cache_key)
+    if cached and now - cached[0] < _CG_CACHE_TTL:
+        return cached[1]
+    with _cg_lock:
+        wait = _CG_MIN_INTERVAL - (time.time() - _cg_last_call_ts)
+        if wait > 0:
+            time.sleep(wait)
+        r = requests.get(url, params=params, timeout=timeout)
+        _cg_last_call_ts = time.time()
+    r.raise_for_status()
+    data = r.json()
+    _cg_cache[cache_key] = (time.time(), data)
+    return data
+
+#
 BG     = "#0D1421"
 GREEN  = "#16C784"
 RED    = "#EA3943"
@@ -423,6 +452,25 @@ def _snap_cg_days(days: int) -> str:
             return str(allowed)
     return "365"
 
+_CG_SLUG_MAP = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "BNB": "binancecoin", "XRP": "ripple", "ADA": "cardano",
+    "AVAX": "avalanche-2", "DOT": "polkadot", "MATIC": "matic-network",
+    "LINK": "chainlink", "UNI": "uniswap", "ATOM": "cosmos",
+    "LTC": "litecoin", "BCH": "bitcoin-cash", "DOGE": "dogecoin",
+    "SHIB": "shiba-inu", "TRX": "tron", "TON": "the-open-network",
+    "NEAR": "near", "APT": "aptos", "ARB": "arbitrum",
+    "OP": "optimism", "SUI": "sui", "INJ": "injective-protocol",
+    "FTM": "fantom", "ALGO": "algorand", "ICP": "internet-computer",
+    "AAVE": "aave", "CAKE": "pancakeswap-token", "MANA": "decentraland",
+    "SAND": "the-sandbox", "AXS": "axie-infinity", "PEPE": "pepe",
+    "WIF": "dogwifcoin", "BONK": "bonk", "JUP": "jupiter-exchange-solana",
+}
+
+def _cg_slug(symbol: str) -> str:
+    sym = symbol.upper().replace("USDT","").replace("BUSD","").replace("USD","")
+    return _CG_SLUG_MAP.get(sym, sym.lower())
+
 def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
     """OHLC через CoinGecko (Binance заблокирован на Railway).
 
@@ -431,24 +479,7 @@ def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> lis
     days подобран так, чтобы попасть в нужную гранулярность и получить максимум точек,
     а не просто округлён вверх до ближайшего валидного значения (иначе 4ч-интервал
     случайно попадает в 4-дневную гранулярность и почти не даёт свечей)."""
-    import requests as _r2
-    # Map symbol to CoinGecko slug
-    _slug_map = {
-        "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
-        "BNB": "binancecoin", "XRP": "ripple", "ADA": "cardano",
-        "AVAX": "avalanche-2", "DOT": "polkadot", "MATIC": "matic-network",
-        "LINK": "chainlink", "UNI": "uniswap", "ATOM": "cosmos",
-        "LTC": "litecoin", "BCH": "bitcoin-cash", "DOGE": "dogecoin",
-        "SHIB": "shiba-inu", "TRX": "tron", "TON": "the-open-network",
-        "NEAR": "near", "APT": "aptos", "ARB": "arbitrum",
-        "OP": "optimism", "SUI": "sui", "INJ": "injective-protocol",
-        "FTM": "fantom", "ALGO": "algorand", "ICP": "internet-computer",
-        "AAVE": "aave", "CAKE": "pancakeswap-token", "MANA": "decentraland",
-        "SAND": "the-sandbox", "AXS": "axie-infinity", "PEPE": "pepe",
-        "WIF": "dogwifcoin", "BONK": "bonk", "JUP": "jupiter-exchange-solana",
-    }
-    sym = symbol.upper().replace("USDT","").replace("BUSD","").replace("USD","")
-    slug = _slug_map.get(sym, sym.lower())
+    slug = _cg_slug(symbol)
     # days подобран под гранулярность CoinGecko, см. докстринг
     if interval in ("1h","1H"):
         days = "1"                 # 30-мин бары — ближайшая гранулярность к часовой
@@ -460,12 +491,9 @@ def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> lis
         raw = max(2, limit // 24) if (interval and interval[-1] in ("h","H")) else min(365, limit)
         days = _snap_cg_days(raw)  # неизвестный interval — старый расчёт, но без HTTP 400
     try:
-        r = _r2.get(
-            f"https://api.coingecko.com/api/v3/coins/{slug}/ohlc",
-            params={"vs_currency": "usd", "days": days},
-            timeout=10)
-        if r.status_code == 200 and isinstance(r.json(), list) and r.json():
-            data = r.json()
+        data = _cg_get(f"https://api.coingecko.com/api/v3/coins/{slug}/ohlc",
+                        params={"vs_currency": "usd", "days": days}, timeout=10)
+        if isinstance(data, list) and data:
             result = []
             for d in data:
                 result.append({
@@ -479,34 +507,37 @@ def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> lis
     return []
 
 def get_binance_24h(symbol: str) -> dict:
-    """24h stats: high, low, open, last price"""
-    sym_clean = symbol.upper().replace("USDT","").replace("BUSD","")
-    for suffix in ["USDT", "BUSD"]:
-        try:
-            url    = "https://api.binance.com/api/v3/ticker/24hr"
-            params = {"symbol": f"{sym_clean}{suffix}"}
-            r      = requests.get(url, params=params, timeout=8)
-            if r.status_code != 200: continue
-            d = r.json()
-            return {
-                "high": float(d.get("highPrice", 0)),
-                "low":  float(d.get("lowPrice",  0)),
-                "open": float(d.get("openPrice", 0)),
-                "last": float(d.get("lastPrice", 0)),
-                "vol":  float(d.get("quoteVolume", 0)),
-            }
-        except: continue
-    return {}
+    """24h stats: high, low, open, last price — через CoinGecko (Binance заблокирован на Railway)"""
+    try:
+        slug = _cg_slug(symbol)
+        data = _cg_get("https://api.coingecko.com/api/v3/coins/markets",
+                        params={"vs_currency": "usd", "ids": slug, "price_change_percentage": "24h"},
+                        timeout=8)
+        if not data:
+            return {}
+        d = data[0]
+        last = float(d.get("current_price", 0) or 0)
+        ch24 = float(d.get("price_change_percentage_24h", 0) or 0)
+        open_ = last / (1 + ch24/100) if (1 + ch24/100) != 0 else last
+        return {
+            "high": float(d.get("high_24h", 0) or 0),
+            "low":  float(d.get("low_24h",  0) or 0),
+            "open": open_,
+            "last": last,
+            "vol":  float(d.get("total_volume", 0) or 0),
+        }
+    except:
+        return {}
 
 def get_binance_alltime_low(symbol: str) -> float:
-    """    monthly """
+    """Исторический минимум цены — через CoinGecko /coins/{id} (market_data.atl), Binance заблокирован на Railway"""
     try:
-        url    = "https://api.binance.com/api/v3/klines"
-        params = {"symbol": f"{symbol}USDT", "interval": "1M", "limit": 200}
-        r      = requests.get(url, params=params, timeout=12)
-        r.raise_for_status()
-        lows = [float(d[3]) for d in r.json()]
-        return min(lows) if lows else 0
+        slug = _cg_slug(symbol)
+        data = _cg_get(f"https://api.coingecko.com/api/v3/coins/{slug}",
+                        params={"localization": "false", "tickers": "false", "community_data": "false",
+                                "developer_data": "false"}, timeout=12)
+        atl = float(data.get("market_data", {}).get("atl", {}).get("usd", 0) or 0)
+        return atl
     except:
         return 0
 
@@ -545,9 +576,8 @@ def _fetch_coingecko_oi_map() -> dict:
         return _OI_CG_CACHE["data"]
     result = {}
     try:
-        r = requests.get("https://api.coingecko.com/api/v3/derivatives", timeout=10)
-        r.raise_for_status()
-        for item in r.json():
+        data = _cg_get("https://api.coingecko.com/api/v3/derivatives", timeout=10)
+        for item in data:
             sym = item.get("index_id")
             if not sym or item.get("contract_type") != "perpetual":
                 continue
@@ -745,29 +775,6 @@ def get_supertrend_signal(symbol: str) -> dict:
      USDT,  BUSD  fallback.
     """
     candles = get_binance_ohlc(symbol, interval="4h", limit=100)
-
-    # Fallback:        BTC  BNB
-    if not candles or len(candles) < 20:
-        try:
-            url    = "https://api.binance.com/api/v3/klines"
-            #   
-            for quote in ["BUSD", "BTC", "ETH"]:
-                r = requests.get(url,
-                    params={"symbol": f"{symbol}{quote}", "interval": "4h", "limit": 100},
-                    timeout=8)
-                if r.status_code == 200:
-                    data = r.json()
-                    if data:
-                        candles = [
-                            {"time": datetime.fromtimestamp(d[0]/1000, tz=TZ),
-                             "open": float(d[1]), "high": float(d[2]),
-                             "low": float(d[3]), "close": float(d[4]),
-                             "vol": float(d[5])}
-                            for d in data
-                        ]
-                        break
-        except:
-            pass
 
     if not candles or len(candles) < 20:
         log.warning(f"Supertrend:    {symbol}")
@@ -1106,28 +1113,19 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
     sl, swing     = a["sl"],  a["swing"]
     rsi           = a["rsi_4h"]
 
-    #         
+    #  через CoinGecko (Binance заблокирован на Railway)
     candles = []
-    sym_clean = symbol.upper().replace("USDT","").replace("BUSD","")
-    for ticker_suffix in ["USDT", "BUSD"]:
-        try:
-            url = "https://api.binance.com/api/v3/klines"
-            params = {"symbol": f"{sym_clean}{ticker_suffix}", "interval": "4h", "limit": 200}
-            r = requests.get(url, params=params, timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                if data and isinstance(data, list) and len(data) >= 10:
-                    candles = [
-                        {"time": datetime.fromtimestamp(d[0]/1000, tz=TZ),
-                         "open": float(d[1]), "high": float(d[2]),
-                         "low": float(d[3]),  "close": float(d[4]),
-                         "vol": float(d[5])}
-                        for d in data
-                    ]
-                    log.info(f"Chart candles OK: {sym_clean}{ticker_suffix} n={len(candles)}")
-                    break
-        except Exception as e:
-            log.error(f"Chart candle fetch {sym_clean}{ticker_suffix}: {e}")
+    try:
+        raw = get_binance_ohlc(symbol, interval="4h", limit=200)
+        if raw and len(raw) >= 10:
+            candles = [
+                {"time": datetime.fromtimestamp(c["timestamp"]/1000, tz=TZ),
+                 "open": c["open"], "high": c["high"],
+                 "low": c["low"], "close": c["close"], "vol": c["vol"]}
+                for c in raw
+            ]
+    except Exception as e:
+        log.error(f"Chart candle fetch {symbol}: {e}")
 
     if not candles or len(candles) < 20:
         log.warning(f"Chart NO DATA for {symbol} - returning None")
@@ -2151,12 +2149,11 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else: fg_em="🔴"; fg_z="КРАЙНИЙ СТРАХ"
         fg_bar="█"*(fv//10)+"░"*(10-fv//10)
 
-        # === RSI BTC 1D via Binance ===
+        # === RSI BTC 1D через CoinGecko (Binance заблокирован на Railway) ===
         br=50.0
         try:
-            kl=_r.get("https://api.binance.com/api/v3/klines",
-                params={"symbol":"BTCUSDT","interval":"1d","limit":16},timeout=6).json()
-            br=calc_rsi([float(k[4]) for k in kl],14)
+            kl=get_binance_ohlc("BTC","1d",16)
+            br=calc_rsi([c["close"] for c in kl],14)
         except: pass
         if br>=70: rsi_z="🔴 ПЕРЕКУПЛЕН"
         elif br>=55: rsi_z="🟡 БЫЧИЙ"
@@ -2167,17 +2164,15 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === RSI 4H ===
         br4=50.0
         try:
-            kl4=_r.get("https://api.binance.com/api/v3/klines",
-                params={"symbol":"BTCUSDT","interval":"4h","limit":16},timeout=6).json()
-            br4=calc_rsi([float(k[4]) for k in kl4],14)
+            kl4=get_binance_ohlc("BTC","4h",16)
+            br4=calc_rsi([c["close"] for c in kl4],14)
         except: pass
 
         # === EMA 50/200 trend ===
         ema_trend="N/A"
         try:
-            kl_d=_r.get("https://api.binance.com/api/v3/klines",
-                params={"symbol":"BTCUSDT","interval":"1d","limit":210},timeout=8).json()
-            closes=[float(k[4]) for k in kl_d]
+            kl_d=get_binance_ohlc("BTC","1d",210)
+            closes=[c["close"] for c in kl_d]
             def ema(data,n):
                 k2=2/(n+1); e=data[0]
                 for p in data[1:]: e=p*k2+e*(1-k2)
@@ -3290,12 +3285,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 vix=float(_yvix.get("chart",{}).get("result",[{}])[0].get("meta",{}).get("regularMarketPrice",0) or 0)
             except: pass
 
-            # EMA 50/200
+            # EMA 50/200 через CoinGecko (Binance заблокирован на Railway)
             ema_cross="N/A"
             try:
-                kl=_r.get("https://api.binance.com/api/v3/klines",
-                    params={"symbol":"BTCUSDT","interval":"1d","limit":210},timeout=8).json()
-                cl=[float(k[4]) for k in kl]
+                kl=get_binance_ohlc("BTC","1d",210)
+                cl=[c["close"] for c in kl]
                 def ema_f(d,n):
                     k2=2/(n+1); e=d[0]
                     for p in d[1:]: e=p*k2+e*(1-k2)
@@ -8277,16 +8271,8 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     if not coin:
         coin = await _search_coin_by_symbol(symbol)
     if not coin:
-        # Binance fallback
-        test = None
-        for suffix in ["USDT","BUSD"]:
-            try:
-                r = requests.get("https://api.binance.com/api/v3/klines",
-                    params={"symbol":f"{symbol}{suffix}","interval":"4h","limit":5},
-                    timeout=10)
-                if r.status_code == 200 and isinstance(r.json(), list) and r.json():
-                    test = r.json(); break
-            except: pass
+        # Fallback через CoinGecko (Binance заблокирован на Railway)
+        test = get_binance_ohlc(symbol, "4h", 5)
         if not test:
             await bot.send_message(chat_id,
                 f" *{symbol}USDT*  \n\n : `/full BTC`  `/full SOL`",
@@ -8295,7 +8281,7 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
                     InlineKeyboardButton("  ", callback_data="show_menu")
                 ]]))
             return False
-        price_now = float(test[-1][4])
+        price_now = test[-1]["close"]
         coin = {
             "symbol": symbol, "slug": symbol.lower(), "cmc_rank": 9999,
             "tags": [], "name": symbol,
@@ -8870,21 +8856,19 @@ _usdt_mcap_cache={"ts":0,"data":None}
 
 def get_usdt_mcap():
     """USDT market cap через CoinGecko /coins/markets (замена источника, отдававшего $0.0B). Кэш 5 мин."""
-    import time as _t, requests as _r
+    import time as _t
     global _usdt_mcap_cache
     if _t.time()-_usdt_mcap_cache["ts"]<300 and _usdt_mcap_cache["data"]:
         return _usdt_mcap_cache["data"]
     res={"ok":False,"usdt_mcap":0.0,"usdt_mcap_change_24h":0.0}
     try:
-        r=_r.get("https://api.coingecko.com/api/v3/coins/markets",
-                 params={"vs_currency":"usd","ids":"tether","price_change_percentage":"24h"},timeout=8)
-        if r.status_code==200:
-            data=r.json()
-            if data:
-                coin=data[0]
-                mcap=float(coin.get("market_cap") or 0)
-                mcap_change=float(coin.get("market_cap_change_percentage_24h") or 0)
-                res.update({"ok":True,"usdt_mcap":round(mcap/1e9,2),"usdt_mcap_change_24h":round(mcap_change,2)})
+        data=_cg_get("https://api.coingecko.com/api/v3/coins/markets",
+                     params={"vs_currency":"usd","ids":"tether","price_change_percentage":"24h"},timeout=8)
+        if data:
+            coin=data[0]
+            mcap=float(coin.get("market_cap") or 0)
+            mcap_change=float(coin.get("market_cap_change_percentage_24h") or 0)
+            res.update({"ok":True,"usdt_mcap":round(mcap/1e9,2),"usdt_mcap_change_24h":round(mcap_change,2)})
     except: pass
     if res["ok"]:
         _usdt_mcap_cache={"ts":_t.time(),"data":res}
@@ -8892,18 +8876,16 @@ def get_usdt_mcap():
 
 def get_stablecoin_dominance():
     """Доля USDT/USDC/DAI в общем рынке через CoinGecko (Framework v3, блок Stablecoin Market Share)."""
-    import requests as _r
     res={"ok":False}
     try:
-        r=_r.get("https://api.coingecko.com/api/v3/coins/markets",
-                 params={"vs_currency":"usd","ids":"tether,usd-coin,dai"},timeout=8)
-        if r.status_code==200:
-            coins={c["id"]:float(c.get("market_cap") or 0) for c in r.json()}
-            total=sum(coins.values()) or 1.0
-            res={"ok":True,
-                 "usdt_share":round(coins.get("tether",0)/total*100,1),
-                 "usdc_share":round(coins.get("usd-coin",0)/total*100,1),
-                 "dai_share":round(coins.get("dai",0)/total*100,1)}
+        data=_cg_get("https://api.coingecko.com/api/v3/coins/markets",
+                     params={"vs_currency":"usd","ids":"tether,usd-coin,dai"},timeout=8)
+        coins={c["id"]:float(c.get("market_cap") or 0) for c in data}
+        total=sum(coins.values()) or 1.0
+        res={"ok":True,
+             "usdt_share":round(coins.get("tether",0)/total*100,1),
+             "usdc_share":round(coins.get("usd-coin",0)/total*100,1),
+             "dai_share":round(coins.get("dai",0)/total*100,1)}
     except: pass
     return res
 
