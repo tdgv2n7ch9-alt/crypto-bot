@@ -8702,8 +8702,19 @@ async def cmd_myid(update: Update, ctx):
         parse_mode="Markdown"
     )
 
+async def _start_pump_detector(app):
+    """post_init hook — запускает pump_detector в том же event loop, что и бот."""
+    import os
+    from pump_detector import run_pump_detector
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+
+    def _get_coin(sym):
+        return next((c for c in get_all_coins() if c.get("symbol") == sym), None)
+
+    asyncio.create_task(run_pump_detector(app.bot, owner_id, _get_coin, full_analysis))
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(_start_pump_detector).build()
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
