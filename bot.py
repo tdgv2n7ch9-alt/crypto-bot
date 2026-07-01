@@ -485,17 +485,15 @@ def get_binance_alltime_low(symbol: str) -> float:
         return 0
 
 def get_funding_rate(symbol: str) -> dict:
-    """   Binance Futures"""
+    """Funding rate через CoinGecko derivatives (замена fapi.binance.com, заблокированного на Railway)"""
     try:
-        url    = "https://fapi.binance.com/fapi/v1/premiumIndex"
-        params = {"symbol": f"{symbol}USDT"}
-        r      = requests.get(url, params=params, timeout=8)
-        r.raise_for_status()
-        d    = r.json()
-        rate = float(d.get("lastFundingRate", 0)) * 100  #  %
-        mark = float(d.get("markPrice", 0))
-        idx  = float(d.get("indexPrice", 0))
-        # Basis =     
+        d = _fetch_coingecko_oi_map().get(symbol)
+        if not d:
+            return {"rate": 0, "signal": "", "mark": 0, "basis": 0, "ok": False}
+        rate = d["funding"]  #  %  ( CoinGecko    lastFundingRate*100  Binance)
+        mark = d["price"]
+        idx  = d["index"]
+        # Basis =
         basis = (mark - idx) / idx * 100 if idx > 0 else 0
 
         if rate > 0.1:    fr_signal = "  ( )"
@@ -534,7 +532,8 @@ def _fetch_coingecko_oi_map() -> dict:
             prev = result.get(sym)
             if prev is None or (is_binance and not prev["is_binance"]) or (is_binance == prev["is_binance"] and oi > prev["oi"]):
                 result[sym] = {"oi": oi, "funding": float(item.get("funding_rate") or 0),
-                               "price": float(item.get("price") or 0), "is_binance": is_binance}
+                               "price": float(item.get("price") or 0), "index": float(item.get("index") or 0),
+                               "is_binance": is_binance}
         _OI_CG_CACHE["ts"] = now_ts
         _OI_CG_CACHE["data"] = result
     except Exception as e:
@@ -545,6 +544,10 @@ def _fetch_coingecko_oi_map() -> dict:
 def _get_oi_usd(symbol: str) -> float:
     """Текущий Open Interest в USD для symbol (BTC, ETH, ...) через CoinGecko."""
     return _fetch_coingecko_oi_map().get(symbol, {}).get("oi", 0.0)
+
+def _get_funding_pct(symbol: str) -> float:
+    """Funding rate в % (как lastFundingRate*100 у Binance) через CoinGecko derivatives."""
+    return _fetch_coingecko_oi_map().get(symbol, {}).get("funding", 0.0)
 
 def get_open_interest(symbol: str) -> dict:
     """Open Interest через CoinGecko derivatives (замена fapi.binance.com, заблокированного на Railway)"""
@@ -2163,9 +2166,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             oi_btc=_get_oi_usd("BTC")/1e9
         except Exception as _e: log.error(f"OI BTC: {_e}")
         try:
-            fr=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",
-                params={"symbol":"BTCUSDT","limit":1},timeout=5).json()
-            fund_btc=float(fr[0].get("fundingRate",0))*100 if fr else 0
+            fund_btc=_get_funding_pct("BTC")
         except: pass
         if fund_btc>0.05: fund_z="🔴 ЛОНГИ ПЕРЕГРЕТЫ"
         elif fund_btc<-0.05: fund_z="🟢 ШОРТЫ ПЕРЕГРЕТЫ"
@@ -2174,9 +2175,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # === Liquidations 24h ===
         liq_long=0; liq_short=0
         try:
-            liq_r=_r.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-                params={"symbol":"BTCUSDT","period":"1h","limit":1},timeout=5).json()
-            ls_ratio=float(liq_r[0].get("longShortRatio",1)) if liq_r else 1
+            ls_ratio=_get_ls_ratio("BTC")
         except: ls_ratio=1
         if ls_ratio>1.5: ls_z="🔴 Лонгов слишком много"
         elif ls_ratio<0.7: ls_z="🟢 Шортов слишком много"
@@ -3212,20 +3211,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Funding rates BTC + ETH
             fund_btc=0; fund_eth=0
             try:
-                fr=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",params={"symbol":"BTCUSDT","limit":1},timeout=5).json()
-                fund_btc=float(fr[0].get("fundingRate",0))*100 if fr else 0
+                fund_btc=_get_funding_pct("BTC")
             except: pass
             try:
-                fr2=_r.get("https://fapi.binance.com/fapi/v1/fundingRate",params={"symbol":"ETHUSDT","limit":1},timeout=5).json()
-                fund_eth=float(fr2[0].get("fundingRate",0))*100 if fr2 else 0
+                fund_eth=_get_funding_pct("ETH")
             except: pass
 
             # Long/Short ratio
             ls_ratio=1.0
             try:
-                lsr=_r.get("https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
-                    params={"symbol":"BTCUSDT","period":"1h","limit":1},timeout=5).json()
-                ls_ratio=float(lsr[0].get("longShortRatio",1)) if lsr else 1
+                ls_ratio=_get_ls_ratio("BTC")
             except: pass
 
             # Put/Call ratio Deribit
@@ -3589,8 +3584,21 @@ def _analyze_whale_signal(symbol: str, funding: float, oi: float, ls: float, pri
             "funding": funding, "oi": oi, "ls": ls, "price": price}
 
 def _get_ls_ratio(symbol: str) -> float:
-    """Long/Short ratio (заглушка — Binance недоступен на Railway)"""
-    return 1.0
+    """Long/Short ratio через Bybit (CoinGecko/CMC такого не отдают бесплатно;
+    Bybit не под тем гео-блоком, что fapi.binance.com на Railway)"""
+    try:
+        r = requests.get("https://api.bybit.com/v5/market/account-ratio",
+                          params={"category": "linear", "symbol": f"{symbol}USDT",
+                                   "period": "1h", "limit": 1}, timeout=6)
+        r.raise_for_status()
+        rows = r.json().get("result", {}).get("list", [])
+        if not rows:
+            return 1.0
+        buy = float(rows[0].get("buyRatio", 0.5))
+        sell = float(rows[0].get("sellRatio", 0.5))
+        return buy / sell if sell > 0 else 1.0
+    except:
+        return 1.0
 
 def _get_oi_change(symbol: str) -> float:
     """Изменение OI в % с момента предыдущего опроса через CoinGecko
@@ -6418,14 +6426,9 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         oi_change    = None
         oi_signal    = None
         try:
-            # Funding rate
-            r_fr = requests.get(
-                "https://fapi.binance.com/fapi/v1/premiumIndex",
-                params={"symbol": f"{symbol}USDT"}, timeout=5
-            )
-            if r_fr.status_code == 200:
-                d = r_fr.json()
-                funding_rate = float(d.get("lastFundingRate", 0)) * 100
+            # Funding rate (CoinGecko — fapi.binance.com заблокирован на Railway)
+            if symbol in _fetch_coingecko_oi_map():
+                funding_rate = _get_funding_pct(symbol)
             # OI (CoinGecko — fapi.binance.com заблокирован на Railway)
             if _get_oi_usd(symbol) > 0:
                 oi_change = _get_oi_change(symbol)
