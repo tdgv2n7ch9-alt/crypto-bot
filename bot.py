@@ -2866,24 +2866,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ])
         try:
             await q.edit_message_text(
-                " *On-Chain *\n"
-                        "🔗 On-Chain 🔗\n"
-                " *Lookonchain* \n\n"
-                        "🔍 Lookonchain 🔍 \n\n"
-                        "💰 :≈\n"
-                " BlackRock / Grayscale ETF \n"
-                " Bitcoin ETF NetFlow ()\n"
-                " /  \n"
-                "   \n\n"
-                        "📡 📡  \n"
-                " Reader   \n\n"
-                        "📡 Reader  \n\n"
-                f" {now_utc3()}",
+                "🔗 *On-Chain*\n\n"
+                "🚧 Раздел в разработке — реального источника данных "
+                "(ETF netflow, whale-трекинг) пока нет, показывать заглушку "
+                "вместо цифр не будем.\n\n"
+                f"🕐 {now_utc3()}",
                 parse_mode="Markdown", reply_markup=nav
             )
         except Exception as e:
             if "not modified" in str(e).lower():
-                await q.answer(" ")
+                await q.answer("Без изменений")
 
     elif data == "channel_signals":
         await _show_channel_signals(q)
