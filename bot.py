@@ -107,7 +107,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v85"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v87"          # обновлять при каждом коммите с изменением bot.py
 READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -3582,11 +3582,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     SEP, "",
                 ]
                 for w in found[:5]:
-                    sig_e = "\U0001f534" if w["signal"] == "SHORT" else "\U0001f7e2"
-                    stars = "\u2b50" * w["strength"]
+                    sig_e = "\U0001f534" if w["direction"] == "SHORT" else "\U0001f7e2"
+                    stars = "\u2b50" * max(1, min(5, round(w.get("score_100", 0) / 20)))
                     lines_w += [
-                        f"{sig_e} *{w['symbol']}/USDT* — {w['signal']}  {stars}",
-                        f"  Funding: `{w['funding']:+.4f}%`  |  OI: `{w['oi_chg']:+.1f}%`  |  L/S: `{w['ls_ratio']:.2f}`",
+                        f"{sig_e} *{w['symbol']}/USDT* — {w['direction']}  {stars}  _(Скор {w.get('score_100',0)}/100, {w.get('grade','C')})_",
+                        f"  Funding: `{w['funding']:+.4f}%`  |  OI: `{w['oi']:+.1f}%`  |  L/S: `{w['ls']:.2f}`",
                         f"  Цена: `{fp(w['price'])}`",
                         "",
                     ]
@@ -8483,13 +8483,13 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/short   :  SHORT + -,  Rocket Score"""
-    msg = await update.message.reply_text("   -... ~40 ")
+    msg = await update.message.reply_text("🔴 Сканирую рынок на шорт-сетапы... ~40 сек")
     coins = get_top500()
     if not coins:
-        await msg.edit_text("  "); return
+        await msg.edit_text("❌ Нет данных"); return
 
     pre = []
-    for coin in coins:   #  
+    for coin in coins:   #
         q = coin["quote"]["USDT"]
         vol      = q.get("volume_24h",  0) or 0
         mcap     = q.get("market_cap",  0) or 0
