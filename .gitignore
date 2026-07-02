@@ -1,0 +1,4 @@
+best_trade_reader.session*
+chat_ids.txt
+__pycache__/
+*.pyc
