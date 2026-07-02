@@ -107,7 +107,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v89"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v90"          # обновлять при каждом коммите с изменением bot.py
 READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -9116,6 +9116,47 @@ def add_top_long_signal(sym: str, entry: dict):
     _save_signals()
     return True
 
+async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only самодиагностика Памп-радара: статус WS-слоёв, покрытие, watch, аптайм."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+
+    from pump_detector import get_radar_status
+    st = get_radar_status()
+
+    def _conn_line(label, connected, ago):
+        emoji = "\U0001f7e2" if connected else "\U0001f534"
+        if ago is None:
+            ago_str = "нет данных"
+        else:
+            ago_str = f"{ago:.0f} сек назад"
+        return f"{emoji} {label}: {'подключён' if connected else 'не подключён'}, последний пакет {ago_str}"
+
+    uptime = int(st["uptime_sec"])
+    h, rem = divmod(uptime, 3600)
+    m, s = divmod(rem, 60)
+
+    lines = [
+        "*Памп-радар — статус*",
+        "",
+        _conn_line("coarse (!miniTicker@arr)", st["coarse_connected"], st["coarse_last_packet_sec_ago"]),
+        _conn_line("kline", st["kline_connected"], st["kline_last_packet_sec_ago"]),
+        "",
+        f"Покрытие coarse: {st['coarse_symbols']} символов",
+        f"Kline-подписка: {st['kline_symbols']} символов",
+        "",
+        f"Активных WATCHING (памп): {st['pump_watch_count']}"
+        + (f" — {', '.join(st['pump_watch_symbols'])}" if st['pump_watch_symbols'] else ""),
+        f"Активных WATCHING (дамп): {st['dump_watch_count']}"
+        + (f" — {', '.join(st['dump_watch_symbols'])}" if st['dump_watch_symbols'] else ""),
+        "",
+        f"История (24ч буфер): {st['history_count']}/{st['history_maxlen']}",
+        f"Аптайм: {h}ч {m}м {s}с",
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
 async def _start_pump_detector(app):
     """post_init hook — запускает pump_detector (kline-слой) и грубый !miniTicker@arr-детект
     (полное покрытие рынка) в том же event loop, что и бот."""
@@ -9142,6 +9183,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(_start_pump_detector).build()
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("myid",      cmd_myid))
+    app.add_handler(CommandHandler("radar_status", cmd_radar_status))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
     app.add_handler(CommandHandler("long",      cmd_top_long))
     app.add_handler(CommandHandler("short",     cmd_top_short))
