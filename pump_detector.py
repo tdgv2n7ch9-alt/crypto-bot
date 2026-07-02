@@ -25,6 +25,8 @@ import matplotlib.patches as patches
 import requests
 import websockets
 
+import live_prices
+
 # ── Конфигурация ────────────────────────────────────────────────
 WINDOW_DAYS = 14
 Z_SCORE_THRESHOLD = 3.0
@@ -147,6 +149,27 @@ def _ensure_history(symbol: str):
         _candle_history[symbol] = deque(maxlen=CHART_CANDLES + 10)
 
 
+def _has_new_dynamic_symbols() -> bool:
+    """Есть ли символы, запросившие live-цену (карточка в bot.py), но ещё не в WS-подписке."""
+    for sym in live_prices.pending_subscriptions():
+        if f"{sym.lower()}usdt" not in _current_symbols:
+            return True
+    return False
+
+
+def _merge_dynamic_symbols() -> bool:
+    """Добавляет в _current_symbols символы, запросившие live-цену вне топ-N. Возвращает True,
+    если список изменился (тогда WS нужно переподключить с новым набором стримов)."""
+    global _current_symbols
+    added = False
+    for sym in live_prices.pending_subscriptions():
+        s_l = f"{sym.lower()}usdt"
+        if s_l not in _current_symbols:
+            _current_symbols.append(s_l)
+            added = True
+    return added
+
+
 def compute_zscore(symbol, current_volume):
     hist = _volume_history[symbol]
     if len(hist) < 100:
@@ -263,12 +286,15 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
     except Exception:
         pass
 
+    _, price_age = live_prices.get_live_price(sym)
+    price_fresh = live_prices.freshness_label(price_age)
+
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     lines = [
         f"⚡ *ПАМП-РАДАР — {stage_title}*",
         f"*{sym}/USDT*{memecoin_line}",
         SEP, "",
-        f"📍 Цена: `{_fmt_price(price)}`  ({pct_move:+.1f}% от детекта)",
+        f"📍 Цена: `{_fmt_price(price)}`  _{price_fresh}_  ({pct_move:+.1f}% от детекта)",
         f"📊 Объём: x{watch.get('volume_mult', 0):.1f} от нормы · Z-Score: {watch.get('z_score', 0):.1f}σ",
         f"📈 Funding: {funding:+.4f}%",
         f"📊 OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин) — {oi_line}",
@@ -373,6 +399,10 @@ async def handle_kline(ctx: PumpContext, symbol: str, kline: dict):
     high = float(kline["h"]); low = float(kline["l"])
     volume = float(kline["v"])
 
+    # Live-цена — на каждый тик, а не только на закрытии свечи (kline "c" обновляется
+    # ~раз в секунду для текущей формирующейся свечи задолго до её закрытия).
+    live_prices.update_price(symbol, close)
+
     watch = pump_watch.get(symbol)
     if watch:
         watch["last_price"] = close
@@ -476,6 +506,7 @@ async def run_pump_detector(bot, owner_chat_id, get_coin_by_symbol, full_analysi
                        add_top_short_signal)
 
     _current_symbols = await _discover_top_symbols()
+    _merge_dynamic_symbols()
     _symbols_ts = time.time()
     for s in _current_symbols:
         _ensure_history(s)
@@ -487,12 +518,14 @@ async def run_pump_detector(bot, owner_chat_id, get_coin_by_symbol, full_analysi
                 new_syms = await _discover_top_symbols()
                 if new_syms:
                     _current_symbols = new_syms
-                    for s in _current_symbols:
-                        _ensure_history(s)
-                    print(f"Pump Radar: обновлён список символов ({len(_current_symbols)})")
             except Exception as e:
                 print(f"Pump Radar: symbol refresh failed: {e}")
             _symbols_ts = time.time()
+
+        if _merge_dynamic_symbols():
+            for s in _current_symbols:
+                _ensure_history(s)
+            print(f"Pump Radar: список символов обновлён ({len(_current_symbols)}, live-цены/динамические подписки)")
 
         ws_url = "wss://fstream.binance.com/stream?streams=" + "/".join(
             f"{s}@kline_{CANDLE_INTERVAL}" for s in _current_symbols)
@@ -501,15 +534,22 @@ async def run_pump_detector(bot, owner_chat_id, get_coin_by_symbol, full_analysi
                 print("Pump Radar: соединение установлено")
                 while True:
                     try:
-                        message = await asyncio.wait_for(ws.recv(), timeout=SYMBOL_REFRESH_SEC)
+                        message = await asyncio.wait_for(ws.recv(), timeout=30)
                     except asyncio.TimeoutError:
-                        break  # выходим, чтобы пересобрать список символов и переподключиться
+                        # каждые 30с проверяем: не запросили ли карточку по символу вне текущей
+                        # подписки (live_prices.request_subscription) — если да, переподключаемся
+                        # с расширенным списком, иначе просто продолжаем слушать.
+                        if _has_new_dynamic_symbols():
+                            break
+                        continue
                     payload = json.loads(message)
                     stream_data = payload.get("data", {})
                     symbol = stream_data.get("s", "").lower()
                     kline = stream_data.get("k")
                     if symbol and kline:
                         await handle_kline(ctx, symbol, kline)
+                    if _has_new_dynamic_symbols():
+                        break  # реагируем на динамический запрос подписки без ожидания таймаута
         except Exception as e:
             print(f"Pump Radar: соединение разорвано ({e}), переподключение через 5 сек")
             await asyncio.sleep(5)

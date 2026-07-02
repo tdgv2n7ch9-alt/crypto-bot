@@ -3406,10 +3406,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 fd = funding_map.get(sym, {})
                 funding = fd.get("funding", 0)
                 price   = fd.get("price", 0)
+                price_fresh = fd.get("price_fresh", "")
                 if price <= 0: continue
                 oi = _get_oi_change(sym)
                 ls = _get_ls_ratio(sym)
-                w  = _analyze_whale_signal(sym, funding, oi, ls, price)
+                w  = _analyze_whale_signal(sym, funding, oi, ls, price, price_fresh)
                 if w:
                     found.append(w)
                 else:
@@ -3573,6 +3574,7 @@ def _get_funding_rates():
     """Получаем funding rates через CMC/CoinGecko (Binance заблокирован на Railway)"""
     try:
         import requests as _r
+        from live_prices import resolve_price
         symbols = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","LINK","DOT"]
         result = []
         for sym in symbols:
@@ -3586,13 +3588,15 @@ def _get_funding_rates():
                 d = r.json().get("data", {}).get(sym, {})
                 if isinstance(d, list): d = d[0]
                 q = d.get("quote", {}).get("USDT", {})
-                price = q.get("price", 0) or 0
+                cg_price = q.get("price", 0) or 0
                 ch24 = q.get("percent_change_24h", 0) or 0
-                if price > 0:
+                if cg_price > 0:
+                    price, price_fresh = resolve_price(sym, cg_price)
                     result.append({
                         "symbol": sym,
                         "funding": round(ch24 / 100 * 0.01, 6),
                         "price": round(price, 4),
+                        "price_fresh": price_fresh,
                     })
             except:
                 pass
@@ -3624,7 +3628,7 @@ def _calc_x100_levels(price: float, change_7d: float, mcap: float) -> dict:
             "pot_min": pot_min, "pot_max": pot_max,
             "low_52w": low_52w, "high_52w": high_52w}
 
-def _analyze_whale_signal(symbol: str, funding: float, oi: float, ls: float, price: float):
+def _analyze_whale_signal(symbol: str, funding: float, oi: float, ls: float, price: float, price_fresh: str = ""):
     """Анализ whale сигнала"""
     signals = []
     score = 0
@@ -3639,7 +3643,7 @@ def _analyze_whale_signal(symbol: str, funding: float, oi: float, ls: float, pri
     if score < 2 or not signals: return None
     direction = "LONG" if funding < -0.03 or ls > 1.3 else ("SHORT" if funding > 0.03 or ls < 0.8 else "NEUTRAL")
     return {"symbol": symbol, "direction": direction, "score": score, "signals": signals,
-            "funding": funding, "oi": oi, "ls": ls, "price": price}
+            "funding": funding, "oi": oi, "ls": ls, "price": price, "price_fresh": price_fresh}
 
 def _get_ls_ratio(symbol: str) -> float:
     """Long/Short ratio через Bybit (CoinGecko/CMC такого не отдают бесплатно;
@@ -3691,12 +3695,13 @@ def _format_whale_alert(w: dict) -> str:
     oi = w.get("oi", 0)
     ls = w.get("ls", 1.0)
     price = w.get("price", 0)
+    price_fresh = w.get("price_fresh", "")
 
     dir_emoji = "🟢 ЛОНГ" if direction == "LONG" else ("🔴 ШОРТ" if direction == "SHORT" else "⚪ НЕЙТРАЛЬНО")
     lines_out = [
         f"🐋 *WHALE MONITOR — {sym}*",
         f"━━━━━━━━━━━━━━━━━━━━",
-        f"📍 Цена: {fp(price)}",
+        f"📍 Цена: {fp(price)}  _{price_fresh}_" if price_fresh else f"📍 Цена: {fp(price)}",
         f"📊 Направление: {dir_emoji}",
         f"💯 Скор: {score}/10",
         f"",
@@ -3747,12 +3752,13 @@ async def whale_monitor(bot: Bot):
             fd = funding_map.get(sym, {})
             funding = fd.get("funding", 0)
             price   = fd.get("price", 0)
+            price_fresh = fd.get("price_fresh", "")
             if price <= 0: continue
 
             oi = _get_oi_change(sym)
             ls = _get_ls_ratio(sym)
 
-            w = _analyze_whale_signal(sym, funding, oi, ls, price)
+            w = _analyze_whale_signal(sym, funding, oi, ls, price, price_fresh)
             if not w: continue
 
             text = _format_whale_alert(w)
@@ -3809,9 +3815,13 @@ async def send_scheduled(bot: Bot):
         sent_spot  = 0
         already_sent = set(list(TOP_LONG_SIGNALS.keys()) + list(TOP_SHORT_SIGNALS.keys()))
 
+        from live_prices import resolve_price
+
         for coin in coins:
             q         = coin["quote"]["USDT"]
-            price     = q.get("price",             0) or 0
+            sym       = coin["symbol"]
+            cg_price  = q.get("price",             0) or 0
+            price, price_fresh = resolve_price(sym, cg_price)  # live WS-цена, фоллбек на CoinGecko с пометкой
             ch1h      = q.get("percent_change_1h",  0) or 0
             ch24h     = q.get("percent_change_24h", 0) or 0
             ch7d      = q.get("percent_change_7d",  0) or 0
@@ -3820,7 +3830,6 @@ async def send_scheduled(bot: Bot):
             vol       = q.get("volume_24h",         0) or 0
             mcap      = q.get("market_cap",         0) or 0
             rank      = coin.get("cmc_rank", 9999)
-            sym       = coin["symbol"]
             vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
             slug      = coin.get("slug", sym.lower())
 
@@ -3837,7 +3846,7 @@ async def send_scheduled(bot: Bot):
                 score = min(50 + int(ch1h*2 + ch24h*1.5), 95)
 
                 a_stub = {
-                    "price": price, "is_long": True,
+                    "price": price, "price_fresh": price_fresh, "is_long": True,
                     "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "sl": sl, "swing": swing, "rr": 2.5,
                     "rocket": score, "rocket_label": " ",
@@ -3884,7 +3893,7 @@ async def send_scheduled(bot: Bot):
                 score = min(50 + int(abs(ch1h)*2 + abs(ch24h)*1.5), 95)
 
                 a_stub = {
-                    "price": price, "is_long": False,
+                    "price": price, "price_fresh": price_fresh, "is_long": False,
                     "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "sl": sl, "swing": swing, "rr": 2.5,
                     "rocket": score, "rocket_label": " ",
@@ -3957,7 +3966,7 @@ async def send_scheduled(bot: Bot):
                 ]))
 
                 a_stub = {
-                    "price": price, "is_long": True,
+                    "price": price, "price_fresh": price_fresh, "is_long": True,
                     "tp1": buy2, "tp2": buy1, "tp3": buy3,
                     "sl": price*0.70, "swing": price*0.80, "rr": 3.0,
                     "rocket": 70, "rocket_label": " ",
@@ -6158,7 +6167,8 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
 
     result = {
         "ok": False,
-        "pro_score": 0,        # 0-100  
+        "price": 0.0, "price_fresh": "",
+        "pro_score": 0,        # 0-100
         "direction": "neutral", # long / short / neutral
         "confidence": 0,        # 0-100 
         "setup_type": None,     # ICT / Wyckoff / SMC / Elliott / Breakout
@@ -6219,9 +6229,10 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         highs_4h  = [c["high"]  for c in c4h]
         lows_4h   = [c["low"]   for c in c4h]
         vols_4h   = [c["vol"]   for c in c4h]
-        price     = closes_4h[-1]
+        from live_prices import resolve_price
+        price, price_fresh = resolve_price(symbol, closes_4h[-1])  # live WS-цена, CoinGecko-фоллбек с пометкой
 
-        #  EMA MULTI-TF 
+        #  EMA MULTI-TF
         ema20_4h  = calc_ema(closes_4h, 20)[-1]  or price
         ema50_4h  = calc_ema(closes_4h, 50)[-1]  or price
         ema200_4h = calc_ema(closes_4h, 200)[-1] or price
@@ -6723,7 +6734,7 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
             "ema200_4h": ema200_4h, "ema200_1d": ema200_1d,
             "macd_bull": macd_bull, "macd_hist": macd_hist,
             "atr": atr, "st_bull": st_bull,
-            "price": price,
+            "price": price, "price_fresh": price_fresh,
             "support": min(lows_4h[-20:]) if len(lows_4h) >= 20 else price*0.95,
             "resistance": max(highs_4h[-20:]) if len(highs_4h) >= 20 else price*1.05,
         })
@@ -6751,7 +6762,7 @@ def real_ta(symbol: str) -> dict:
         "macd_hist": 0.0, "macd_signal_bull": False, "macd_signal_bear": False,
         "bb_upper": 0.0, "bb_lower": 0.0, "bb_squeeze": False,
         "vol_avg": 0.0, "vol_spike": False,
-        "price": 0.0,
+        "price": 0.0, "price_fresh": "",
         "supertrend_bull": None,
         "atr": 0.0,
         "support": 0.0, "resistance": 0.0,
@@ -6767,7 +6778,8 @@ def real_ta(symbol: str) -> dict:
         highs_4h  = [c["high"]  for c in c4h]
         lows_4h   = [c["low"]   for c in c4h]
         vols_4h   = [c["vol"]   for c in c4h]
-        price     = closes_4h[-1]
+        from live_prices import resolve_price
+        price, price_fresh = resolve_price(symbol, closes_4h[-1])  # live WS-цена, CoinGecko-фоллбек с пометкой
 
         #  EMA (4H ) 
         _ema20  = calc_ema(closes_4h, 20)
@@ -6899,7 +6911,7 @@ def real_ta(symbol: str) -> dict:
             "bb_squeeze": bb_sqz,
             "vol_avg":   round(vol_avg, 2),
             "vol_spike": vol_spk,
-            "price":     price,
+            "price":     price, "price_fresh": price_fresh,
             "supertrend_bull": st_bull,
             "atr":       round(atr_v, 8),
             "support":   round(support, 8),
@@ -6937,7 +6949,11 @@ def real_full_analysis(coin: dict) -> dict:
 
     #    Binance
     ta = real_ta(sym)
-    price = ta["price"] if ta["ok"] and ta["price"] > 0 else (q.get("price", 0) or 0)
+    if ta["ok"] and ta["price"] > 0:
+        price, price_fresh = ta["price"], ta.get("price_fresh", "")
+    else:
+        from live_prices import resolve_price
+        price, price_fresh = resolve_price(sym, q.get("price", 0) or 0)
 
     rsi_4h = ta["rsi_4h"] if ta["ok"] else 50.0
     rsi_1h = ta["rsi_1h"] if ta["ok"] else 50.0
@@ -7214,7 +7230,7 @@ def real_full_analysis(coin: dict) -> dict:
     return {
         "label": rocket_label, "score": score_ta, "is_long": is_long,
         "rocket": rocket, "rocket_label": rocket_label,
-        "price": price, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "price": price, "price_fresh": price_fresh, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "sl": sl, "swing": swing, "rr": rr,
         "sl_source": sl_source, "tp1_source": tp1_source,
         "tp2_source": tp2_source, "tp3_source": tp3_source,
@@ -7325,6 +7341,7 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
                        mode: str = "long") -> str:
     is_long = mode in ("long", "spot")
     price   = a["price"]
+    price_fresh = a.get("price_fresh", "")
     r       = a["rocket"]
     rsi_4h  = a["rsi_4h"]
     trend_4h = a.get("trend_4h", "neutral")
@@ -7496,7 +7513,7 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
         f"_{score_e} {score_word}  |  Скор: {r}/100  |  Качество: {grade_name}_",
         SEP,
         "",
-        f"\U0001f4cd  *Цена сейчас:*  `{fp(price)}`",
+        f"\U0001f4cd  *Цена сейчас:*  `{fp(price)}`  _{price_fresh}_" if price_fresh else f"\U0001f4cd  *Цена сейчас:*  `{fp(price)}`",
         f"\U0001f4ca  24ч: *{ch24_str}*   30д: *{ch30_str}*",
         "",
         SEP,
@@ -7667,8 +7684,10 @@ async def cmd_x100_scanner(update, ctx):
             for i, c in enumerate(top, 1):
                 grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
                 try:
+                    from live_prices import resolve_price
                     p_str = str(c["price"]).replace("$","").replace(",","")
-                    p = float(p_str) if p_str else 0.0
+                    p_cg = float(p_str) if p_str else 0.0
+                    p, p_fresh = resolve_price(c["sym"], p_cg)  # live WS-цена для реальных торговых уровней
                     mc_str = str(c["mcap"]).replace("$","").replace(",","")
                     if "B" in mc_str: mc_val = float(mc_str.replace("B","")) * 1e9
                     elif "M" in mc_str: mc_val = float(mc_str.replace("M","")) * 1e6
@@ -7695,12 +7714,14 @@ async def cmd_x100_scanner(update, ctx):
                         f"  Потенциал: {lvl['pot_min']*3}–{lvl['pot_max']*5}x с плечом",
                         f"  📉 Мин/Макс: ${lvl['low_52w']} / ${lvl['high_52w']}",
                     ]
+                    price_line = f"💰 Цена: {fp(p)}  _{p_fresh}_ | МКап: {c['mcap']}"
                 except Exception:
                     spot = []
+                    price_line = f"💰 Цена: {c['price']} | МКап: {c['mcap']}"
                 lines += [
                     SEP,
                     f"{grade} #{i} {c['sym']} — {c['name']}",
-                    f"💰 Цена: {c['price']} | МКап: {c['mcap']}",
+                    price_line,
                     f"📊 24ч: {sign(c['ch24'])} | 7д: {sign(c['ch7d'])} | 30д: {sign(c['ch30d'])}",
                     *spot,
                     f"⚡ {' · '.join(c['reasons'])}",
@@ -7871,6 +7892,7 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             candles_1w = get_binance_ohlc(sym, "1w", 200)
 
             price  = a["price"]
+            price_fresh = a.get("price_fresh", "")
             ath    = max((c["high"] for c in candles_1w), default=0) if candles_1w else max((c["high"] for c in candles_1d), default=0)
             ch24h  = q.get("percent_change_24h", 0) or 0
             ch30d  = q.get("percent_change_30d", 0) or 0
@@ -7958,7 +7980,7 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"*{sym}/USDT* \u2b50 *СПОТ*",
                 f"_Скор: {spot_rocket}/100 | Качество: {grade_spot}_",
                 "",
-                f"\U0001f4cd Цена сейчас: `{fp(price)}`",
+                f"\U0001f4cd Цена сейчас: `{fp(price)}`  _{price_fresh}_" if price_fresh else f"\U0001f4cd Цена сейчас: `{fp(price)}`",
                 f"\U0001f4ca 24ч: {ch24_s} | 30д: {ch30_s} | 90д: {ch90_s}",
                 "",
                 f"\U0001f7e2 *Зоны:*",
