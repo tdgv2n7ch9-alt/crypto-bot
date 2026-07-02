@@ -1782,13 +1782,14 @@ def overview_kb():
         [InlineKeyboardButton("🚀 x100 Сканер", callback_data="x100_scan")],
         [InlineKeyboardButton("🏦 Институционал", callback_data="institutional")],
         [InlineKeyboardButton("🐋 Whale Monitor", callback_data="whale_status")],
+        [InlineKeyboardButton("⚡ Памп-радар", callback_data="pump_radar")],
         [InlineKeyboardButton("💼 Монеты в работе", callback_data="top_trades")],
         [InlineKeyboardButton("📡 Сигналы каналов", callback_data="channel_signals")],
         [InlineKeyboardButton("🔗 On-Chain", callback_data="onchain_info")],
         [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
     ])
-# PUMP / DUMP 
+# PUMP / DUMP
 # 
 async def check_pump_dump(bot, chat_ids, coins):
     now_ts = datetime.now(TZ).timestamp()
@@ -1887,7 +1888,8 @@ def main_kb():
          InlineKeyboardButton("\U0001f4e1 Сигналы каналов",callback_data="channel_signals")],
         [InlineKeyboardButton("\U0001f433 Whale Monitor",  callback_data="whale_status"),
          InlineKeyboardButton("\U0001f517 On-Chain",       callback_data="onchain_info")],
-        [InlineKeyboardButton("\U0001f3e6 Институционал",  callback_data="institutional")],
+        [InlineKeyboardButton("\U0001f3e6 Институционал",  callback_data="institutional"),
+         InlineKeyboardButton("⚡ Памп-радар",         callback_data="pump_radar")],
         [InlineKeyboardButton("\U0001f4cb Полный анализ",  callback_data="menu_full")],
     ])
 
@@ -3463,6 +3465,50 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("\n".join(lines_w), parse_mode="Markdown", reply_markup=nav_w)
         except Exception as e:
             await q.edit_message_text(f"\u274c Ошибка Whale Monitor: {e}", reply_markup=back_kb())
+
+    elif data == "pump_radar":
+        try:
+            from pump_detector import get_pump_radar_state
+            st = get_pump_radar_state()
+            SEP = "➖"*10
+            lines_pr = ["⚡ *ПАМП-РАДАР*", f"\U0001f550 _{now_utc3()}_", SEP, ""]
+            if st["active"]:
+                lines_pr.append("\U0001f4e1 *Активные наблюдения:*\n")
+                stage_e = {"WATCHING": "\U0001f440", "PUMP_DETECTED": "\U0001f680",
+                           "REVERSAL_CONFIRMED": "\U0001f53b", "PROMOTED": "✅"}
+                for a in st["active"]:
+                    e = stage_e.get(a["stage"], "•")
+                    lines_pr.append(f"{e} *{a['symbol']}* — {a['stage']}  "
+                                     f"({a['elapsed_min']:.0f} мин, {a['pct_from_peak']:+.1f}% от пика)")
+                lines_pr.append("")
+            else:
+                lines_pr.append("Активных наблюдений нет\n")
+            h = st["history_24h"]
+            lines_pr += [
+                SEP, "",
+                "\U0001f4ca *История за 24ч:*",
+                f"  Детектов: {h['detected']}",
+                f"  Дошло до разворота: {h['reversed']}",
+                f"  Promoted в ТОП ШОРТ: {h['promoted']}",
+                f"  Истекло без разворота: {h['expired']}",
+                "", SEP,
+            ]
+            nav_pr = InlineKeyboardMarkup([
+                [InlineKeyboardButton("\U0001f504 Обновить", callback_data="pump_radar"),
+                 InlineKeyboardButton("\U0001f3e0 Меню", callback_data="show_menu")],
+            ])
+            await q.edit_message_text("\n".join(lines_pr), parse_mode="Markdown", reply_markup=nav_pr)
+        except Exception as e:
+            await q.edit_message_text("Ошибка Памп-радара: "+str(e), reply_markup=back_kb())
+
+    elif data.startswith("pump_sub_"):
+        sym = data[len("pump_sub_"):]
+        try:
+            from pump_detector import subscribe_symbol
+            subscribe_symbol(sym, q.message.chat_id)
+            await q.answer(f"\U0001f514 Подписка на {sym} оформлена")
+        except Exception as e:
+            await q.answer("Ошибка подписки: "+str(e))
 
 _READER_SIGNALS_FILE = "/tmp/reader_signals.json"
 
@@ -8707,6 +8753,17 @@ async def cmd_myid(update: Update, ctx):
         parse_mode="Markdown"
     )
 
+def add_top_short_signal(sym: str, entry: dict):
+    """Добавляет сигнал в TOP_SHORT_SIGNALS только если символа там ещё нет — Памп-радар
+    не перезаписывает руками ведённые/уже активные сигналы, только дописывает новые."""
+    if sym in TOP_SHORT_SIGNALS:
+        return False
+    entry = dict(entry)
+    entry["time"] = datetime.now(TZ)
+    TOP_SHORT_SIGNALS[sym] = entry
+    _save_signals()
+    return True
+
 async def _start_pump_detector(app):
     """post_init hook — запускает pump_detector в том же event loop, что и бот."""
     import os
@@ -8716,7 +8773,15 @@ async def _start_pump_detector(app):
     def _get_coin(sym):
         return next((c for c in get_all_coins() if c.get("symbol") == sym), None)
 
-    asyncio.create_task(run_pump_detector(app.bot, owner_id, _get_coin, full_analysis))
+    asyncio.create_task(run_pump_detector(
+        app.bot, owner_id, _get_coin, full_analysis,
+        pro_analysis=pro_analysis,
+        get_killzone_status=get_killzone_status,
+        get_funding_pct=_get_funding_pct,
+        get_oi_usd=_get_oi_usd,
+        get_oi_change=_get_oi_change,
+        add_top_short_signal=add_top_short_signal,
+    ))
 
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(_start_pump_detector).build()
