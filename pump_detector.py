@@ -74,6 +74,7 @@ COARSE_ALERT_COOLDOWN_SEC = 60 * 60 # кулдаун 60 мин на повтор
 MAX_CONCURRENT_WATCH = 15           # лимит одновременных WATCHING (памп+дамп суммарно)
 COARSE_WATCHDOG_TIMEOUT_SEC = 60    # coarse молчит дольше — авто-реконнект + уведомление owner'у
 COARSE_NO_DATA_ALERT_SEC = 5 * 60   # реконнект не восстанавливает данные 5 мин — "Радар без данных"
+COARSE_RECONNECT_NOTIFY_COOLDOWN_SEC = 10 * 60  # антиспам: не чаще 1 раза в 10 мин на "переподключён"
 
 BG, GREEN, RED, WHITE, GRAY, YELLOW = "#0D1421", "#16C784", "#EA3943", "#FFFFFF", "#7B8BB2", "#F0B90B"
 
@@ -105,6 +106,15 @@ _coarse_reconnect_fail_start = None  # ts начала текущей серии
 _coarse_watchdog_notified_no_data = False  # чтобы не спамить "Радар без данных" повторно
 _kline_connected = False           # текущее состояние kline WS-соединения
 _kline_last_packet_ts = 0.0        # ts последнего успешно обработанного kline-сообщения
+_last_reconnect_notify_ts = 0.0    # ts последней отправки "coarse переподключён" (кулдаун 10 мин,
+                                    # страховка от дублей: несколько параллельных инстансов радара
+                                    # на Railway при выключенном Enable Teardown спамили этим алертом)
+_coarse_reconnect_count = 0        # сколько раз watchdog ловил тишину coarse (для /radar_status и
+                                    # текста алерта — видно масштаб проблемы даже когда алерт
+                                    # подавлен кулдауном)
+_coarse_msg_count = 0              # всего успешно обработанных пакетов !miniTicker@arr (для
+                                    # диагностики Binance/сетевых инцидентов — сравнить с 0 после реконнектов)
+_kline_msg_count = 0                # всего успешно обработанных kline-сообщений
 
 
 class PumpContext:
@@ -171,10 +181,13 @@ def get_radar_status() -> dict:
         "coarse_last_packet_sec_ago": (round(now - _coarse_last_packet_ts, 1)
                                         if _coarse_last_packet_ts else None),
         "coarse_symbols": len(_coarse_price_hist),
+        "coarse_msg_count": _coarse_msg_count,
+        "coarse_reconnect_count": _coarse_reconnect_count,
         "kline_connected": _kline_connected,
         "kline_last_packet_sec_ago": (round(now - _kline_last_packet_ts, 1)
                                        if _kline_last_packet_ts else None),
         "kline_symbols": len(_current_symbols),
+        "kline_msg_count": _kline_msg_count,
         "pump_watch_count": len(pump_watch),
         "dump_watch_count": len(dump_watch),
         "pump_watch_symbols": [s.upper().replace("USDT", "") for s in pump_watch],
@@ -435,6 +448,7 @@ async def run_miniticker_stream(ctx: PumpContext):
     уведомление owner'у и watchdog-алерты при тишине/разрыве (см. модульный docstring)."""
     global _coarse_connected, _coarse_last_packet_ts, _startup_notified
     global _coarse_reconnect_fail_start, _coarse_watchdog_notified_no_data
+    global _last_reconnect_notify_ts, _coarse_reconnect_count, _coarse_msg_count
     first_message_logged = False
     _mark_start()
     print("Pump Radar (coarse): подключение к !miniTicker@arr (полное покрытие рынка)")
@@ -447,11 +461,17 @@ async def run_miniticker_stream(ctx: PumpContext):
                     try:
                         message = await asyncio.wait_for(ws.recv(), timeout=COARSE_WATCHDOG_TIMEOUT_SEC)
                     except asyncio.TimeoutError:
-                        print(f"Pump Radar (coarse): тишина >{COARSE_WATCHDOG_TIMEOUT_SEC}с, реконнект")
+                        _coarse_reconnect_count += 1
+                        print(f"Pump Radar (coarse): тишина >{COARSE_WATCHDOG_TIMEOUT_SEC}с, "
+                              f"реконнект #{_coarse_reconnect_count}")
                         _coarse_connected = False
                         if _coarse_reconnect_fail_start is None:
                             _coarse_reconnect_fail_start = time.time()
-                        await _notify_owner(ctx, "coarse переподключён")
+                        now_notify = time.time()
+                        if now_notify - _last_reconnect_notify_ts >= COARSE_RECONNECT_NOTIFY_COOLDOWN_SEC:
+                            _last_reconnect_notify_ts = now_notify
+                            await _notify_owner(
+                                ctx, f"coarse переподключён (реконнект #{_coarse_reconnect_count})")
                         break
 
                     try:
@@ -464,6 +484,7 @@ async def run_miniticker_stream(ctx: PumpContext):
                     now = time.time()
                     _coarse_last_packet_ts = now
                     _coarse_connected = True
+                    _coarse_msg_count += 1
                     if _coarse_reconnect_fail_start is not None:
                         _coarse_reconnect_fail_start = None
                         _coarse_watchdog_notified_no_data = False
@@ -893,7 +914,7 @@ async def _check_subscriber_zones(ctx: PumpContext, symbol: str, watch: dict):
 async def run_pump_detector(ctx: PumpContext):
     """Kline-слой: ведёт точное состояние наблюдений (памп+дамп), созданных грубым детектом,
     плюс всегда-live топ-N база для live_prices."""
-    global _current_symbols, _symbols_ts, _kline_connected, _kline_last_packet_ts
+    global _current_symbols, _symbols_ts, _kline_connected, _kline_last_packet_ts, _kline_msg_count
     _mark_start()
 
     _current_symbols = await _discover_top_symbols()
@@ -933,6 +954,7 @@ async def run_pump_detector(ctx: PumpContext):
                             break
                         continue
                     _kline_last_packet_ts = time.time()
+                    _kline_msg_count += 1
                     payload = json.loads(message)
                     stream_data = payload.get("data", {})
                     symbol = stream_data.get("s", "").lower()
