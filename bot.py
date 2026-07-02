@@ -107,7 +107,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v88"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v89"          # обновлять при каждом коммите с изменением bot.py
 READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -3627,26 +3627,40 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             from pump_detector import get_pump_radar_state
             st = get_pump_radar_state()
             SEP = "➖"*10
+            stage_e = {"WATCHING": "\U0001f440", "PUMP_DETECTED": "\U0001f680", "DUMP_DETECTED": "\U0001f4a5",
+                       "REVERSAL_CONFIRMED": "\U0001f53b", "PROMOTED": "✅"}
             lines_pr = ["⚡ *ПАМП-РАДАР*", f"\U0001f550 _{now_utc3()}_", SEP, ""]
-            if st["active"]:
-                lines_pr.append("\U0001f4e1 *Активные наблюдения:*\n")
-                stage_e = {"WATCHING": "\U0001f440", "PUMP_DETECTED": "\U0001f680",
-                           "REVERSAL_CONFIRMED": "\U0001f53b", "PROMOTED": "✅"}
-                for a in st["active"]:
+
+            lines_pr.append("🔴 *Пампы (сценарий шорт):*\n")
+            if st["pumps_active"]:
+                for a in st["pumps_active"]:
                     e = stage_e.get(a["stage"], "•")
                     lines_pr.append(f"{e} *{a['symbol']}* — {a['stage']}  "
-                                     f"({a['elapsed_min']:.0f} мин, {a['pct_from_peak']:+.1f}% от пика)")
-                lines_pr.append("")
+                                     f"({a['elapsed_min']:.0f} мин, {a['pct_from_level']:+.1f}% от пика)")
             else:
-                lines_pr.append("Активных наблюдений нет\n")
-            h = st["history_24h"]
+                lines_pr.append("Активных наблюдений нет")
+            lines_pr.append("")
+
+            lines_pr.append("🟢 *Дампы (сценарий лонг):*\n")
+            if st["dumps_active"]:
+                for a in st["dumps_active"]:
+                    e = stage_e.get(a["stage"], "•")
+                    lines_pr.append(f"{e} *{a['symbol']}* — {a['stage']}  "
+                                     f"({a['elapsed_min']:.0f} мин, {a['pct_from_level']:+.1f}% от дна)")
+            else:
+                lines_pr.append("Активных наблюдений нет")
+            lines_pr.append("")
+
+            hp = st["pumps_history_24h"]; hd = st["dumps_history_24h"]
             lines_pr += [
                 SEP, "",
-                "\U0001f4ca *История за 24ч:*",
-                f"  Детектов: {h['detected']}",
-                f"  Дошло до разворота: {h['reversed']}",
-                f"  Promoted в ТОП ШОРТ: {h['promoted']}",
-                f"  Истекло без разворота: {h['expired']}",
+                "\U0001f4ca *История за 24ч — пампы:*",
+                f"  Детектов: {hp['detected']}  ·  Разворотов: {hp['reversed']}  ·  "
+                f"Promoted: {hp['promoted']}  ·  Истекло: {hp['expired']}",
+                "",
+                "\U0001f4ca *История за 24ч — дампы:*",
+                f"  Детектов: {hd['detected']}  ·  Разворотов: {hd['reversed']}  ·  "
+                f"Добавлено: {hd['promoted']}  ·  Истекло: {hd['expired']}",
                 "", SEP,
             ]
             nav_pr = InlineKeyboardMarkup([
@@ -3665,6 +3679,23 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer(f"\U0001f514 Подписка на {sym} оформлена")
         except Exception as e:
             await q.answer("Ошибка подписки: "+str(e))
+
+    elif data.startswith("pump_addlong_"):
+        sym = data[len("pump_addlong_"):]
+        try:
+            from pump_detector import get_dump_offer
+            offer = get_dump_offer(sym)
+            if not offer:
+                await q.answer("Предложение больше не активно")
+            else:
+                added = add_top_long_signal(sym, {
+                    "entry": offer["entry"], "tp1": offer["tp1"], "tp2": offer["tp2"],
+                    "sl": offer["sl"], "rr": offer["rr"], "status": "active",
+                    "note": "⚡ из Памп-радара (дамп)",
+                })
+                await q.answer("✅ Добавлено в ТОП ЛОНГ" if added else "Уже есть в ТОП ЛОНГ")
+        except Exception as e:
+            await q.answer("Ошибка: "+str(e))
 
 _READER_SIGNALS_FILE = "/tmp/reader_signals.json"
 
@@ -9074,16 +9105,28 @@ def add_top_short_signal(sym: str, entry: dict):
     _save_signals()
     return True
 
+def add_top_long_signal(sym: str, entry: dict):
+    """Зеркало add_top_short_signal — для кнопки 'Добавить в ТОП ЛОНГ' на дамп-алертах
+    Памп-радара. Append-only, тот же guard: не трогаем уже существующий символ."""
+    if sym in TOP_LONG_SIGNALS:
+        return False
+    entry = dict(entry)
+    entry["time"] = datetime.now(TZ)
+    TOP_LONG_SIGNALS[sym] = entry
+    _save_signals()
+    return True
+
 async def _start_pump_detector(app):
-    """post_init hook — запускает pump_detector в том же event loop, что и бот."""
+    """post_init hook — запускает pump_detector (kline-слой) и грубый !miniTicker@arr-детект
+    (полное покрытие рынка) в том же event loop, что и бот."""
     import os
-    from pump_detector import run_pump_detector
+    from pump_detector import run_pump_detector, run_miniticker_stream, PumpContext
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
 
     def _get_coin(sym):
         return next((c for c in get_all_coins() if c.get("symbol") == sym), None)
 
-    asyncio.create_task(run_pump_detector(
+    ctx = PumpContext(
         app.bot, owner_id, _get_coin, full_analysis,
         pro_analysis=pro_analysis,
         get_killzone_status=get_killzone_status,
@@ -9091,7 +9134,9 @@ async def _start_pump_detector(app):
         get_oi_usd=_get_oi_usd,
         get_oi_change=_get_oi_change,
         add_top_short_signal=add_top_short_signal,
-    ))
+    )
+    asyncio.create_task(run_pump_detector(ctx))
+    asyncio.create_task(run_miniticker_stream(ctx))
 
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(_start_pump_detector).build()
