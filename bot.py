@@ -107,7 +107,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v87"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v88"          # обновлять при каждом коммите с изменением bot.py
 READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -5735,10 +5735,10 @@ def get_btc_market_context() -> dict:
     }
 
     try:
-        # BTC price + change via CMC (Binance blocked on Railway)
-        btc_q = get_cmc_quote("BTC")
-        btc_price = btc_q.get("price", 0) if btc_q else 0
-        ch24h = btc_q.get("percent_change_24h", 0) if btc_q else 0
+        # BTC price + change via CMC (Binance blocked на Railway)
+        btc_q = get_btc_eth_price().get("BTC", {})
+        btc_price = btc_q.get("price", 0) or 0
+        ch24h = btc_q.get("ch24h", 0) or 0
         result["btc_price"] = btc_price
         result["btc_ch24h"] = round(ch24h, 2)
 
@@ -5788,43 +5788,43 @@ def get_btc_market_context() -> dict:
             signal   = "bull"
             long_ok  = True
             short_ok = False
-            label    = " BTC    "
+            label    = "🟢 BTC сильный бычий тренд (все ТФ)"
             warning  = ""
         elif bear_count >= 2:
             signal   = "bear"
             long_ok  = False
             short_ok = True
-            label    = " BTC    "
-            warning  = " BTC       "
+            label    = "🔴 BTC сильный медвежий тренд (все ТФ)"
+            warning  = "⚠️ BTC в нисходящем тренде — лонги рискованны"
         elif t4h == "bull" or t1d == "neutral_bull":
             signal   = "neutral_bull"
             long_ok  = True
             short_ok = True
-            label    = " BTC    "
+            label    = "🟡 BTC умеренно бычий"
             warning  = ""
         elif t4h == "bear" or t1d == "neutral_bear":
             signal   = "neutral_bear"
-            long_ok  = True   #   
+            long_ok  = True   # не блокируем лонги полностью
             short_ok = True
-            label    = " BTC    "
-            warning  = " BTC     "
+            label    = "🟡 BTC умеренно медвежий"
+            warning  = "⚠️ BTC в слабом нисходящем тренде"
         else:
             signal   = "neutral"
             long_ok  = True
             short_ok = True
-            label    = " BTC       "
+            label    = "⚪ BTC нейтрален, чёткого тренда нет"
             warning  = ""
 
-        #  : BTC  >3%  1    
+        # Резкое падение BTC >3% за 1ч — блокируем лонги
         if ch1h < -3:
             long_ok  = False
-            warning  = f" BTC -{ abs(ch1h):.1f}%  1     "
-            label   += f"     {ch1h:.1f}%"
+            warning  = f"🔴 BTC упал на {abs(ch1h):.1f}% за 1ч — риск для лонгов"
+            label   += f" | резкое падение {ch1h:.1f}%"
 
-        # BTC  >5%  1    
+        # Резкий рост BTC >5% за 1ч — блокируем шорты
         if ch1h > 5:
             short_ok = False
-            label   += f"     +{ch1h:.1f}%"
+            label   += f" | резкий рост +{ch1h:.1f}%"
 
         result.update({
             "ok":       True,
@@ -6023,19 +6023,19 @@ def get_killzone_status() -> dict:
 
 
 def killzone_label() -> str:
-    """     """
+    """Текущая ICT-сессия одной строкой, для строк вида '⏰ {label}'"""
     kz = get_killzone_status()
     active = kz["active"]
     nxt    = kz["next"]
     q      = active["quality"]
-    q_e    = {"A+": "", "A": "", "B": "", "C": "", "D": ""}.get(q, "")
+    q_e    = {"A+": "🟢", "A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴"}.get(q, "⚪")
     rem    = active.get("remaining_min", 0)
 
-    line = f"{q_e} {active['name']}  ( : {q})"
+    line = f"{q_e} {active['name']}  (качество: {q})"
     if rem:
-        line += f"   {rem} "
+        line += f"  осталось {rem} мин"
     if nxt:
-        line += f"\n  : {nxt['name']}  {nxt['in_min']} "
+        line += f"\nСледующая: {nxt['name']} через {nxt['in_min']} мин"
     return line
 
 
@@ -7982,7 +7982,7 @@ async def cmd_x100_scanner(update, ctx):
                     elif "K" in mc_str: mc_val = float(mc_str.replace("K","")) * 1e3
                     else: mc_val = float(mc_str) if mc_str else 0.0
                     lvl = _calc_x100_levels(p, c["ch7d"] or 0, mc_val)
-                    pct = lambda a, b: f"+{((b-a)/a*100):.1f}%" if a > 0 else "—"
+                    pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
                     spot = [
                         f"",
                         f"📍 СПОТ:",
@@ -7992,7 +7992,7 @@ async def cmd_x100_scanner(update, ctx):
                         f"  TP1: {fp(lvl['tp1'])} ({pct(p, lvl['tp1'])})",
                         f"  TP2: {fp(lvl['tp2'])} ({pct(p, lvl['tp2'])})",
                         f"  TP3: {fp(lvl['tp3'])} ({pct(p, lvl['tp3'])})",
-                        f"  SL: {fp(lvl['sl'])} ({pct(lvl['sl'])})",
+                        f"  SL: {fp(lvl['sl'])} ({pct(p, lvl['sl'])})",
                         f"  Потенциал: {lvl['pot_min']}–{lvl['pot_max']}x",
                         f"",
                         f"📍 ФЬЮЧЕРС (LONG x3–5):",
