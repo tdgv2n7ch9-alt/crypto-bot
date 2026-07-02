@@ -2283,32 +2283,52 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             v=c["quote"]["USDT"].get("volume_24h",0) or 0
             if v>=2000000: sl7.append("  🔴 "+sym+" "+fc(ch))
 
-        # === VERDICT SCORE ===
+        # === VERDICT SCORE — блоки 2/6/7: факторы с ✅/❌/🟡 + скор/100 + грейд ===
         score=0
-        if btc_ch24>2: score+=2
-        elif btc_ch24>0: score+=1
-        elif btc_ch24<-2: score-=2
-        if fv>=55: score+=1
-        elif fv<35: score-=1
-        if 55<=br<70: score+=1
-        elif br>=70 or br<35: score-=1
-        if btc_dom<50 and btc_ch24>0: score+=2
-        if fund_btc>0.05: score-=1
-        if sp_ch>0: score+=1
-        elif sp_ch<-1: score-=1
-        if pcr>1.2: score-=1
-        elif pcr<0.7: score+=1
-        if score>=6: verdict="A+ 🚀 Сильный бычий"
-        elif score>=4: verdict="A  📈 Бычий"
-        elif score>=2: verdict="B  🟡 Нейтрально-бычий"
-        elif score>=-1: verdict="C  ⚪ Нейтральный"
-        else: verdict="D  📉 Медвежий"
+        factors=[]  # (mark, text)
+        if btc_ch24>2: score+=2; factors.append(("✅","BTC растёт сильно (24ч)"))
+        elif btc_ch24>0: score+=1; factors.append(("🟡","BTC растёт слабо (24ч)"))
+        elif btc_ch24<-2: score-=2; factors.append(("❌","BTC падает сильно (24ч)"))
+        else: factors.append(("🟡","BTC около нуля (24ч)"))
+        if fv>=55: score+=1; factors.append(("✅","Fear&Greed в зоне жадности"))
+        elif fv<35: score-=1; factors.append(("❌","Fear&Greed в зоне страха"))
+        else: factors.append(("🟡","Fear&Greed нейтрален"))
+        if 55<=br<70: score+=1; factors.append(("✅","RSI 1D в здоровой бычьей зоне"))
+        elif br>=70 or br<35: score-=1; factors.append(("❌","RSI 1D перекуплен/перепродан"))
+        else: factors.append(("🟡","RSI 1D нейтрален"))
+        if btc_dom<50 and btc_ch24>0: score+=2; factors.append(("✅","BTC.D<50% + рост — капитал идёт в альты"))
+        else: factors.append(("🟡","BTC.D не даёт альт-сезон сигнала"))
+        if fund_btc>0.05: score-=1; factors.append(("❌","Funding перегрет — лонги переполнены"))
+        else: factors.append(("✅","Funding в норме"))
+        if sp_ch>0: score+=1; factors.append(("✅","S&P500 растёт — риск-аппетит жив"))
+        elif sp_ch<-1: score-=1; factors.append(("❌","S&P500 падает — риск-офф"))
+        else: factors.append(("🟡","S&P500 нейтрален"))
+        if pcr>1.2: score-=1; factors.append(("❌","Put/Call>1.2 — опционный рынок медвежий"))
+        elif pcr<0.7: score+=1; factors.append(("✅","Put/Call<0.7 — опционный рынок бычий"))
+        else: factors.append(("🟡","Put/Call нейтрален"))
+
+        SCORE_MIN, SCORE_MAX = -7, 8
+        score_100 = max(0, min(100, round((score - SCORE_MIN) / (SCORE_MAX - SCORE_MIN) * 100)))
+        if score_100>=85: grade="A+"; verdict_e="🚀"; verdict_word="СИЛЬНЫЙ БЫЧИЙ"
+        elif score_100>=65: grade="A"; verdict_e="📈"; verdict_word="БЫЧИЙ"
+        elif score_100>=40: grade="B"; verdict_e="🟡"; verdict_word="НЕЙТРАЛЬНО-БЫЧИЙ"
+        elif score_100>=20: grade="C"; verdict_e="⚪"; verdict_word="НЕЙТРАЛЬНЫЙ"
+        else: grade="C"; verdict_e="📉"; verdict_word="МЕДВЕЖИЙ"
+        verdict=f"{grade} {verdict_e} {verdict_word.title()}"
 
         SEP="➖"*18
         mcap_str="$"+str(round(total_mcap/1e12,2))+"T" if total_mcap>0 else "N/A"
         oi_str=str(round(oi_btc,1))+"B" if oi_btc>0 else "N/A"
         out=[
-            "⭐ BEST TRADE — ОБЗОР РЫНКА",SEP,"",
+            # === Блок 1: шапка + время UTC+3 ===
+            "⭐ BEST TRADE — ОБЗОР РЫНКА",
+            f"🕐 _{now_utc3()}_",
+            SEP,"",
+            # === Блок 2: вердикт ===
+            f"_{verdict_e} {verdict_word.title()}  |  Скор: {score_100}/100  |  Качество: {grade}_",
+            "",
+            SEP,"",
+            # === Блок 3: цена и контекст ===
             "💰 КАПИТАЛИЗАЦИЯ",
             "  Общая: "+mcap_str+"  "+fp(mcap_ch),
             "  BTC.D: "+str(round(btc_dom,1))+"%   ETH.D: "+str(round(eth_dom,1))+"%","",
@@ -2337,7 +2357,21 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]+ll+["  Падение:"]+sl+["",
             "📅 ТОП 7D","  Рост:"
         ]+ll7+["  Падение:"]+sl7+["",
-            SEP,"🏆 ВЕРДИКТ: "+verdict,SEP
+            SEP,"",
+            # === Блок 6: факторы ✅/❌/🟡 ===
+            "📋 *Факторы:*",""
+        ]+[f"  {mark}  {text}" for mark,text in factors]+["",
+            SEP,"",
+            # === Блок 7: расшифровка скора ===
+            f"📋 *РАСШИФРОВКА СКОРА  {score_100}/100*","",
+            "  Шкала силы:",
+            "  0–19   📉  МЕДВЕЖИЙ",
+            "  20–39  ⚪  НЕЙТРАЛЬНЫЙ",
+            "  40–64  🟡  НЕЙТРАЛЬНО-БЫЧИЙ",
+            "  65–84  📈  БЫЧИЙ",
+            "  85–100 🚀  СИЛЬНЫЙ БЫЧИЙ","",
+            "  Грейды: A+ ≥85 · A ≥65 · B ≥40 · C <40","",
+            SEP,"🏆 ИТОГОВЫЙ ВЕРДИКТ: "+verdict,SEP
         ]
         await msg.edit_text("\n".join(out),parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
@@ -3001,6 +3035,48 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             elif fg_val >= 25: fg_e = "\U0001f534"
             else:              fg_e = "\U0001f4a5"
 
+            # === Блоки 2/6/7: вердикт + факторы ✅/❌/🟡 + скор/100 — по уже посчитанным данным выше ===
+            t_score = 0
+            t_factors = []
+            if "БЫЧИЙ" in btc_trend and "\U0001f7e2" in btc_trend:
+                t_score += 2; t_factors.append(("✅", "BTC тренд бычий (24ч+7д)"))
+            elif "МЕДВЕЖИЙ" in btc_trend:
+                t_score -= 2; t_factors.append(("❌", "BTC тренд медвежий (24ч+7д)"))
+            else:
+                t_factors.append(("🟡", "BTC тренд нейтральный"))
+            if "\U0001f7e2" in eth_trend:
+                t_score += 1; t_factors.append(("✅", "ETH тренд бычий"))
+            elif "\U0001f534" in eth_trend:
+                t_score -= 1; t_factors.append(("❌", "ETH тренд медвежий"))
+            else:
+                t_factors.append(("🟡", "ETH тренд нейтральный"))
+            if btc_dom and btc_dom < 50 and btc_ch > 0:
+                t_score += 2; t_factors.append(("✅", "BTC.D<50% + рост — альт-сезон формируется"))
+            elif btc_dom and btc_dom > 55:
+                t_score -= 1; t_factors.append(("❌", "BTC.D>55% — капитал в BTC, альты под давлением"))
+            else:
+                t_factors.append(("🟡", "Доминация не даёт чёткого сигнала"))
+            if fg_val >= 55:
+                t_score += 1; t_factors.append(("✅", "Fear&Greed в зоне жадности"))
+            elif fg_val < 35:
+                t_score -= 1; t_factors.append(("❌", "Fear&Greed в зоне страха"))
+            else:
+                t_factors.append(("🟡", "Fear&Greed нейтрален"))
+            if bull_pct >= 60:
+                t_score += 1; t_factors.append(("✅", f"{bull_pct}% альтов растут — широкий рост"))
+            elif bull_pct <= 40:
+                t_score -= 1; t_factors.append(("❌", f"только {bull_pct}% альтов растут — широкое падение"))
+            else:
+                t_factors.append(("🟡", "Рынок альтов смешанный"))
+
+            T_MIN, T_MAX = -5, 7
+            t_score_100 = max(0, min(100, round((t_score - T_MIN) / (T_MAX - T_MIN) * 100)))
+            if t_score_100 >= 85:   t_grade="A+"; t_verdict_e="\U0001f680"; t_verdict_word="СИЛЬНЫЙ БЫЧИЙ"
+            elif t_score_100 >= 65: t_grade="A";  t_verdict_e="\U0001f4c8"; t_verdict_word="БЫЧИЙ"
+            elif t_score_100 >= 40: t_grade="B";  t_verdict_e="\U0001f7e1"; t_verdict_word="НЕЙТРАЛЬНО-БЫЧИЙ"
+            elif t_score_100 >= 20: t_grade="C";  t_verdict_e="⚪";     t_verdict_word="НЕЙТРАЛЬНЫЙ"
+            else:                   t_grade="C";  t_verdict_e="\U0001f4c9"; t_verdict_word="МЕДВЕЖИЙ"
+
             def fmt_ch(v): return f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%"
             def fmt_p(v):
                 if v >= 1000: return f"${v:,.0f}"
@@ -3027,8 +3103,14 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 bias_line = "\u26a0\ufe0f *Избирательные сетапы*"
 
             lines_out = [
+                # === Блок 1: шапка + время ===
                 "\U0001f4ca *BEST TRADE — РЫНОЧНЫЙ ТРЕНД*",
                 f"\U0001f550 _{now_utc3()}_",
+                SEP,
+                "",
+                # === Блок 2: вердикт ===
+                f"_{t_verdict_e} {t_verdict_word.title()}  |  Скор: {t_score_100}/100  |  Качество: {t_grade}_",
+                "",
                 SEP,
                 "",
                 "\U0001fab2 *БИТКОИН / BTC*",
@@ -3113,6 +3195,27 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "",
                 SEP,
                 f"\u26a0\ufe0f  Риск: 1\u20132% депозита \u2022 SL обязателен",
+                "",
+                SEP,
+                "",
+                # === Блок 6: факторы ✅/❌/🟡 ===
+                "\U0001f4cb *Факторы:*",
+                "",
+            ] + [f"  {mark}  {text}" for mark, text in t_factors] + [
+                "",
+                SEP,
+                "",
+                # === Блок 7: расшифровка скора ===
+                f"\U0001f4cb *РАСШИФРОВКА СКОРА  {t_score_100}/100*",
+                "",
+                "  Шкала силы:",
+                "  0–19   \U0001f4c9  МЕДВЕЖИЙ",
+                "  20–39  ⚪  НЕЙТРАЛЬНЫЙ",
+                "  40–64  \U0001f7e1  НЕЙТРАЛЬНО-БЫЧИЙ",
+                "  65–84  \U0001f4c8  БЫЧИЙ",
+                "  85–100 \U0001f680  СИЛЬНЫЙ БЫЧИЙ",
+                "",
+                "  Грейды: A+ ≥85 · A ≥65 · B ≥40 · C <40",
             ]
 
             # === ФАЗА РЫНКА + ЛИКВИДНОСТЬ ===
@@ -3341,9 +3444,44 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             elif vix>20: vix_z="🟠 ПОВЫШЕННЫЙ"
             else: vix_z="🟢 НИЗКИЙ (рынок спокоен)"
 
+            # === Блоки 2/6/7: вердикт + факторы ✅/❌/🟡 + скор/100 — по уже посчитанным данным выше ===
+            i_score=0; i_factors=[]
+            if fund_btc>0.05: i_score-=1; i_factors.append(("❌","Funding BTC перегрет — лонги переполнены"))
+            elif fund_btc<-0.05: i_score+=1; i_factors.append(("✅","Funding BTC отрицательный — возможен шорт-сквиз"))
+            else: i_factors.append(("🟡","Funding BTC в норме"))
+            if oi_btc>0 and btc_ch24>0: i_score+=1; i_factors.append(("✅","OI растёт вместе с ценой — сильный тренд"))
+            elif oi_btc>0 and btc_ch24<0: i_score-=1; i_factors.append(("❌","OI растёт при падении цены — давление шортов"))
+            else: i_factors.append(("🟡","OI не даёт чёткого сигнала"))
+            if btc_dom<50 and btc_ch24>0: i_score+=1; i_factors.append(("✅","BTC.D<50% + рост — альт-сезон"))
+            elif btc_dom>55 and btc_ch24>1.5: i_score-=1; i_factors.append(("❌","BTC.D>55% — капитал в BTC, альты под давлением"))
+            else: i_factors.append(("🟡","Доминация нейтральна"))
+            if sp_ch>0.5: i_score+=1; i_factors.append(("✅","S&P500 растёт — риск-аппетит жив"))
+            elif sp_ch<-1.5: i_score-=1; i_factors.append(("❌","S&P500 падает — риск-офф давит на BTC"))
+            else: i_factors.append(("🟡","S&P500 нейтрален"))
+            if vix>25: i_score-=1; i_factors.append(("❌","VIX повышен — рынок нервничает"))
+            else: i_factors.append(("✅","VIX в норме — рынок спокоен"))
+            if pcr>1.2: i_score-=1; i_factors.append(("❌","Put/Call>1.2 — опционный рынок ждёт падения"))
+            elif pcr<0.7: i_score+=1; i_factors.append(("✅","Put/Call<0.7 — опционный рынок ждёт роста"))
+            else: i_factors.append(("🟡","Put/Call нейтрален"))
+
+            I_MIN, I_MAX = -6, 6
+            i_score_100 = max(0, min(100, round((i_score-I_MIN)/(I_MAX-I_MIN)*100)))
+            if i_score_100>=85: i_grade="A+"; i_verdict_e="🚀"; i_verdict_word="СИЛЬНЫЙ БЫЧИЙ"
+            elif i_score_100>=65: i_grade="A"; i_verdict_e="📈"; i_verdict_word="БЫЧИЙ"
+            elif i_score_100>=40: i_grade="B"; i_verdict_e="🟡"; i_verdict_word="НЕЙТРАЛЬНО-БЫЧИЙ"
+            elif i_score_100>=20: i_grade="C"; i_verdict_e="⚪"; i_verdict_word="НЕЙТРАЛЬНЫЙ"
+            else: i_grade="C"; i_verdict_e="📉"; i_verdict_word="МЕДВЕЖИЙ"
+
             SEP="➖"*18
             out=[
-                "🏛 BEST TRADE — ИНСТИТУЦИОНАЛЬНЫЙ АНАЛИЗ",SEP,"",
+                # === Блок 1: шапка + время ===
+                "🏛 BEST TRADE — ИНСТИТУЦИОНАЛЬНЫЙ АНАЛИЗ",
+                f"🕐 {now_utc3()}",
+                SEP,"",
+                # === Блок 2: вердикт ===
+                f"_{i_verdict_e} {i_verdict_word.title()}  |  Скор: {i_score_100}/100  |  Качество: {i_grade}_",
+                "",
+                SEP,"",
                 "💰 МАКРО РЫНОК",
                 "  Общая кап: $"+str(round(total_mcap/1e12,2))+"T",
                 "  BTC.D: "+str(round(btc_dom,1))+"% | ETH.D: "+str(round(eth_dom,1))+"%",
@@ -3367,8 +3505,22 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "  "+ema_cross,
                 "  Fear&Greed: "+str(fv)+"/100 — "+fl,
                 "  BTC 7d: "+fpct(btc_ch7d)+" | 30d: "+fpct(btc_ch30),"",
+                SEP,"",
+                # === Блок 6: факторы ✅/❌/🟡 ===
+                "📋 *Факторы:*","",
+            ]+["  "+mark+"  "+text for mark,text in i_factors]+["",
+                SEP,"",
+                # === Блок 7: расшифровка скора ===
+                "📋 *РАСШИФРОВКА СКОРА  "+str(i_score_100)+"/100*","",
+                "  Шкала силы:",
+                "  0–19   📉  МЕДВЕЖИЙ",
+                "  20–39  ⚪  НЕЙТРАЛЬНЫЙ",
+                "  40–64  🟡  НЕЙТРАЛЬНО-БЫЧИЙ",
+                "  65–84  📈  БЫЧИЙ",
+                "  85–100 🚀  СИЛЬНЫЙ БЫЧИЙ","",
+                "  Грейды: A+ ≥85 · A ≥65 · B ≥40 · C <40","",
                 SEP,
-                "💡 Вывод:",
+                "💡 Итоговый вывод:",
             ]
             # Conclusion
             signals=[]
