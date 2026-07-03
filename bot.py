@@ -102,12 +102,13 @@ from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
+import signal_journal
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v92"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v93"          # обновлять при каждом коммите с изменением bot.py
 READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -4160,6 +4161,13 @@ async def send_scheduled(bot: Bot):
                     "sl": sl, "rr": 2.5, "status": "active",
                 }
                 _save_signals()
+                try:
+                    signal_journal.log_signal("TOP_LONG_AUTO", sym, "long", price,
+                                               entry_lo=price, entry_hi=price, sl=sl,
+                                               tp1=tp1, tp2=tp2, tp3=tp3, rr=2.5,
+                                               rocket_score=score)
+                except Exception as e:
+                    log.error(f"[JOURNAL] TOP_LONG_AUTO {sym}: {e}")
                 already_sent.add(sym)
                 sent_long += 1
 
@@ -4207,6 +4215,13 @@ async def send_scheduled(bot: Bot):
                     "sl": sl, "rr": 2.5, "status": "active",
                 }
                 _save_signals()
+                try:
+                    signal_journal.log_signal("TOP_SHORT_AUTO", sym, "short", price,
+                                               entry_lo=price, entry_hi=price, sl=sl,
+                                               tp1=tp1, tp2=tp2, tp3=tp3, rr=2.5,
+                                               rocket_score=score)
+                except Exception as e:
+                    log.error(f"[JOURNAL] TOP_SHORT_AUTO {sym}: {e}")
                 already_sent.add(sym)
                 sent_short += 1
 
@@ -4252,6 +4267,12 @@ async def send_scheduled(bot: Bot):
                     "atl": buy3, "sell_target": sell, "status": "watching",
                 }
                 _save_signals()
+                try:
+                    signal_journal.log_signal("TOP_SPOT_AUTO", sym, "long", price,
+                                               entry_lo=buy1, entry_hi=buy2, sl=buy3,
+                                               tp1=sell, rocket_score=a_stub.get("rocket"))
+                except Exception as e:
+                    log.error(f"[JOURNAL] TOP_SPOT_AUTO {sym}: {e}")
                 already_sent.add(sym)
                 sent_spot += 1
 
@@ -8013,6 +8034,13 @@ async def cmd_x100_scanner(update, ctx):
                     elif "K" in mc_str: mc_val = float(mc_str.replace("K","")) * 1e3
                     else: mc_val = float(mc_str) if mc_str else 0.0
                     lvl = _calc_x100_levels(p, c["ch7d"] or 0, mc_val)
+                    try:
+                        signal_journal.log_signal("X100", c["sym"], "long", p,
+                                                   entry_lo=lvl["entry3"], entry_hi=lvl["entry1"],
+                                                   sl=lvl["sl"], tp1=lvl["tp1"], tp2=lvl["tp2"],
+                                                   tp3=lvl["tp3"], rocket_score=c["score"])
+                    except Exception as e:
+                        log.error(f"[JOURNAL] X100 {c['sym']}: {e}")
                     pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
                     spot = [
                         f"",
@@ -8359,12 +8387,19 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"#{sym}USDT",
             ]
 
+            _spot_sell_target = ath*0.9 if ath>0 else price*5
             TOP_SPOT_SIGNALS[sym] = {
                 "time": datetime.now(TZ), "entry": price,
                 "buy_zone_lo": buy1, "buy_zone_hi": buy2,
-                "atl": atl, "sell_target": ath*0.9 if ath>0 else price*5,
+                "atl": atl, "sell_target": _spot_sell_target,
                 "status": "watching",
             }
+            try:
+                signal_journal.log_signal("TOP_SPOT", sym, "long", price,
+                                           entry_lo=buy1, entry_hi=buy2, sl=atl,
+                                           tp1=_spot_sell_target, rocket_score=spot_rocket)
+            except Exception as e:
+                log.error(f"[JOURNAL] TOP_SPOT {sym}: {e}")
 
             await prog.delete()
             await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, "\n".join(lines))
@@ -8501,6 +8536,13 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "sl": a["sl"], "rr": a["rr"],
                 "status": "active", "chat_id": update.effective_chat.id,
             }
+            try:
+                signal_journal.log_signal("TOP_LONG", sym, "long", a["price"],
+                                           entry_lo=a["price"], entry_hi=a["price"], sl=a["sl"],
+                                           tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"],
+                                           rr=a["rr"], rocket_score=a.get("rocket"))
+            except Exception as e:
+                log.error(f"[JOURNAL] TOP_LONG {sym}: {e}")
             await asyncio.sleep(1.5)
         except Exception as e:
             log.error(f"top_long {sym}: {e}")
@@ -8609,6 +8651,13 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "sl": a["sl"], "rr": a["rr"],
                 "status": "active", "chat_id": update.effective_chat.id,
             }
+            try:
+                signal_journal.log_signal("TOP_SHORT", sym, "short", a["price"],
+                                           entry_lo=a["price"], entry_hi=a["price"], sl=a["sl"],
+                                           tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"],
+                                           rr=a["rr"], rocket_score=a.get("rocket"))
+            except Exception as e:
+                log.error(f"[JOURNAL] TOP_SHORT {sym}: {e}")
             await asyncio.sleep(1.5)
         except Exception as e:
             log.error(f"top_short {sym}: {e}")
@@ -9103,6 +9152,14 @@ def add_top_short_signal(sym: str, entry: dict):
     entry["time"] = datetime.now(TZ)
     TOP_SHORT_SIGNALS[sym] = entry
     _save_signals()
+    try:
+        price = entry.get("entry")
+        signal_journal.log_signal("PUMP_RADAR", sym, "short", price,
+                                   entry_lo=price, entry_hi=price, sl=entry.get("sl"),
+                                   tp1=entry.get("tp1"), tp2=entry.get("tp2"),
+                                   rr=entry.get("rr"))
+    except Exception as e:
+        log.error(f"[JOURNAL] PUMP_RADAR short {sym}: {e}")
     return True
 
 def add_top_long_signal(sym: str, entry: dict):
@@ -9114,6 +9171,14 @@ def add_top_long_signal(sym: str, entry: dict):
     entry["time"] = datetime.now(TZ)
     TOP_LONG_SIGNALS[sym] = entry
     _save_signals()
+    try:
+        price = entry.get("entry")
+        signal_journal.log_signal("PUMP_RADAR", sym, "long", price,
+                                   entry_lo=price, entry_hi=price, sl=entry.get("sl"),
+                                   tp1=entry.get("tp1"), tp2=entry.get("tp2"),
+                                   rr=entry.get("rr"))
+    except Exception as e:
+        log.error(f"[JOURNAL] PUMP_RADAR long {sym}: {e}")
     return True
 
 async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -9156,7 +9221,43 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"История (24ч буфер): {st['history_count']}/{st['history_maxlen']}",
         f"Аптайм: {h}ч {m}м {s}с",
     ]
+    journal_active, journal_closed = signal_journal.get_status_counts()
+    lines.append(f"Journal: {journal_active} активных, {journal_closed} закрытых")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only сводка Signal Journal: 24ч/7д/всё время — entered %, win rate, средний R,
+    разбивка по источникам."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+
+    def _fmt_window(window_sec, label):
+        s = signal_journal.get_journal_summary(window_sec)
+        if s["total"] == 0:
+            return f"*{label}:* нет сигналов"
+        lines = [f"*{label}:* всего {s['total']}"]
+        entered_str = f"{s['entered_pct']}%" if s["entered_pct"] is not None else "—"
+        lines.append(f"  Entered: {entered_str}")
+        if s["win_rate"] is not None:
+            lines.append(f"  Win rate: {s['win_rate']}% ({s['wins']}W/{s['losses']}L)")
+        else:
+            lines.append("  Win rate: — (нет закрытых)")
+        avg_r_str = f"{s['avg_r']:+.2f}" if s["avg_r"] is not None else "—"
+        lines.append(f"  Средний факт. R: {avg_r_str}")
+        if s["by_source"]:
+            src_str = ", ".join(f"{k}: {v['total']}" for k, v in sorted(s["by_source"].items()))
+            lines.append(f"  По источникам: {src_str}")
+        return "\n".join(lines)
+
+    text = "\n\n".join([
+        "*Signal Journal — статистика*",
+        _fmt_window(24 * 3600, "24ч"),
+        _fmt_window(7 * 24 * 3600, "7д"),
+        _fmt_window(None, "Всё время"),
+    ])
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 async def _start_pump_detector(app):
     """post_init hook — запускает pump_detector (kline-слой) и грубый Bybit tickers-детект
@@ -9180,11 +9281,15 @@ async def _start_pump_detector(app):
     asyncio.create_task(run_pump_detector(ctx))
     asyncio.create_task(run_miniticker_stream(ctx))
 
+    signal_journal.init(app.bot, owner_id)
+    asyncio.create_task(signal_journal.run_tracker())
+
 def main():
     app = Application.builder().token(BOT_TOKEN).post_init(_start_pump_detector).build()
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
+    app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
     app.add_handler(CommandHandler("long",      cmd_top_long))
     app.add_handler(CommandHandler("short",     cmd_top_short))

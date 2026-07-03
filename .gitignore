@@ -1,4 +1,5 @@
 best_trade_reader.session*
 chat_ids.txt
+signal_journal.json
 __pycache__/
 *.pyc
