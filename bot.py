@@ -108,7 +108,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v94"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v95"          # обновлять при каждом коммите с изменением bot.py
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -9146,6 +9146,12 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Покрытие coarse: {st['coarse_symbols']} символов, принято пакетов: {st['coarse_msg_count']}, "
         f"реконнектов: {st['coarse_reconnect_count']}",
         f"Kline-подписка: {st['kline_symbols']} символов, принято сообщений: {st['kline_msg_count']}",
+    ]
+    if st["coarse_symbols"] == 0:
+        lines.append(
+            f"⚠️ Bybit instruments-info: попыток {st['coarse_discovery_attempts']}, "
+            f"последняя ошибка: {st['coarse_discovery_last_error'] or '—'}")
+    lines += [
         "",
         f"Активных WATCHING (памп): {st['pump_watch_count']}"
         + (f" — {', '.join(st['pump_watch_symbols'])}" if st['pump_watch_symbols'] else ""),
