@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v96"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v97"          # обновлять при каждом коммите с изменением bot.py
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -7995,11 +7995,23 @@ async def cmd_x100_scanner(update, ctx):
                     elif "K" in mc_str: mc_val = float(mc_str.replace("K","")) * 1e3
                     else: mc_val = float(mc_str) if mc_str else 0.0
                     lvl = _calc_x100_levels(p, c["ch7d"] or 0, mc_val)
+
+                    # EMA-стек (1h/4h) + детектор свипа ликвидности -- x100 не считает OHLC
+                    # нигде до этого места, так что здесь два новых запроса (только для
+                    # финальных ~15 кандидатов, не для всех отсканированных монет).
+                    candles_1h_x100 = get_binance_ohlc(c["sym"], "1h", 250)
+                    candles_4h_x100 = get_binance_ohlc(c["sym"], "4h", 200)
+                    ema_ctx_x100 = ta_extra.ema_context(candles_1h_x100, candles_4h_x100)
+                    sweep_1h_x100 = ta_extra.detect_sweep(candles_1h_x100)
+                    sweep_4h_x100 = ta_extra.detect_sweep(candles_4h_x100)
+
                     try:
                         signal_journal.log_signal("X100", c["sym"], "long", p,
                                                    entry_lo=lvl["entry3"], entry_hi=lvl["entry1"],
                                                    sl=lvl["sl"], tp1=lvl["tp1"], tp2=lvl["tp2"],
-                                                   tp3=lvl["tp3"], rocket_score=c["score"])
+                                                   tp3=lvl["tp3"], rocket_score=c["score"],
+                                                   ema_stack=ema_ctx_x100,
+                                                   sweep=sweep_4h_x100 or sweep_1h_x100)
                     except Exception as e:
                         log.error(f"[JOURNAL] X100 {c['sym']}: {e}")
                     pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
@@ -8014,6 +8026,12 @@ async def cmd_x100_scanner(update, ctx):
                         f"  TP3: {fp(lvl['tp3'])} ({pct(p, lvl['tp3'])})",
                         f"  SL: {fp(lvl['sl'])} ({pct(p, lvl['sl'])})",
                         f"  Потенциал: {lvl['pot_min']}–{lvl['pot_max']}x",
+                        f"  {ta_extra.format_ema_stack_line(ema_ctx_x100)}",
+                    ]
+                    _x100_sweep_line = ta_extra.format_sweep_line(sweep_1h_x100, sweep_4h_x100, price_fmt=fp)
+                    if _x100_sweep_line:
+                        spot.append(f"  {_x100_sweep_line}")
+                    spot += [
                         f"",
                         f"📍 ФЬЮЧЕРС (LONG x3–5):",
                         f"  Вход: {fp(lvl['entry1'])}",
@@ -8250,6 +8268,11 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             sc_grade = "A+" if spot_score >= 6 else ("A" if spot_score >= 5 else ("B" if spot_score >= 3 else "C"))
             spot_rocket = min(100, max(0, spot_score * 14))
+            # EMA-стек + свежий свип ликвидности (спот всегда "long") -- аддитивно к уже
+            # посчитанному spot_rocket, существующую формулу выше не трогаем.
+            spot_rocket = max(0, min(100, spot_rocket
+                                      + ta_extra.ema_stack_score_delta(a.get("ema_ctx"), "long")
+                                      + ta_extra.sweep_score_delta(a.get("sweep_1h"), a.get("sweep_4h"), "long")))
 
             def ri_spot(v): return "\U0001f7e2" if v < 30 else ("\U0001f534" if v > 70 else "\U0001f7e1")
 
@@ -8320,6 +8343,12 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"EMA200 (1D): {ema200_pos} {ema200_str}",
                 f"Потенциал:   *{pot_str}*",
                 f"Rank:        #{rank}",
+                ta_extra.format_ema_stack_line(a.get("ema_ctx")),
+            ]
+            _spot_sweep_line = ta_extra.format_sweep_line(a.get("sweep_1h"), a.get("sweep_4h"), price_fmt=fp)
+            if _spot_sweep_line:
+                lines.append(_spot_sweep_line)
+            lines += [
                 "",
                 f"\U0001f4cb *Расшифровка скора ({spot_rocket}/100):*",
                 "",
@@ -8358,7 +8387,9 @@ async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 signal_journal.log_signal("TOP_SPOT", sym, "long", price,
                                            entry_lo=buy1, entry_hi=buy2, sl=atl,
-                                           tp1=_spot_sell_target, rocket_score=spot_rocket)
+                                           tp1=_spot_sell_target, rocket_score=spot_rocket,
+                                           ema_stack=a.get("ema_ctx"),
+                                           sweep=a.get("sweep_4h") or a.get("sweep_1h"))
             except Exception as e:
                 log.error(f"[JOURNAL] TOP_SPOT {sym}: {e}")
 
@@ -8501,7 +8532,9 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 signal_journal.log_signal("TOP_LONG", sym, "long", a["price"],
                                            entry_lo=a["price"], entry_hi=a["price"], sl=a["sl"],
                                            tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"],
-                                           rr=a["rr"], rocket_score=a.get("rocket"))
+                                           rr=a["rr"], rocket_score=a.get("rocket"),
+                                           ema_stack=a.get("ema_ctx"),
+                                           sweep=a.get("sweep_4h") or a.get("sweep_1h"))
             except Exception as e:
                 log.error(f"[JOURNAL] TOP_LONG {sym}: {e}")
             await asyncio.sleep(1.5)
@@ -8616,7 +8649,9 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 signal_journal.log_signal("TOP_SHORT", sym, "short", a["price"],
                                            entry_lo=a["price"], entry_hi=a["price"], sl=a["sl"],
                                            tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"],
-                                           rr=a["rr"], rocket_score=a.get("rocket"))
+                                           rr=a["rr"], rocket_score=a.get("rocket"),
+                                           ema_stack=a.get("ema_ctx"),
+                                           sweep=a.get("sweep_4h") or a.get("sweep_1h"))
             except Exception as e:
                 log.error(f"[JOURNAL] TOP_SHORT {sym}: {e}")
             await asyncio.sleep(1.5)
