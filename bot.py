@@ -108,8 +108,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v93"          # обновлять при каждом коммите с изменением bot.py
-READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
+BOT_VERSION = "v94"          # обновлять при каждом коммите с изменением bot.py
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -1787,7 +1786,6 @@ def overview_kb():
         [InlineKeyboardButton("🐋 Whale Monitor", callback_data="whale_status")],
         [InlineKeyboardButton("⚡ Памп-радар", callback_data="pump_radar")],
         [InlineKeyboardButton("💼 Монеты в работе", callback_data="top_trades")],
-        [InlineKeyboardButton("📡 Сигналы каналов", callback_data="channel_signals")],
         [InlineKeyboardButton("🔗 On-Chain", callback_data="onchain_info")],
         [InlineKeyboardButton("🔍 Полный анализ", callback_data="menu_full")],
         [InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu")],
@@ -1887,8 +1885,7 @@ def main_kb():
          InlineKeyboardButton("\U0001f7e2 ТОП ЛОНГ",       callback_data="top_long")],
         [InlineKeyboardButton("\U0001f534 ТОП ШОРТ",       callback_data="top_short"),
          InlineKeyboardButton("\U0001f680 x100 Сканер",    callback_data="x100_scan")],
-        [InlineKeyboardButton("\U0001f4bc Монеты в работе",callback_data="top_trades"),
-         InlineKeyboardButton("\U0001f4e1 Сигналы каналов",callback_data="channel_signals")],
+        [InlineKeyboardButton("\U0001f4bc Монеты в работе",callback_data="top_trades")],
         [InlineKeyboardButton("\U0001f433 Whale Monitor",  callback_data="whale_status"),
          InlineKeyboardButton("\U0001f517 On-Chain",       callback_data="onchain_info")],
         [InlineKeyboardButton("\U0001f3e6 Институционал",  callback_data="institutional"),
@@ -2087,7 +2084,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  • Multi-TF Confluence · Killzone\n\n"
         f"{SEP}\n\n"
         f"📡 *Источники данных:*\n"
-        f"  • {READER_CHANNELS_COUNT} Telegram-канала аналитиков\n"
         f"  • On-chain: Lookonchain\n"
         f"  • 🐋 Whale Monitor: Funding Rate + OI\n"
         f"  • CMC Топ-500 монет\n\n"
@@ -2555,7 +2551,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"_{now_utc3()}_\n"
             f"{SEP}\n\n"
             f"🧠 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
-            f"📡 {READER_CHANNELS_COUNT} канала · On-chain · 🐋 Whale Monitor\n\n"
+            f"📡 On-chain · 🐋 Whale Monitor\n\n"
             f"👇 *Выбери раздел:*",
             parse_mode="Markdown", reply_markup=main_kb()
         )
@@ -2910,9 +2906,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             if "not modified" in str(e).lower():
                 await q.answer("Без изменений")
-
-    elif data == "channel_signals":
-        await _show_channel_signals(q)
 
     elif data == "trend_analysis":
         await q.edit_message_text("\U0001f4ca Загружаю рыночные данные...", parse_mode="Markdown")
@@ -3697,65 +3690,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await q.answer("✅ Добавлено в ТОП ЛОНГ" if added else "Уже есть в ТОП ЛОНГ")
         except Exception as e:
             await q.answer("Ошибка: "+str(e))
-
-_READER_SIGNALS_FILE = "/tmp/reader_signals.json"
-
-async def _show_channel_signals(q):
-    import json as _j, os as _os
-    from datetime import datetime as _dt
-    import pytz as _pytz
-    TZ2 = _pytz.timezone("Europe/Istanbul")
-    now_str = _dt.now(TZ2).strftime("%d.%m.%Y %H:%M UTC+3")
-    SEP = "\u2796" * 10
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("\U0001f504 Обновить", callback_data="channel_signals"),
-         InlineKeyboardButton("\U0001f3e0 Меню", callback_data="show_menu")],
-    ])
-    try:
-        cached = []
-        sf = "/tmp/reader_signals.json"
-        if _os.path.exists(sf):
-            with open(sf) as _f:
-                cached = _j.load(_f)
-        cutoff = _dt.now(TZ2).timestamp() - 86400
-        recent = [s for s in cached if s.get("ts", 0) > cutoff]
-        recent.sort(key=lambda x: x.get("ts", 0), reverse=True)
-        out = [
-            "\U0001f4e1 *BEST TRADE — СИГНАЛЫ КАНАЛОВ*",
-            f"\U0001f550 _{now_str}_",
-            SEP, "",
-            f"\u2705 *Reader активен* — {READER_CHANNELS_COUNT} канала", "",
-        ]
-        if recent:
-            out.append(f"\U0001f4e8 *Последние сигналы (24ч): {len(recent)}*")
-            out.append("")
-            by_ch = {}
-            for s in recent:
-                by_ch.setdefault(s.get("channel","?"), []).append(s)
-            for ch, sigs in list(by_ch.items())[:10]:
-                out.append(f"*• {ch}*")
-                for sig in sigs[:2]:
-                    sym = sig.get("symbol","")
-                    txt = sig.get("summary", sig.get("text",""))[:120]
-                    t = sig.get("time","")
-                    sym_part = f"\U0001f3af `{sym}`" if sym else "\U0001f4dd"
-                    out.append(f"  {sym_part} {txt}")
-                    if t: out.append(f"  _{t}_")
-                out.append("")
-        else:
-            out += ["\u23f3 Сигналов за 24ч нет","Жду публикаций из каналов...",""]
-        out += [SEP, "\u26a0\ufe0f Риск 1-2% депозита • SL обязателен"]
-        text = "\n".join(out)
-        if len(text) > 4090: text = text[:4087] + "..."
-        try:
-            await q.edit_message_text(text, parse_mode="Markdown", reply_markup=nav, disable_web_page_preview=True)
-        except Exception as e2:
-            if "not modified" not in str(e2).lower(): raise
-    except Exception as e:
-        log.error(f"channel_signals: {e}")
-        try: await q.edit_message_text(f"Ошибка: {str(e)[:100]}", reply_markup=nav)
-        except: await q.answer(" ")
-
 
 def _get_funding_rates():
     """Получаем funding rates через CMC/CoinGecko (Binance заблокирован на Railway)"""
