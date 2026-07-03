@@ -103,12 +103,13 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 import signal_journal
+import ta_extra
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v95"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v96"          # обновлять при каждом коммите с изменением bot.py
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -2656,7 +2657,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 tp3   = v.get("tp3", entry * 1.08)
                 sl    = v.get("sl",  entry * 0.85)
                 move  = (cur - entry) / entry * 100 if entry > 0 else 0
-                t     = v["time"].strftime("%d.%m %H:%M")
+                t     = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 tv    = tv_link(sym)
                 dist  = (entry - cur) / entry * 100 if cur < entry else 0
 
@@ -2695,7 +2696,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 tp2   = v.get("tp2", entry * 0.96)
                 sl    = v.get("sl",  entry * 1.15)
                 move  = (entry - cur) / entry * 100 if entry > 0 else 0
-                t     = v["time"].strftime("%d.%m %H:%M")
+                t     = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 tv    = tv_link(sym)
                 dist  = (cur - entry) / entry * 100 if cur > entry else 0
 
@@ -2721,7 +2722,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             has_signals = True
             for sym, v in TOP_SPOT_SIGNALS.items():
                 tv     = tv_link(sym)
-                t      = v["time"].strftime("%d.%m %H:%M")
+                t      = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 buy_lo = v.get("buy_zone_lo", v["entry"])
                 buy_hi = v.get("buy_zone_hi", v["entry"])
                 sell_t = v.get("sell_target", 0)
@@ -2740,12 +2741,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(" *:*")
             for sym, v in list(done_l.items())[:5]:
                 tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M")
+                t  = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 lines.append(f" [{sym}USDT]({tv})   ")
                 lines.append(f"   {t} UTC+3")
             for sym, v in list(done_s.items())[:5]:
                 tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M")
+                t  = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 lines.append(f" [{sym}USDT]({tv})   ")
                 lines.append(f"   {t} UTC+3")
 
@@ -2762,7 +2763,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "\n".join(lines), parse_mode="Markdown",
                 reply_markup=nav, disable_web_page_preview=False
             )
-        except: await q.answer(" ")
+        except Exception as e:
+            log.error(f"top_trades: {e}")
+            await q.answer("Ошибка загрузки монет в работе")
 
     elif len(data.split("_")) == 3 and data.split("_")[0] in ("tp", "sl"):
         parts = data.split("_")
@@ -6986,7 +6989,7 @@ def real_ta(symbol: str) -> dict:
         "atr": 0.0,
         "support": 0.0, "resistance": 0.0,
         "trend_4h": "neutral",   # bullish / bearish / neutral
-        "candles_4h": [],
+        "candles_4h": [], "candles_1h": [],
     }
     try:
         c4h = get_binance_ohlc(symbol, "4h", 200)
@@ -7137,6 +7140,7 @@ def real_ta(symbol: str) -> dict:
             "resistance": round(resistance, 8),
             "trend_4h":  trend_4h,
             "candles_4h": c4h,
+            "candles_1h": c1h,
             # Supply/Demand 
             "in_demand_zone": in_demand_zone,
             "in_supply_zone": in_supply_zone,
@@ -7168,6 +7172,16 @@ def real_full_analysis(coin: dict) -> dict:
 
     #    Binance
     ta = real_ta(sym)
+
+    # EMA-контекст (1h/4h) + детектор свипа ликвидности (SFP) -- из уже полученных в
+    # real_ta() OHLC-серий, без новых API-вызовов.
+    if ta["ok"]:
+        ema_ctx = ta_extra.ema_context(ta.get("candles_1h", []), ta.get("candles_4h", []))
+        sweep_1h = ta_extra.detect_sweep(ta.get("candles_1h", []))
+        sweep_4h = ta_extra.detect_sweep(ta.get("candles_4h", []))
+    else:
+        ema_ctx, sweep_1h, sweep_4h = None, None, None
+
     if ta["ok"] and ta["price"] > 0:
         price, price_fresh = ta["price"], ta.get("price_fresh", "")
     else:
@@ -7268,6 +7282,13 @@ def real_full_analysis(coin: dict) -> dict:
     if ch24h < -10 and is_long:  rocket -= 8
     if rsi_4h > 80 and is_long:  rocket -= 5
     rocket = max(0, min(100, rocket))
+
+    # EMA-стек + свежий свип ликвидности -- новые факторы, чисто additive (существующие
+    # веса выше не трогали), см. ta_extra.py.
+    _direction = "long" if is_long else "short"
+    rocket = max(0, min(100, rocket
+                         + ta_extra.ema_stack_score_delta(ema_ctx, _direction)
+                         + ta_extra.sweep_score_delta(sweep_1h, sweep_4h, _direction)))
 
     # 
     #   TP/SL    
@@ -7472,6 +7493,7 @@ def real_full_analysis(coin: dict) -> dict:
         "ema20_1h": ema20_v, "ema50_1h": ema50_v, "ema200_1h": ema200_v,
         "ema20_1d": ema20_v, "ema50_1d": ema50_v, "ema200_1d": ema200_v,
         "rsi_1h": rsi_1h, "rsi_1d": rsi_1d,
+        "ema_ctx": ema_ctx, "sweep_1h": sweep_1h, "sweep_4h": sweep_4h,
     }
 
 
@@ -7817,10 +7839,15 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
         f"  Тренд 4H:     {trend_str}",
         f"  Supertrend:   `{st_str}`",
         f"  EMA:           {ema_str}",
+        f"  {ta_extra.format_ema_stack_line(a.get('ema_ctx'))}",
     ]
 
     if smc_factors:
         lines.append(f"  SMC:           `{smc_str}`")
+
+    _sweep_line = ta_extra.format_sweep_line(a.get("sweep_1h"), a.get("sweep_4h"), price_fmt=fp)
+    if _sweep_line:
+        lines.append(f"  {_sweep_line}")
 
     lines += [
         f"  {vol_note[0]}  {vol_note[1]}",
