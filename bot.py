@@ -107,7 +107,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v91"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v92"          # обновлять при каждом коммите с изменением bot.py
 READER_CHANNELS_COUNT = 3    # SOURCE_CHANNELS в reader.py — держать в синхроне вручную
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -9141,7 +9141,7 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = [
         "*Памп-радар — статус*",
         "",
-        _conn_line("coarse (!miniTicker@arr)", st["coarse_connected"], st["coarse_last_packet_sec_ago"]),
+        _conn_line("coarse (Bybit tickers)", st["coarse_connected"], st["coarse_last_packet_sec_ago"]),
         _conn_line("kline", st["kline_connected"], st["kline_last_packet_sec_ago"]),
         "",
         f"Покрытие coarse: {st['coarse_symbols']} символов, принято пакетов: {st['coarse_msg_count']}, "
@@ -9159,7 +9159,7 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 async def _start_pump_detector(app):
-    """post_init hook — запускает pump_detector (kline-слой) и грубый !miniTicker@arr-детект
+    """post_init hook — запускает pump_detector (kline-слой) и грубый Bybit tickers-детект
     (полное покрытие рынка) в том же event loop, что и бот."""
     import os
     from pump_detector import run_pump_detector, run_miniticker_stream, PumpContext
