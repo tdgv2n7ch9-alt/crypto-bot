@@ -73,7 +73,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
                entry_lo: float, entry_hi: float, sl: float,
                tp1: float = None, tp2: float = None, tp3: float = None,
                rr: float = None, rocket_score=None,
-               ema_stack=None, sweep=None) -> int:
+               ema_stack=None, sweep=None, levels_source=None) -> int:
     """Логирует новый сигнал, статус PENDING. direction: "long"/"short". Для скалярного
     входа (не зоны) передать одно и то же значение в entry_lo и entry_hi. Только
     наблюдение — вызывается ПОСЛЕ уже принятого решения сгенерировать сигнал, не влияет
@@ -82,7 +82,11 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
     ema_stack: снимок ta_extra.ema_context() на момент сигнала (или None), sweep: снимок
     ta_extra.detect_sweep() -- какой из них был актуален на момент сигнала (или None).
     Хранятся как есть (просто для последующего статистического анализа "улучшают ли эти
-    факторы win rate" — сама отработка сигнала их не использует)."""
+    факторы win rate" — сама отработка сигнала их не использует).
+
+    levels_source: "structure" (find_sr_zones/build_trade_from_structure), "fallback_atr"
+    (нет структуры вообще), или None (сигнал не через real_full_analysis, напр. авто-сканы
+    с a_stub) -- позволяет позже сравнить win rate между источниками уровней."""
     global _next_id
     rec_id = _next_id
     _next_id += 1
@@ -95,7 +99,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
         "entry_lo": entry_lo, "entry_hi": entry_hi, "sl": sl,
         "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "rr": rr, "rocket_score": rocket_score,
-        "ema_stack": ema_stack, "sweep": sweep,
+        "ema_stack": ema_stack, "sweep": sweep, "levels_source": levels_source,
         "price_at_signal": price_at_signal,
         "status": "PENDING",
         "entered_ts": None, "entered_price": None,

@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v99"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v100"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -3747,25 +3747,6 @@ def _get_funding_rates():
 
 
 
-def _calc_x100_levels(price: float, change_7d: float, mcap: float) -> dict:
-    """Расчёт уровней входа, TP, SL для x100 монеты"""
-    if price <= 0: price = 0.0001
-    sl = round(price * 0.85, 8)
-    entry1 = round(price * 0.98, 8)
-    entry2 = round(price * 0.93, 8)
-    entry3 = round(price * 0.87, 8)
-    tp1 = round(price * 1.25, 8)
-    tp2 = round(price * 1.60, 8)
-    tp3 = round(price * 2.20, 8)
-    if mcap < 50_000_000: pot_min, pot_max = 3, 10
-    elif mcap < 200_000_000: pot_min, pot_max = 2, 5
-    else: pot_min, pot_max = 1, 3
-    low_52w = round(price * 0.35, 8)
-    high_52w = round(price * 3.2, 8)
-    return {"entry1": entry1, "entry2": entry2, "entry3": entry3,
-            "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl,
-            "pot_min": pot_min, "pot_max": pot_max,
-            "low_52w": low_52w, "high_52w": high_52w}
 
 def _analyze_whale_signal(symbol: str, funding: float, oi: float, ls: float, price: float, price_fresh: str = "",
                            ch24h: float = 0.0, ch7d: float = 0.0, rank=None, vol: float = 0.0):
@@ -7004,7 +6985,7 @@ def real_ta(symbol: str) -> dict:
         "atr": 0.0,
         "support": 0.0, "resistance": 0.0,
         "trend_4h": "neutral",   # bullish / bearish / neutral
-        "candles_4h": [], "candles_1h": [],
+        "candles_4h": [], "candles_1h": [], "candles_1d": [],
     }
     try:
         c4h = get_binance_ohlc(symbol, "4h", 200)
@@ -7156,6 +7137,7 @@ def real_ta(symbol: str) -> dict:
             "trend_4h":  trend_4h,
             "candles_4h": c4h,
             "candles_1h": c1h,
+            "candles_1d": c1d,
             # Supply/Demand 
             "in_demand_zone": in_demand_zone,
             "in_supply_zone": in_supply_zone,
@@ -7305,14 +7287,11 @@ def real_full_analysis(coin: dict) -> dict:
                          + ta_extra.ema_stack_score_delta(ema_ctx, _direction)
                          + ta_extra.sweep_score_delta(sweep_1h, sweep_4h, _direction)))
 
-    # 
-    #   TP/SL    
-    #  -:
-    #   SL   Order Block / swing low/high,  ATR1.5
-    #   TP1   Supply/Demand 
-    #   TP2     (50% FVG /  High)
-    #   TP3    (100%  / EMA200 / ATH )
-    # 
+    # Вход/SL/TP от реальной структуры (find_sr_zones + build_trade_from_structure,
+    # ta_extra.py) вместо фиксированных процентов от цены -- см. модульный докстринг
+    # ta_extra.py. Зоны строятся из уже полученных в real_ta() свечей (1h/4h/1d),
+    # новых API-вызовов не добавляет (заменяет собой прежний отдельный
+    # get_binance_ohlc(sym, "4h", 100) для swing-уровней).
     import math
 
     def smart_round(val):
@@ -7321,142 +7300,55 @@ def real_full_analysis(coin: dict) -> dict:
         precision = max(8, -magnitude + 3)
         return round(val, precision)
 
-    #      4H  
-    try:
-        c4h_levels = get_binance_ohlc(sym, "4h", 100) or []
-        highs_4h_l = [c["high"] for c in c4h_levels]
-        lows_4h_l  = [c["low"]  for c in c4h_levels]
-
-        # Swing Highs  Lows ( )
-        swing_highs = []
-        swing_lows  = []
-        for i in range(2, len(c4h_levels)-2):
-            if (c4h_levels[i]["high"] > c4h_levels[i-1]["high"] and
-                c4h_levels[i]["high"] > c4h_levels[i-2]["high"] and
-                c4h_levels[i]["high"] > c4h_levels[i+1]["high"] and
-                c4h_levels[i]["high"] > c4h_levels[i+2]["high"]):
-                swing_highs.append(c4h_levels[i]["high"])
-            if (c4h_levels[i]["low"] < c4h_levels[i-1]["low"] and
-                c4h_levels[i]["low"] < c4h_levels[i-2]["low"] and
-                c4h_levels[i]["low"] < c4h_levels[i+1]["low"] and
-                c4h_levels[i]["low"] < c4h_levels[i+2]["low"]):
-                swing_lows.append(c4h_levels[i]["low"])
-
-        #      
-        levels_above = sorted([h for h in swing_highs if h > price * 1.005])
-        levels_below = sorted([l for l in swing_lows  if l < price * 0.995], reverse=True)
-
-        #  
-        r1 = levels_above[0] if len(levels_above) > 0 else None
-        r2 = levels_above[1] if len(levels_above) > 1 else None
-        r3 = levels_above[2] if len(levels_above) > 2 else None
-        s1 = levels_below[0] if len(levels_below) > 0 else None
-        s2 = levels_below[1] if len(levels_below) > 1 else None
-
-    except Exception:
-        r1 = r2 = r3 = s1 = s2 = None
-        highs_4h_l = []
-        lows_4h_l  = []
-
-    #  ATR    
+    direction = "long" if is_long else "short"
     atr_min = atr if atr > 0 else price * 0.02
 
-    if is_long:
-        #  SL:   Swing Low,   1ATR 
-        if s1 and s1 < price - atr_min * 0.5:
-            sl_raw = s1 * 0.998   #   swing low
-        elif s2 and s2 < price - atr_min:
-            sl_raw = s2 * 0.998
-        else:
-            sl_raw = price - atr_min * 1.5
-        sl = smart_round(max(sl_raw, price * 0.80))  #   -20%
+    zones = ta_extra.find_sr_zones(ta.get("candles_1h", []), ta.get("candles_4h", []),
+                                    ta.get("candles_1d", []), price, ema_ctx=ema_ctx) if ta["ok"] else {"above": [], "below": []}
+    trade = ta_extra.build_trade_from_structure(direction, price, zones)
 
-        #  TP1:  Swing High 
-        if r1 and r1 < price * 1.15:
-            tp1 = smart_round(r1 * 0.998)    #     resistance
-        else:
-            tp1 = smart_round(price + atr_min * 1.0)
-
-        #  TP2:  Swing High / 1.618    
-        move = price - sl_raw
-        fib_target = price + move * 1.618
-        if r2 and r2 < price * 1.30:
-            tp2 = smart_round(r2 * 0.998)
-        else:
-            tp2 = smart_round(fib_target)
-
-        #  TP3:   (EMA200 / 2.618 Fib / max 4H) 
-        fib_target3 = price + move * 2.618
-        if r3 and r3 < price * 1.50:
-            tp3 = smart_round(r3 * 0.998)
-        elif ema200_v > price * 1.05:
-            tp3 = smart_round(ema200_v * 0.998)
-        else:
-            tp3 = smart_round(fib_target3)
-
-        swing = smart_round(s1 if s1 else price * 0.92)
-
-    else:  # SHORT
-        #  SL:   Swing High 
-        if r1 and r1 > price + atr_min * 0.5:
-            sl_raw = r1 * 1.002
-        elif r2 and r2 > price + atr_min:
-            sl_raw = r2 * 1.002
-        else:
-            sl_raw = price + atr_min * 1.5
-        sl = smart_round(min(sl_raw, price * 1.20))  #   +20%
-
-        #  TP1:  Swing Low 
-        if s1 and s1 > price * 0.85:
-            tp1 = smart_round(s1 * 1.002)
-        else:
-            tp1 = smart_round(price - atr_min * 1.0)
-
-        #  TP2:  Swing Low / 1.618 Fib 
-        move = sl_raw - price
-        fib_target = price - move * 1.618
-        if s2 and s2 > price * 0.70:
-            tp2 = smart_round(s2 * 1.002)
-        else:
-            tp2 = smart_round(fib_target)
-
-        #  TP3: 2.618 Fib / EMA200  
-        fib_target3 = price - move * 2.618
-        if s2 and s2 * 0.85 > price * 0.50:
-            tp3 = smart_round(s2 * 0.85)
-        elif ema200_v < price * 0.95 and ema200_v > 0:
-            tp3 = smart_round(ema200_v * 1.002)
-        else:
-            tp3 = smart_round(fib_target3)
-
-        swing = smart_round(r1 if r1 else price * 1.08)
-
-    #    
-    if is_long:
-        # tp1 < tp2 < tp3    
-        tp1 = smart_round(max(tp1, price * 1.01))
-        tp2 = smart_round(max(tp2, tp1 * 1.01))
-        tp3 = smart_round(max(tp3, tp2 * 1.01))
-        sl  = smart_round(min(sl,  price * 0.99))
+    if trade:
+        levels_source = "structure"
+        entry1, entry2, entry3 = smart_round(trade["entry1"]), smart_round(trade["entry2"]), smart_round(trade["entry3"])
+        sl  = smart_round(trade["sl"])
+        tp1 = smart_round(trade["tp1"])
+        tp2 = smart_round(trade["tp2"])
+        tp3 = smart_round(trade["tp3"])
+        rr_tp1, rr_tp2, rr_tp3 = trade["rr_tp1"], trade["rr_tp2"], trade["rr_tp3"]
+        rr_gate_pass = trade["rr_gate_pass"]
+        swing = smart_round(trade["entry_zone"]["mid"])
+        touches = trade["entry_zone"]["touches"]
+        sources = ", ".join(trade["entry_zone"]["sources"])
+        sl_source  = f"S/R зона ({sources}, {touches} касан.)"
+        tp1_source = "S/R зона" if trade["tp_zones"] else "Fib расширение"
+        tp2_source = tp1_source
+        tp3_source = tp1_source
     else:
-        # tp1 > tp2 > tp3    
-        tp1 = smart_round(min(tp1, price * 0.99))
-        tp2 = smart_round(min(tp2, tp1 * 0.99))
-        tp3 = smart_round(min(tp3, tp2 * 0.99))
-        sl  = smart_round(max(sl,  price * 1.01))
+        # Нет ни одной зоны для входа (совсем неликвидная монета без чёткой структуры) --
+        # минимальный ATR-фоллбэк, помечен как fallback, не проходит R:R-гейт (недостаточно
+        # обосновано структурой, чтобы показывать как готовый сигнал).
+        levels_source = "fallback_atr"
+        rr_gate_pass = False
+        if is_long:
+            sl  = smart_round(price - atr_min * 1.5)
+            tp1 = smart_round(price + atr_min * 1.0)
+            tp2 = smart_round(price + atr_min * 1.618)
+            tp3 = smart_round(price + atr_min * 2.618)
+        else:
+            sl  = smart_round(price + atr_min * 1.5)
+            tp1 = smart_round(price - atr_min * 1.0)
+            tp2 = smart_round(price - atr_min * 1.618)
+            tp3 = smart_round(price - atr_min * 2.618)
+        entry1 = entry2 = entry3 = smart_round(price)
+        risk = abs(price - sl) or 1e-9
+        rr_tp1 = round(abs(tp1 - price) / risk, 2)
+        rr_tp2 = round(abs(tp2 - price) / risk, 2)
+        rr_tp3 = round(abs(tp3 - price) / risk, 2)
+        swing = entry1
+        sl_source = tp1_source = tp2_source = tp3_source = "ATR-фоллбэк (нет структуры)"
 
-    if sl <= 0 or sl == price:
-        sl = smart_round(price * 0.85 if is_long else price * 1.15)
-    if swing <= 0 or swing == price:
-        swing = smart_round(price * 0.92 if is_long else price * 1.08)
+    rr = rr_tp1  # R:R-гейт и общий "заголовочный" R:R теперь оба по TP1 (см. ТЗ)
 
-    rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 1.5
-
-    #     
-    sl_source  = "Swing Low" if is_long else "Swing High"
-    tp1_source = f"R{1 if is_long else 'S'}1  Swing "
-    tp2_source = "Fib 1.618" if not r2 else "R2  Swing "
-    tp3_source = "Fib 2.618" if not r3 else "R3   "
     if rocket >= 80:   rocket_label = " ROCKET"
     elif rocket >= 70: rocket_label = " "
     elif rocket >= 60: rocket_label = " "
@@ -7509,6 +7401,9 @@ def real_full_analysis(coin: dict) -> dict:
         "ema20_1d": ema20_v, "ema50_1d": ema50_v, "ema200_1d": ema200_v,
         "rsi_1h": rsi_1h, "rsi_1d": rsi_1d,
         "ema_ctx": ema_ctx, "sweep_1h": sweep_1h, "sweep_4h": sweep_4h,
+        "entry1": entry1, "entry2": entry2, "entry3": entry3,
+        "rr_tp1": rr_tp1, "rr_tp2": rr_tp2, "rr_tp3": rr_tp3,
+        "rr_gate_pass": rr_gate_pass, "levels_source": levels_source, "zones": zones,
     }
 
 
@@ -7830,14 +7725,19 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
             f"`R:R    1:{rr:.1f}`",
         ]
     else:
+        rr_tp1 = a.get("rr_tp1", rr)
+        rr_tp2 = a.get("rr_tp2", rr)
+        rr_tp3 = a.get("rr_tp3", rr)
+        entry1 = a.get("entry1", price)
         lines += [
-            f"`Вход:  {fp(price)}`",
-            f"`TP1:   {fp(tp1)}`   *({pct(tp1)})*",
-            f"`TP2:   {fp(tp2)}`   *({pct(tp2)})*",
-            f"`TP3:   {fp(tp3)}`   *({pct(tp3)})*",
+            f"`Вход:  {fp(entry1)}`",
+            f"`TP1:   {fp(tp1)}`   *({pct(tp1)})*  R:R 1:{rr_tp1:.1f}",
+            f"`TP2:   {fp(tp2)}`   *({pct(tp2)})*  R:R 1:{rr_tp2:.1f}",
+            f"`TP3:   {fp(tp3)}`   *({pct(tp3)})*  R:R 1:{rr_tp3:.1f}",
             f"`SL:    {fp(sl)}`   *({sl_pct(sl)})*",
-            f"`R:R    1:{rr:.1f}`",
         ]
+        if a.get("levels_source"):
+            lines.append(f"`Источник уровней: {a['levels_source']}`")
 
     lines += [
         "",
@@ -8027,53 +7927,73 @@ async def _cmd_x100_scanner_body(update, ctx):
                         elif "M" in mc_str: mc_val = float(mc_str.replace("M","")) * 1e6
                         elif "K" in mc_str: mc_val = float(mc_str.replace("K","")) * 1e3
                         else: mc_val = float(mc_str) if mc_str else 0.0
-                        lvl = _calc_x100_levels(p, c["ch7d"] or 0, mc_val)
+                        if mc_val < 50_000_000:    pot_min, pot_max = 3, 10
+                        elif mc_val < 200_000_000: pot_min, pot_max = 2, 5
+                        else:                      pot_min, pot_max = 1, 3
 
-                        # EMA-стек (1h/4h) + детектор свипа ликвидности -- x100 не считает OHLC
-                        # нигде до этого места, так что здесь два новых запроса (только для
-                        # финальных ~15 кандидатов, не для всех отсканированных монет).
+                        # Вход/SL/TP от реальной структуры вместо фиксированных % --
+                        # x100 не считает OHLC нигде до этого места, так что здесь новые
+                        # запросы (1h/4h/1d), но только для финальных ~15 кандидатов, не
+                        # для всех отсканированных монет.
                         candles_1h_x100 = get_binance_ohlc(c["sym"], "1h", 250)
                         candles_4h_x100 = get_binance_ohlc(c["sym"], "4h", 200)
+                        candles_1d_x100 = get_binance_ohlc(c["sym"], "1d", 365)
                         ema_ctx_x100 = ta_extra.ema_context(candles_1h_x100, candles_4h_x100)
                         sweep_1h_x100 = ta_extra.detect_sweep(candles_1h_x100)
                         sweep_4h_x100 = ta_extra.detect_sweep(candles_4h_x100)
 
-                        try:
-                            signal_journal.log_signal("X100", c["sym"], "long", p,
-                                                       entry_lo=lvl["entry3"], entry_hi=lvl["entry1"],
-                                                       sl=lvl["sl"], tp1=lvl["tp1"], tp2=lvl["tp2"],
-                                                       tp3=lvl["tp3"], rocket_score=c["score"],
-                                                       ema_stack=ema_ctx_x100,
-                                                       sweep=sweep_4h_x100 or sweep_1h_x100)
-                        except Exception as e:
-                            log.error(f"[JOURNAL] X100 {c['sym']}: {e}")
-                        pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
-                        spot = [
-                            f"",
-                            f"📍 СПОТ:",
-                            f"  Вход 1 (50%): {fp(lvl['entry1'])}",
-                            f"  Вход 2 (30%): {fp(lvl['entry2'])}",
-                            f"  Вход 3 (20%): {fp(lvl['entry3'])}",
-                            f"  TP1: {fp(lvl['tp1'])} ({pct(p, lvl['tp1'])})",
-                            f"  TP2: {fp(lvl['tp2'])} ({pct(p, lvl['tp2'])})",
-                            f"  TP3: {fp(lvl['tp3'])} ({pct(p, lvl['tp3'])})",
-                            f"  SL: {fp(lvl['sl'])} ({pct(p, lvl['sl'])})",
-                            f"  Потенциал: {lvl['pot_min']}–{lvl['pot_max']}x",
-                            f"  {ta_extra.format_ema_stack_line(ema_ctx_x100)}",
-                        ]
-                        _x100_sweep_line = ta_extra.format_sweep_line(sweep_1h_x100, sweep_4h_x100, price_fmt=fp)
-                        if _x100_sweep_line:
-                            spot.append(f"  {_x100_sweep_line}")
-                        spot += [
-                            f"",
-                            f"📍 ФЬЮЧЕРС (LONG x3–5):",
-                            f"  Вход: {fp(lvl['entry1'])}",
-                            f"  TP1: {fp(lvl['tp1'])} | TP2: {fp(lvl['tp2'])} | TP3: {fp(lvl['tp3'])}",
-                            f"  SL: {fp(lvl['sl'])}",
-                            f"  Потенциал: {lvl['pot_min']*3}–{lvl['pot_max']*5}x с плечом",
-                            f"  📉 Мин/Макс: ${lvl['low_52w']} / ${lvl['high_52w']}",
-                        ]
-                        price_line = f"💰 Цена: {fp(p)}  _{p_fresh}_ | МКап: {c['mcap']}"
+                        zones_x100 = ta_extra.find_sr_zones(candles_1h_x100, candles_4h_x100,
+                                                             candles_1d_x100, p, ema_ctx=ema_ctx_x100)
+                        trade_x100 = ta_extra.build_trade_from_structure("long", p, zones_x100)
+
+                        if not trade_x100 or not trade_x100["rr_gate_pass"]:
+                            rr_dbg = trade_x100["rr_tp1"] if trade_x100 else "n/a"
+                            log.info(f"[SR-GATE] x100: {c['sym']} отброшен -- "
+                                     f"R:R по TP1 {rr_dbg} < {ta_extra.SR_MIN_RR_TP1}")
+                            spot = []
+                            price_line = f"💰 Цена: {fp(p)}  _{p_fresh}_ | МКап: {c['mcap']} (отброшен: слабый R:R)"
+                        else:
+                            low_52w  = min((cc["low"] for cc in candles_1d_x100), default=p * 0.35) if candles_1d_x100 else p * 0.35
+                            high_52w = max((cc["high"] for cc in candles_1d_x100), default=p * 3.2) if candles_1d_x100 else p * 3.2
+
+                            try:
+                                signal_journal.log_signal("X100", c["sym"], "long", p,
+                                                           entry_lo=trade_x100["entry_lo"], entry_hi=trade_x100["entry_hi"],
+                                                           sl=trade_x100["sl"], tp1=trade_x100["tp1"],
+                                                           tp2=trade_x100["tp2"], tp3=trade_x100["tp3"],
+                                                           rocket_score=c["score"],
+                                                           ema_stack=ema_ctx_x100,
+                                                           sweep=sweep_4h_x100 or sweep_1h_x100,
+                                                           levels_source="structure")
+                            except Exception as e:
+                                log.error(f"[JOURNAL] X100 {c['sym']}: {e}")
+                            pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
+                            spot = [
+                                f"",
+                                f"📍 СПОТ:",
+                                f"  Вход 1 (50%): {fp(trade_x100['entry1'])}",
+                                f"  Вход 2 (30%): {fp(trade_x100['entry2'])}",
+                                f"  Вход 3 (20%): {fp(trade_x100['entry3'])}",
+                                f"  TP1: {fp(trade_x100['tp1'])} ({pct(p, trade_x100['tp1'])}) R:R 1:{trade_x100['rr_tp1']}",
+                                f"  TP2: {fp(trade_x100['tp2'])} ({pct(p, trade_x100['tp2'])}) R:R 1:{trade_x100['rr_tp2']}",
+                                f"  TP3: {fp(trade_x100['tp3'])} ({pct(p, trade_x100['tp3'])}) R:R 1:{trade_x100['rr_tp3']}",
+                                f"  SL: {fp(trade_x100['sl'])} ({pct(p, trade_x100['sl'])})",
+                                f"  Потенциал: {pot_min}–{pot_max}x",
+                                f"  {ta_extra.format_ema_stack_line(ema_ctx_x100)}",
+                            ]
+                            _x100_sweep_line = ta_extra.format_sweep_line(sweep_1h_x100, sweep_4h_x100, price_fmt=fp)
+                            if _x100_sweep_line:
+                                spot.append(f"  {_x100_sweep_line}")
+                            spot += [
+                                f"",
+                                f"📍 ФЬЮЧЕРС (LONG x3–5):",
+                                f"  Вход: {fp(trade_x100['entry1'])}",
+                                f"  TP1: {fp(trade_x100['tp1'])} | TP2: {fp(trade_x100['tp2'])} | TP3: {fp(trade_x100['tp3'])}",
+                                f"  SL: {fp(trade_x100['sl'])}",
+                                f"  Потенциал: {pot_min*3}–{pot_max*5}x с плечом",
+                                f"  📉 Мин/Макс: ${fp(low_52w)} / ${fp(high_52w)}",
+                            ]
+                            price_line = f"💰 Цена: {fp(p)}  _{p_fresh}_ | МКап: {c['mcap']}"
                     except Exception:
                         spot = []
                         price_line = f"💰 Цена: {c['price']} | МКап: {c['mcap']}"
@@ -8274,6 +8194,12 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             a, stats_24h, atl, candles_1d, candles_1w = await _loop.run_in_executor(
                 None, _analyze_spot_candidate)
 
+            if not a.get("rr_gate_pass"):
+                log.info(f"[SR-GATE] top_spot: {sym} отброшен -- "
+                         f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
+                await prog.delete()
+                continue
+
             price  = a["price"]
             price_fresh = a.get("price_fresh", "")
             ath    = max((c["high"] for c in candles_1w), default=0) if candles_1w else max((c["high"] for c in candles_1d), default=0)
@@ -8442,11 +8368,16 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "status": "watching",
             }
             try:
+                # /spot использует свою собственную схему уровней (zone_30d/zone_90d/ATL --
+                # уже данные, не фиксированные %), а не find_sr_zones -- R:R-гейт выше уже
+                # применён через a["rr_gate_pass"], но сами уровни здесь не "structure" в
+                # смысле find_sr_zones, поэтому отдельная метка для честной статистики.
                 signal_journal.log_signal("TOP_SPOT", sym, "long", price,
                                            entry_lo=buy1, entry_hi=buy2, sl=atl,
                                            tp1=_spot_sell_target, rocket_score=spot_rocket,
                                            ema_stack=a.get("ema_ctx"),
-                                           sweep=a.get("sweep_4h") or a.get("sweep_1h"))
+                                           sweep=a.get("sweep_4h") or a.get("sweep_1h"),
+                                           levels_source="ath_recovery")
             except Exception as e:
                 log.error(f"[JOURNAL] TOP_SPOT {sym}: {e}")
 
@@ -8492,6 +8423,10 @@ def _scan_top_long_sync():
             sqf = signal_quality_filter(a, pa, coin)
             if a["is_long"] and not a.get("suspicious"):
                 if sqf["pass"] or a["rocket"] >= 65:
+                    if not a.get("rr_gate_pass"):
+                        log.info(f"[SR-GATE] top_long: {coin['symbol']} отброшен -- "
+                                 f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
+                        continue
                     a["_sqf"] = sqf
                     scored.append((coin, a))
         except: pass
@@ -8505,6 +8440,10 @@ def _scan_top_long_sync():
             try:
                 a = real_full_analysis(coin)
                 if not a.get("suspicious") and a["rsi_4h"] < 45:
+                    if not a.get("rr_gate_pass"):
+                        log.info(f"[SR-GATE] top_long fallback: {coin['symbol']} отброшен -- "
+                                 f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
+                        continue
                     fallback.append((coin, a))
             except: pass
         fallback.sort(key=lambda x: x[1]["rsi_4h"])
@@ -8567,10 +8506,11 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             trend_e = "📈" if a.get("trend_4h") == "bullish" else ("📉" if a.get("trend_4h") == "bearish" else "➡️")
             score_e = "🔥" if r >= 80 else ("🦅" if r >= 65 else "✅")
             p   = a.get("price", 0) or 0
-            tp1 = round(p * 1.25, 6)
-            tp2 = round(p * 1.60, 6)
-            tp3 = round(p * 2.20, 6)
-            sl  = round(p * 0.92, 6)
+            # Реальные уровни от структуры (a["tp1"/"tp2"/"tp3"/"sl"]), не пересчёт по
+            # фиксированным % -- иначе быстрый превью-список расходится с детальной
+            # карточкой ниже, которая всегда использовала настоящие значения a[...].
+            tp1, tp2, tp3, sl = a["tp1"], a["tp2"], a["tp3"], a["sl"]
+            _pct = lambda v: f"{(v - p) / p * 100:+.1f}%" if p else "—"
             list_lines += [
                 f"━━━━━━━━━━━━━━━━━━━━",
                 f"{score_e} #{i}  {sym}/USDT",
@@ -8579,11 +8519,11 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"💰 Цена:      {fp(a['price'])}",
                 f"📊 RSI (4H):  {rsi_e} {a['rsi_4h']:.0f}   |   Тренд: {trend_e}",
                 f"",
-                f"🎯 Цели (LONG):",
-                f"  TP1:  ${tp1}   (+25%)",
-                f"  TP2:  ${tp2}   (+60%)",
-                f"  TP3:  ${tp3}   (+120%)",
-                f"  SL:   ${sl}    (-8%)",
+                f"🎯 Цели (LONG) -- R:R по TP1 1:{a.get('rr_tp1', 0):.1f}:",
+                f"  TP1:  ${tp1}   ({_pct(tp1)})",
+                f"  TP2:  ${tp2}   ({_pct(tp2)})",
+                f"  TP3:  ${tp3}   ({_pct(tp3)})",
+                f"  SL:   ${sl}    ({_pct(sl)})",
                 f"",
             ]
         list_lines += [SEP, "📋 _Детальный анализ каждой монеты ниже_ ⬇️"]
@@ -8606,11 +8546,13 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 }
                 try:
                     signal_journal.log_signal("TOP_LONG", sym, "long", a["price"],
-                                               entry_lo=a["price"], entry_hi=a["price"], sl=a["sl"],
+                                               entry_lo=a.get("entry3", a["price"]),
+                                               entry_hi=a.get("entry1", a["price"]), sl=a["sl"],
                                                tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"],
                                                rr=a["rr"], rocket_score=a.get("rocket"),
                                                ema_stack=a.get("ema_ctx"),
-                                               sweep=a.get("sweep_4h") or a.get("sweep_1h"))
+                                               sweep=a.get("sweep_4h") or a.get("sweep_1h"),
+                                               levels_source=a.get("levels_source"))
                 except Exception as e:
                     log.error(f"[JOURNAL] TOP_LONG {sym}: {e}")
                 await asyncio.sleep(1.5)
@@ -8648,9 +8590,35 @@ def _scan_top_short_sync():
             a = real_full_analysis(coin)
             #
             if not a["is_long"] and not a.get("suspicious") and a["rocket"] >= 40:
+                if not a.get("rr_gate_pass"):
+                    log.info(f"[SR-GATE] top_short: {coin['symbol']} отброшен -- "
+                             f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
+                    continue
                 scored.append((coin, a))
             elif a.get("rsi_4h", 50) > 72 and a["vol"] >= 2_000_000:
-                a_short = dict(a); a_short["is_long"] = False
+                # a была построена под is_long (изначальное направление real_full_analysis)
+                # -- entry/SL/TP нужно пересобрать под short заново от тех же зон, иначе
+                # уровни останутся зеркально неверными (лонговая структура на шорт-сигнале).
+                trade = ta_extra.build_trade_from_structure("short", a["price"], a.get("zones", {"above": [], "below": []}))
+                if not trade:
+                    continue
+                if not trade["rr_gate_pass"]:
+                    log.info(f"[SR-GATE] top_short (RSI-override): {coin['symbol']} отброшен -- "
+                             f"R:R по TP1 {trade['rr_tp1']} < {ta_extra.SR_MIN_RR_TP1}")
+                    continue
+                a_short = dict(a)
+                a_short["is_long"] = False
+                a_short["entry1"], a_short["entry2"], a_short["entry3"] = trade["entry1"], trade["entry2"], trade["entry3"]
+                a_short["sl"], a_short["tp1"], a_short["tp2"], a_short["tp3"] = trade["sl"], trade["tp1"], trade["tp2"], trade["tp3"]
+                a_short["rr"] = a_short["rr_tp1"] = trade["rr_tp1"]
+                a_short["rr_tp2"], a_short["rr_tp3"] = trade["rr_tp2"], trade["rr_tp3"]
+                a_short["rr_gate_pass"] = True
+                # Это контрарианский шорт против объективно бычьего фона (перекуп по RSI) --
+                # бычьи SMC-ярлыки, посчитанные под ИСХОДНОЕ (лонговое) направление, не
+                # должны выглядеть в карточке как факторы, подтверждающие шорт (иначе панели
+                # читаются как противоречащие друг другу).
+                a_short["smc_factors"] = [f for f in a.get("smc_factors", []) if "Bull" not in f]
+                a_short["tf_aligned_bull"] = False
                 scored.append((coin, a_short))
         except: pass
 
@@ -8703,10 +8671,11 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             trend_e = "📉" if a.get("trend_4h") == "bearish" else ("📈" if a.get("trend_4h") == "bullish" else "➡️")
             score_e = "🔥" if r >= 80 else ("🦅" if r >= 65 else "✅")
             p   = a.get("price", 0) or 0
-            tp1 = round(p * 0.85, 6)
-            tp2 = round(p * 0.70, 6)
-            tp3 = round(p * 0.55, 6)
-            sl  = round(p * 1.08, 6)
+            # Реальные уровни от структуры (a["tp1"/"tp2"/"tp3"/"sl"]), не пересчёт по
+            # фиксированным % -- иначе быстрый превью-список расходится с детальной
+            # карточкой ниже, которая всегда использовала настоящие значения a[...].
+            tp1, tp2, tp3, sl = a["tp1"], a["tp2"], a["tp3"], a["sl"]
+            _pct = lambda v: f"{(v - p) / p * 100:+.1f}%" if p else "—"
             list_lines += [
                 f"━━━━━━━━━━━━━━━━━━━━",
                 f"{score_e} #{i}  {sym}/USDT",
@@ -8715,11 +8684,11 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"💰 Цена:      {fp(a['price'])}",
                 f"📊 RSI (4H):  {rsi_e} {a['rsi_4h']:.0f}   |   Тренд: {trend_e}",
                 f"",
-                f"🎯 Цели (SHORT):",
-                f"  TP1:  ${tp1}   (-15%)",
-                f"  TP2:  ${tp2}   (-30%)",
-                f"  TP3:  ${tp3}   (-45%)",
-                f"  SL:   ${sl}    (+8%)",
+                f"🎯 Цели (SHORT) -- R:R по TP1 1:{a.get('rr_tp1', 0):.1f}:",
+                f"  TP1:  ${tp1}   ({_pct(tp1)})",
+                f"  TP2:  ${tp2}   ({_pct(tp2)})",
+                f"  TP3:  ${tp3}   ({_pct(tp3)})",
+                f"  SL:   ${sl}    ({_pct(sl)})",
                 f"",
             ]
         list_lines += [SEP, "📋 _Детальный анализ каждой монеты ниже_ ⬇️"]
@@ -8742,11 +8711,13 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 }
                 try:
                     signal_journal.log_signal("TOP_SHORT", sym, "short", a["price"],
-                                               entry_lo=a["price"], entry_hi=a["price"], sl=a["sl"],
+                                               entry_lo=a.get("entry1", a["price"]),
+                                               entry_hi=a.get("entry3", a["price"]), sl=a["sl"],
                                                tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"],
                                                rr=a["rr"], rocket_score=a.get("rocket"),
                                                ema_stack=a.get("ema_ctx"),
-                                               sweep=a.get("sweep_4h") or a.get("sweep_1h"))
+                                               sweep=a.get("sweep_4h") or a.get("sweep_1h"),
+                                               levels_source=a.get("levels_source"))
                 except Exception as e:
                     log.error(f"[JOURNAL] TOP_SHORT {sym}: {e}")
                 await asyncio.sleep(1.5)

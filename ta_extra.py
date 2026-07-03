@@ -37,6 +37,14 @@ VOLUME_AVG_WINDOW = 20
 
 FRESH_SWEEP_BARS = 12          # свип считается "свежим" для карточек/скоринга в пределах N баров
 
+ZONE_WIDTH_MIN_PCT = 0.3        # ширина зоны S/R -- нижняя граница диапазона из ТЗ
+ZONE_WIDTH_MAX_PCT = 0.8        # верхняя граница
+ZONE_WIDTH_ATR_MULT = 0.5       # ширина = clamp(ATR% * mult, MIN, MAX)
+ZONE_MIN_TOUCHES = 2            # фрактальная зона валидна только с 2+ касаниями; EMA -- отдельная категория, без порога
+SR_SL_BUFFER_PCT = 2.5          # буфер SL за зоной входа (середина диапазона 2-3% из ТЗ)
+SR_MIN_RR_TP1 = 1.5             # R:R-гейт по TP1
+SR_ATR_PERIOD = 14
+
 
 def _calc_ema_series(closes: list) -> dict:
     """EMA для всех EMA_PERIODS сразу, с "мягким" сидом (без обязательной SMA-затравки
@@ -252,8 +260,15 @@ def ema_stack_score_delta(ema_ctx: dict, direction: str) -> int:
 def sweep_score_delta(sweep_1h, sweep_4h, direction: str) -> int:
     """+10 если свежий (<=FRESH_SWEEP_BARS) свип поддерживает направление сигнала
     (sweep_high -> шорт, sweep_low -> лонг), -10 если свежий свип против направления,
-    0 если свипа нет вовсе. Берём наиболее свежий из 1h/4h, если оба присутствуют."""
-    candidates = [s for s in (sweep_1h, sweep_4h) if s and s["bars_ago"] <= FRESH_SWEEP_BARS]
+    0 если свипа нет вовсе. Берём наиболее свежий из 1h/4h, если оба присутствуют.
+
+    volume_confirmed is None (неизвестно -- обычный случай для CoinGecko free OHLC, где
+    объёма по свече нет вообще) НЕ даёт веса в скор: свип без данных об объёме -- недостаточно
+    обоснован, чтобы влиять на Rocket Score, только на текст карточки. volume_confirmed
+    True/False (объём реально известен) по-прежнему учитывается в любом случае -- это
+    не про "объём подтвердил", а про "у нас вообще ЕСТЬ данные, чтобы судить"."""
+    candidates = [s for s in (sweep_1h, sweep_4h)
+                  if s and s["bars_ago"] <= FRESH_SWEEP_BARS and s["volume_confirmed"] is not None]
     if not candidates:
         return 0
     sweep = min(candidates, key=lambda s: s["bars_ago"])
@@ -300,3 +315,167 @@ def format_sweep_line(sweep_1h, sweep_4h, price_fmt=None) -> str:
         kind_str, liq_str = f"свип лоёв ${level_str}", "ликвидность в лонг"
 
     return f"⚠️ Манипуляция: {kind_str} ({tf_label}, {sweep['bars_ago']} баров назад, {vol_str}) — {liq_str}"
+
+
+# ── Зоны поддержки/сопротивления + построение сделки от структуры ────────────
+
+def _calc_atr_simple(candles: list, period: int = SR_ATR_PERIOD) -> float:
+    """Простой ATR (True Range, среднее за последние period баров) -- достаточно для
+    подбора ширины зоны, не нужен полный Wilder-сглаженный вариант bot.py:calc_atr()."""
+    if len(candles) < 2:
+        return 0.0
+    trs = []
+    for i in range(1, len(candles)):
+        h, l, prev_c = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
+        trs.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+    window = trs[-period:] if len(trs) >= period else trs
+    return sum(window) / len(window) if window else 0.0
+
+
+def _timeframe_hours(tf_label: str) -> float:
+    return {"1h": 1, "4h": 4, "1d": 24}.get(tf_label, 1)
+
+
+def _collect_touch_points(candles: list, tf_label: str) -> list:
+    """Фрактальные swing high/low этой серии как точки касания, с давностью в часах
+    (нормализовано по таймфрейму, чтобы точки с разных ТФ были сравнимы по свежести)."""
+    if not candles:
+        return []
+    highs, lows = _find_fractals(candles)
+    n = len(candles)
+    tf_hours = _timeframe_hours(tf_label)
+    points = []
+    for idx, level in highs:
+        points.append({"kind": "high", "price": level, "hours_ago": (n - 1 - idx) * tf_hours, "tf": tf_label})
+    for idx, level in lows:
+        points.append({"kind": "low", "price": level, "hours_ago": (n - 1 - idx) * tf_hours, "tf": tf_label})
+    return points
+
+
+def find_sr_zones(candles_1h: list, candles_4h: list, candles_1d: list, price: float,
+                   ema_ctx: dict = None) -> dict:
+    """Зоны поддержки/сопротивления: кластеры фрактальных swing high/low (1h/4h/1d,
+    2+ касания) + EMA50/100/200 (4h) как отдельная категория динамических уровней (без
+    порога касаний -- это не фрактал, а математическое среднее).
+
+    Ширина зоны = clamp(ATR% * ZONE_WIDTH_ATR_MULT, MIN, MAX) -- волатильнее рынок,
+    шире зона, в пределах 0.3-0.8% из ТЗ.
+
+    Возвращает {"above": [zone,...], "below": [zone,...]}, каждый список отсортирован
+    от ближайшей к цене зоны к дальней. zone = {"lo","hi","mid","touches","hours_ago",
+    "sources": [tf,...]}."""
+    if not price or price <= 0:
+        return {"above": [], "below": []}
+
+    atr_candles = candles_4h or candles_1h or candles_1d or []
+    atr = _calc_atr_simple(atr_candles)
+    atr_pct = (atr / price * 100) if price else 0
+    width_pct = max(ZONE_WIDTH_MIN_PCT, min(ZONE_WIDTH_MAX_PCT, atr_pct * ZONE_WIDTH_ATR_MULT))
+    width_abs = price * width_pct / 100
+
+    points = []
+    points += _collect_touch_points(candles_1h, "1h")
+    points += _collect_touch_points(candles_4h, "4h")
+    points += _collect_touch_points(candles_1d, "1d")
+
+    zones = []
+    fractal_points = [p for p in points if p["kind"] in ("high", "low")]
+    if fractal_points:
+        fractal_points.sort(key=lambda p: p["price"])
+        clusters, current = [], [fractal_points[0]]
+        for p in fractal_points[1:]:
+            if p["price"] - current[-1]["price"] <= width_abs:
+                current.append(p)
+            else:
+                clusters.append(current)
+                current = [p]
+        clusters.append(current)
+
+        for cluster in clusters:
+            if len(cluster) < ZONE_MIN_TOUCHES:
+                continue  # только фракталы с 2+ касаниями -- иначе это шум, не уровень
+            prices = [p["price"] for p in cluster]
+            mid = sum(prices) / len(prices)
+            lo = min(mid - width_abs / 2, min(prices))
+            hi = max(mid + width_abs / 2, max(prices))
+            zones.append({
+                "lo": lo, "hi": hi, "mid": mid,
+                "touches": len(cluster), "hours_ago": min(p["hours_ago"] for p in cluster),
+                "sources": sorted(set(p["tf"] for p in cluster)),
+            })
+
+    if ema_ctx and ema_ctx.get("tf_4h"):
+        ema4h = ema_ctx["tf_4h"].get("ema", {})
+        for period in (50, 100, 200):
+            val = ema4h.get(period)
+            if val:
+                zones.append({
+                    "lo": val - width_abs / 2, "hi": val + width_abs / 2, "mid": val,
+                    "touches": 1, "hours_ago": 0, "sources": ["ema"],
+                })
+
+    # Зона может физически накрывать текущую цену (mid выше цены, но lo -- ниже, если зона
+    # достаточно широкая и близкая) -- зажимаем границу по цене, иначе "зона сопротивления"
+    # включает точку входа снизу и entry для шорта строится НИЖЕ текущей цены (не то, что
+    # должно быть -- вход в шорт ждём РОСТА цены В зону, а не факта, что зона уже накрывает нас).
+    above, below = [], []
+    for z in zones:
+        if z["mid"] > price:
+            above.append({**z, "lo": max(z["lo"], price)})
+        elif z["mid"] < price:
+            below.append({**z, "hi": min(z["hi"], price)})
+    above.sort(key=lambda z: z["mid"])
+    below.sort(key=lambda z: -z["mid"])
+    return {"above": above, "below": below}
+
+
+def build_trade_from_structure(direction: str, price: float, zones: dict):
+    """Строит вход/SL/TP от зон структуры (find_sr_zones()). direction: "long"/"short".
+    Вход -- DCA 50/30/20 внутри ближайшей зоны (entry1 у границы зоны, ближней к цене --
+    основной ориентир для R:R; entry3 у дальней границы, самый агрессивный транш). SL --
+    за зоной с буфером SR_SL_BUFFER_PCT от её дальней (по направлению риска) границы;
+    зона уже построена на wick-инклюзивных high/low фракталов, так что хвосты уже учтены
+    в самой границе. TP1/2/3 -- следующие 3 зоны с противоположной стороны; при нехватке
+    зон -- Fibonacci-подобное расширение от риска (2.0/3.2/5.0x) как фоллбэк.
+
+    Возвращает None, если нет ни одной зоны для входа (нечего строить), иначе dict:
+    {"entry1","entry2","entry3","entry_lo","entry_hi","sl","tp1","tp2","tp3",
+     "rr_tp1","rr_tp2","rr_tp3","entry_zone","tp_zones","rr_gate_pass"}."""
+    if not price or price <= 0:
+        return None
+
+    entry_zones = zones.get("below", []) if direction == "long" else zones.get("above", [])
+    tp_zones = zones.get("above", []) if direction == "long" else zones.get("below", [])
+    if not entry_zones:
+        return None
+
+    entry_zone = entry_zones[0]
+    if direction == "long":
+        entry1, entry3 = entry_zone["hi"], entry_zone["lo"]  # entry1 ближе к цене (50%), entry3 -- дно зоны (20%)
+        sl = entry_zone["lo"] * (1 - SR_SL_BUFFER_PCT / 100)
+    else:
+        entry1, entry3 = entry_zone["lo"], entry_zone["hi"]
+        sl = entry_zone["hi"] * (1 + SR_SL_BUFFER_PCT / 100)
+    entry2 = (entry1 + entry3) / 2
+    entry_lo, entry_hi = min(entry_zone["lo"], entry_zone["hi"]), max(entry_zone["lo"], entry_zone["hi"])
+
+    risk = abs(entry1 - sl) or 1e-9
+    tps = [z["mid"] for z in tp_zones[:3]]
+    fib_mults = (2.0, 3.2, 5.0)
+    while len(tps) < 3:
+        mult = fib_mults[len(tps)]
+        tps.append(entry1 + risk * mult if direction == "long" else entry1 - risk * mult)
+    tp1, tp2, tp3 = tps[0], tps[1], tps[2]
+
+    def _rr(tp):
+        return round(abs(tp - entry1) / risk, 2)
+
+    rr_tp1 = _rr(tp1)
+    return {
+        "entry1": entry1, "entry2": entry2, "entry3": entry3,
+        "entry_lo": entry_lo, "entry_hi": entry_hi,
+        "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "rr_tp1": rr_tp1, "rr_tp2": _rr(tp2), "rr_tp3": _rr(tp3),
+        "entry_zone": entry_zone, "tp_zones": tp_zones[:3],
+        "rr_gate_pass": rr_tp1 >= SR_MIN_RR_TP1,
+    }
