@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v98"          # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v99"          # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -9384,7 +9384,15 @@ async def _start_pump_detector(app):
     asyncio.create_task(signal_journal.run_tracker())
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(_start_pump_detector).build()
+    # concurrent_updates=True -- иначе PTB диспетчит апдейты СТРОГО последовательно и не
+    # начнёт обрабатывать новый (например /start), пока не завершится ТЕКУЩИЙ хендлер
+    # целиком, даже если тот сам не блокирует event loop (run_in_executor помогает не
+    # морозить сам event loop для фоновых задач, но без этого флага не спасает от
+    # последовательной очереди самого PTB).
+    app = (Application.builder().token(BOT_TOKEN)
+           .post_init(_start_pump_detector)
+           .concurrent_updates(True)
+           .build())
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
