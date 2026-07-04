@@ -429,6 +429,18 @@ def find_sr_zones(candles_1h: list, candles_4h: list, candles_1d: list, price: f
     return {"above": above, "below": below}
 
 
+def smart_round(val: float) -> float:
+    """Округление цены до значащих цифр, адекватное и для BTC ($60000), и для
+    мелких альтов ($0.00000123). Вынесено сюда из bot.py:real_full_analysis(), чтобы
+    fa_engine.py могло им пользоваться без импорта bot.py (см. build_trade_from_structure)."""
+    import math
+    if val == 0:
+        return 0
+    magnitude = math.floor(math.log10(abs(val))) if val > 0 else 0
+    precision = max(8, -magnitude + 3)
+    return round(val, precision)
+
+
 def build_trade_from_structure(direction: str, price: float, zones: dict):
     """Строит вход/SL/TP от зон структуры (find_sr_zones()). direction: "long"/"short".
     Вход -- DCA 50/30/20 внутри ближайшей зоны (entry1 у границы зоны, ближней к цене --
@@ -479,3 +491,274 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
         "entry_zone": entry_zone, "tp_zones": tp_zones[:3],
         "rr_gate_pass": rr_tp1 >= SR_MIN_RR_TP1,
     }
+
+
+# ── Доп. блоки для fa_engine.py (Полный анализ, 13 блоков) ───────────────────
+# Всё ниже — тоже чистые функции над уже полученными свечами, без фетчинга.
+
+def rsi(closes: list, period: int = 14) -> float:
+    """RSI (Wilder), возвращает 50.0 (нейтрально) при нехватке данных."""
+    if len(closes) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def ema_last(closes: list, period: int) -> float:
+    """Последнее значение EMA(period), "мягкий" сид — см. _calc_ema_series. None-безопасно:
+    при пустом closes возвращает 0.0."""
+    if not closes:
+        return 0.0
+    series = _calc_ema_series(closes)[period] if period in EMA_PERIODS else None
+    if series is not None:
+        return series[-1] if series[-1] is not None else closes[-1]
+    # период вне стандартного набора EMA_PERIODS — считаем на лету
+    k = 2 / (period + 1)
+    e = closes[0]
+    for p in closes[1:]:
+        e = p * k + e * (1 - k)
+    return e
+
+
+def swing_points(candles: list):
+    """Публичная обёртка над _find_fractals — фрактальные swing high/low, по возрастанию
+    index. Возвращает (swing_highs, swing_lows), каждый — список (index, price)."""
+    return _find_fractals(candles)
+
+
+def multi_tf_bias(candles_1d: list, candles_4h: list, candles_1h: list) -> dict:
+    """Блок 1 ТЗ: bias LONG/SHORT/NEUTRAL из структуры 1D (HH/HL vs LH/LL по фракталам)
+    + EMA-стек 4h как согласованность, 1h — контекст входа (тоже EMA-стек).
+
+    Возвращает {"bias", "structure_1d", "tf_agreement", "detail"}."""
+    out = {"bias": "NEUTRAL", "structure_1d": "не определена", "tf_agreement": "н/д", "detail": []}
+    highs, lows = swing_points(candles_1d)
+    structure_dir = None
+    if len(highs) >= 2 and len(lows) >= 2:
+        hh = highs[-1][1] > highs[-2][1]
+        hl = lows[-1][1] > lows[-2][1]
+        lh = highs[-1][1] < highs[-2][1]
+        ll = lows[-1][1] < lows[-2][1]
+        if hh and hl:
+            structure_dir = "long"
+            out["structure_1d"] = "HH/HL (аптренд)"
+        elif lh and ll:
+            structure_dir = "short"
+            out["structure_1d"] = "LH/LL (даунтренд)"
+        else:
+            out["structure_1d"] = "смешанная (микс HH/LL)"
+
+    ema_ctx = ema_context(candles_1h, candles_4h)
+    tf4h = ema_ctx.get("tf_4h")
+    tf1h = ema_ctx.get("tf_1h")
+    stack_4h = tf4h["stack"] if tf4h else "недостаточно данных"
+    stack_1h = tf1h["stack"] if tf1h else "недостаточно данных"
+
+    ema_dir = None
+    if stack_4h == "бычий":
+        ema_dir = "long"
+    elif stack_4h == "медвежий":
+        ema_dir = "short"
+
+    out["detail"] = [
+        f"1D структура: {out['structure_1d']}",
+        f"4H EMA-стек: {stack_4h}",
+        f"1H EMA-стек (контекст входа): {stack_1h}",
+    ]
+
+    if structure_dir and ema_dir and structure_dir == ema_dir:
+        out["bias"] = "LONG" if structure_dir == "long" else "SHORT"
+        out["tf_agreement"] = "1D и 4H согласованы"
+    elif structure_dir and not ema_dir:
+        out["bias"] = "LONG" if structure_dir == "long" else "SHORT"
+        out["tf_agreement"] = "1D задаёт направление, 4H EMA не подтверждает явно"
+    elif ema_dir and not structure_dir:
+        out["bias"] = "LONG" if ema_dir == "long" else "SHORT"
+        out["tf_agreement"] = "4H EMA задаёт направление, 1D структура не подтверждает явно"
+    elif structure_dir and ema_dir and structure_dir != ema_dir:
+        out["bias"] = "NEUTRAL"
+        out["tf_agreement"] = "1D и 4H расходятся"
+    else:
+        out["bias"] = "NEUTRAL"
+        out["tf_agreement"] = "недостаточно данных"
+
+    return out
+
+
+def elliott_wave_heuristic(closes_1d: list, rsi_1d: float) -> dict:
+    """Блок 2 ТЗ: упрощённая позиция в волновой структуре по swing-точкам 1D.
+    Честно возвращает wave=None ("волна не определена"), если структура неясная —
+    это не баг, а отражение того, что упрощённая эвристика не всегда классифицируется.
+
+    Объём по свечам 1D недоступен (CoinGecko free OHLC отдаёт vol=0.0 всегда), поэтому
+    условие "волна 5 с растущим объёмом" проверяется без объёмной компоненты, с явной
+    пометкой в note."""
+    out = {"wave": None, "label": "волна не определена", "note": "", "score_delta": 0}
+    # closes_1d — просто числа (не candle-словари), swing_points тут не подходит — строим
+    # swing-пивоты по close-серии вручную.
+    n = len(closes_1d)
+    if n < 15:
+        out["note"] = "мало данных 1D для волнового анализа"
+        return out
+
+    side = 2
+    piv_hi, piv_lo = [], []
+    for i in range(side, n - side):
+        v = closes_1d[i]
+        if all(v > closes_1d[i - k] for k in range(1, side + 1)) and all(v > closes_1d[i + k] for k in range(1, side + 1)):
+            piv_hi.append((i, v))
+        if all(v < closes_1d[i - k] for k in range(1, side + 1)) and all(v < closes_1d[i + k] for k in range(1, side + 1)):
+            piv_lo.append((i, v))
+
+    pivots = sorted(piv_hi + piv_lo, key=lambda p: p[0])
+    if len(pivots) < 4:
+        out["note"] = "недостаточно чётких swing-точек"
+        return out
+
+    last4 = pivots[-4:]
+    legs = [last4[i + 1][1] - last4[i][1] for i in range(3)]  # 3 последних хода
+
+    if legs[0] < 0 and legs[1] > 0 and legs[2] > abs(legs[0]) * 0.8:
+        out.update(wave="3", label="похоже на волну 3 (импульс)",
+                    note="приоритет лонга — волна 3 обычно самая сильная", score_delta=10)
+    elif legs[0] > 0 and legs[1] > 0 and rsi_1d > 70:
+        out.update(wave="5", label="похоже на волну 5 (RSI перегрет)",
+                    note="возможен разворот/коррекция после волны 5", score_delta=-5)
+    elif legs[0] > 0 and legs[1] < 0 and legs[2] < 0:
+        out.update(wave="C", label="похоже на коррекцию ABC (волна C вниз)",
+                    note="ждать завершения коррекции", score_delta=0)
+    elif legs[0] < 0 and legs[1] < 0 and legs[2] > 0:
+        out.update(wave="2", label="похоже на волну 2 (коррекция перед волной 3)",
+                    note="потенциальный вход у завершения коррекции", score_delta=5)
+    else:
+        out["note"] = "структура неоднозначная"
+    return out
+
+
+def smc_setup_type(candles_4h: list) -> dict:
+    """Блок 3 ТЗ: BOS (пробой по тренду) / CHoCH (смена характера) / range (равные хаи/лои),
+    по фрактальным swing-точкам 4h. Отличие BOS от CHoCH: BOS — продолжение уже
+    установленного тренда (пред. свинги тоже HH/HL или LH/LL), CHoCH — первый пробой
+    ПРОТИВ предыдущей структуры (разворотный сигнал)."""
+    out = {"type": None, "label": "структура не определена"}
+    highs, lows = swing_points(candles_4h)
+    if len(highs) < 3 or len(lows) < 3:
+        return out
+
+    h = [p for _, p in highs[-3:]]
+    l = [p for _, p in lows[-3:]]
+
+    avg_h = sum(h) / len(h)
+    avg_l = sum(l) / len(l)
+    equal_highs = (max(h) - min(h)) <= avg_h * (ZONE_WIDTH_MIN_PCT / 100)
+    equal_lows = (max(l) - min(l)) <= avg_l * (ZONE_WIDTH_MIN_PCT / 100)
+    if equal_highs and equal_lows:
+        out.update(type="range", label="range (равные хаи/лои — накопление в диапазоне)")
+        return out
+
+    prior_up = h[0] < h[1] and l[0] < l[1]
+    prior_down = h[0] > h[1] and l[0] > l[1]
+    last_hh = h[2] > h[1]
+    last_ll = l[2] < l[1]
+
+    if prior_up and last_hh:
+        out.update(type="BOS_bull", label="BOS — пробой структуры вверх по тренду")
+    elif prior_down and last_hh:
+        out.update(type="CHoCH_bull", label="CHoCH — смена характера, первый пробой вверх")
+    elif prior_down and last_ll:
+        out.update(type="BOS_bear", label="BOS — пробой структуры вниз по тренду")
+    elif prior_up and last_ll:
+        out.update(type="CHoCH_bear", label="CHoCH — смена характера, первый пробой вниз")
+    return out
+
+
+def find_fvg_zones(candles_4h: list, price: float) -> list:
+    """Блок 4 ТЗ: незакрытые FVG на 4h — гэпы между свечами i-1 и i+1, ещё не
+    "закрытые" (цена не возвращалась внутрь гэпа после его формирования).
+    Возвращает список {"lo","hi","mid","type":"bull"/"bear","distance_pct"}, ближайшие
+    к цене — первыми."""
+    if len(candles_4h) < 3 or not price:
+        return []
+    zones = []
+    n = len(candles_4h)
+    for i in range(1, n - 1):
+        prev_c, next_c = candles_4h[i - 1], candles_4h[i + 1]
+        # bullish FVG
+        if prev_c["high"] < next_c["low"]:
+            gap_lo, gap_hi = prev_c["high"], next_c["low"]
+            filled = any(c["low"] <= gap_lo for c in candles_4h[i + 2:])
+            if not filled:
+                mid = (gap_lo + gap_hi) / 2
+                zones.append({"lo": gap_lo, "hi": gap_hi, "mid": mid, "type": "bull",
+                              "distance_pct": round((mid - price) / price * 100, 2)})
+        # bearish FVG
+        if next_c["high"] < prev_c["low"]:
+            gap_lo, gap_hi = next_c["high"], prev_c["low"]
+            filled = any(c["high"] >= gap_hi for c in candles_4h[i + 2:])
+            if not filled:
+                mid = (gap_lo + gap_hi) / 2
+                zones.append({"lo": gap_lo, "hi": gap_hi, "mid": mid, "type": "bear",
+                              "distance_pct": round((mid - price) / price * 100, 2)})
+    zones.sort(key=lambda z: abs(z["distance_pct"]))
+    return zones
+
+
+def equal_levels(candles: list, tolerance_pct: float = 0.3) -> list:
+    """Блок 6 ТЗ: equal highs/lows — 2+ вершины/донья в пределах tolerance_pct друг от
+    друга (магниты стопов). Возвращает список {"price","kind":"high"/"low","touches"}."""
+    highs, lows = swing_points(candles)
+    out = []
+    for kind, pts in (("high", [p for _, p in highs]), ("low", [p for _, p in lows])):
+        if len(pts) < 2:
+            continue
+        pts_sorted = sorted(pts)
+        cluster = [pts_sorted[0]]
+        for v in pts_sorted[1:]:
+            if v - cluster[-1] <= cluster[-1] * tolerance_pct / 100:
+                cluster.append(v)
+            else:
+                if len(cluster) >= 2:
+                    out.append({"price": sum(cluster) / len(cluster), "kind": kind, "touches": len(cluster)})
+                cluster = [v]
+        if len(cluster) >= 2:
+            out.append({"price": sum(cluster) / len(cluster), "kind": kind, "touches": len(cluster)})
+    return out
+
+
+def wyckoff_phase_heuristic(closes_1d: list, price: float) -> dict:
+    """Блок 9 ТЗ: Wyckoff-эвристика по диапазону/положению цены (БЕЗ объёма — CoinGecko
+    free OHLC не отдаёт объём по свече, честно помечаем это в note, а не подставляем
+    фиктивный сигнал)."""
+    out = {"phase": "не определена", "note": "объём: нет данных (CoinGecko free OHLC не отдаёт объём по свече)"}
+    if len(closes_1d) < 20:
+        out["note"] = "мало данных 1D для определения фазы. " + out["note"]
+        return out
+    window = closes_1d[-90:] if len(closes_1d) >= 90 else closes_1d
+    lo, hi = min(window), max(window)
+    pos = (price - lo) / (hi - lo) if hi > lo else 0.5
+    look = min(30, len(closes_1d) - 1)
+    trend_pct = (closes_1d[-1] - closes_1d[-1 - look]) / closes_1d[-1 - look] * 100 if closes_1d[-1 - look] else 0
+
+    if trend_pct > 15:
+        out["phase"] = "Маркап (Markup)"
+    elif trend_pct < -15:
+        out["phase"] = "Маркдаун (Markdown)"
+    elif pos < 0.3:
+        out["phase"] = "Накопление (Accumulation)"
+    elif pos > 0.7:
+        out["phase"] = "Распределение (Distribution)"
+    else:
+        out["phase"] = "переходная/не определена"
+    return out

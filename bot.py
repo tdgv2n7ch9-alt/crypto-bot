@@ -99,17 +99,18 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from datetime import datetime, timedelta, timezone
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 import signal_journal
 import ta_extra
+import fa_engine
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v107"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v108"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -835,6 +836,10 @@ def get_supertrend_signal(symbol: str) -> dict:
 
 def full_analysis(coin: dict) -> dict:
     """
+    DEPRECATED: базовая (не Binance/TA) версия скоринга, оставлена только ради
+    существующих вызовов ниже по файлу — не используется /full (см. fa_engine.py) и
+    не расширяется. Новая логика идёт в fa_engine.py / real_full_analysis().
+
      .  :
     - is_long     (ch24h, ch7d, ch30d)
     - Rocket Score   ,    
@@ -2557,6 +2562,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     #     
     if data == "show_menu":
+        ctx.user_data.pop("awaiting_full_symbol", None)
         SEP = "━━━━━━━━━━━━━━━━━━━━"
         await q.edit_message_text(
             f"🚀 *BEST TRADE {BOT_VERSION}*\n"
@@ -2616,25 +2622,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_x100_scanner(FakeX100(), ctx)
 
     elif data == "menu_full":
+        ctx.user_data["awaiting_full_symbol"] = True
         await q.edit_message_text(
-            " *  *\n"
-            "\n\n"
-            "   :\n"
-            "`/full BTC`  `/full ETH`  `/full SOL`\n"
-            "`/full SYMBOL`   \n\n"
-            " * 6  :*\n"
-            " SMC/ICT  OB  FVG  BOS  CHoCH  Sweep\n"
-            " Wyckoff   /\n"
-            " AMD  Power of Three (Asia/London/NY)\n"
-            " Multi-TF  confluence 1H/4H/1D/1W\n"
-            " Volume Profile  OI  Funding Rate\n"
-            " Macro  Gold  USDT.D  ETH/BTC ratio\n\n"
-            " *:*\n"
-            "Entry  TP1/TP2/TP3  SL  Score 0100\n"
-            "Killzone    A+/A/B/C",
+            "🔍 *Полный анализ — 13 блоков*\n\n"
+            "Напиши тикер монеты (например `BTC`, `ETH`, `SOL`) следующим сообщением,"
+            " или используй команду `/full SYMBOL`.\n\n"
+            "📋 *Блоки анализа:*\n"
+            "Multi-TF bias · Elliott Wave · SMC-сетап (BOS/CHoCH/range) · POI · "
+            "Чеклист Kira/ICT · Ликвидность/ловушки · OI/Funding/L-S · Killzone · "
+            "Фаза рынка · Мемкоин-фильтр · План сделки · Rocket Score · Вердикт",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("  ", callback_data="show_menu")],
+                [InlineKeyboardButton("🏠 Меню", callback_data="show_menu")],
             ])
         )
 
@@ -8977,381 +8976,28 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
             }}
         }
 
-    slug  = coin.get("slug", symbol.lower())
-    q     = coin["quote"]["USDT"]
-    rank  = coin.get("cmc_rank", 9999)
+    #    fa_engine ( run_in_executor,       )
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, fa_engine.build_full_analysis, symbol, coin)
 
-    #  PRO ANALYSIS     
-    pa    = pro_analysis(symbol, coin)
-    a     = real_full_analysis(coin)   #  TP/SL 
-    price = pa["price"] if pa["ok"] and pa["price"] > 0 else a["price"]
+    if not result.get("ok"):
+        await bot.send_message(chat_id,
+            f" *{symbol}USDT*:  \n{result.get('error','   ')}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("  ", callback_data="show_menu")
+            ]]))
+        return False
 
-    candles_1d = get_binance_ohlc(symbol, "1d", 365)
-    candles_1w = get_binance_ohlc(symbol, "1w", 200)
-    atl        = get_binance_alltime_low(symbol)
-
-    ath = 0.0
-    if candles_1w and len(candles_1w) > 1:
-        ath = max(c["high"] for c in candles_1w)
-    elif candles_1d and len(candles_1d) > 1:
-        ath = max(c["high"] for c in candles_1d)
-
-    closes_1d = [c["close"] for c in candles_1d] if candles_1d else []
-    zone_90d  = min((c["low"] for c in candles_1d[-90:]), default=0) if len(candles_1d)>=90 else 0
-    zone_30d  = min((c["low"] for c in candles_1d[-30:]), default=0) if len(candles_1d)>=30 else 0
-
-    ch1h  = q.get("percent_change_1h",  0) or 0
-    ch24h = q.get("percent_change_24h", 0) or 0
-    ch7d  = q.get("percent_change_7d",  0) or 0
-    ch30d = q.get("percent_change_30d", 0) or 0
-    ch90d = q.get("percent_change_90d", 0) or 0
-    vol24 = q.get("volume_24h", 0) or 0
-    mcap  = q.get("market_cap", 0) or 0
-
-    to_ath   = ((ath - price)/price*100)  if ath > price > 0 else 0
-    from_atl = ((price - atl)/atl*100)    if atl > 0 else 0
-    x_ath    = (ath/price) if ath > price > 0 else 1.0
-    buy_lo   = zone_90d if zone_90d > 0 else price*0.75
-    buy_hi   = zone_30d if zone_30d > 0 else price*0.88
-    sell_t   = ath*0.9  if ath > 0 else price*3.0
-
-    #   
-    direction = pa.get("direction", "long") if pa["ok"] else ("long" if a["is_long"] else "short")
-    is_long   = direction != "short"
-    pro_score = pa.get("pro_score", a["rocket"])
-    eq_bar    = ""*int(pro_score/10) + ""*(10-int(pro_score/10))
-    entry_q   = pa.get("entry_quality", "B ")
-    setup     = pa.get("setup_type", "Multi-TF")
-
-    side_e = "" if is_long else ""
-    side_t = "LONG" if is_long else "SHORT"
-
-    rsi_4h = pa.get("rsi_4h", a["rsi_4h"])
-    rsi_1d = pa.get("rsi_1d", 50.0)
-    ema200_4h = pa.get("ema200_4h", 0)
-    ema200_1d = pa.get("ema200_1d", 0)
-
-    def ri(v): return "" if v<30 else "" if v>70 else ""
-    def pct(t): d=(t-price)/price*100; return f"+{d:.2f}%" if d>=0 else f"{d:.2f}%"
-
-    vol_s  = f"${vol24/1e9:.2f}B" if vol24>=1e9 else f"${vol24/1e6:.1f}M" if vol24>=1e6 else f"${vol24/1e3:.0f}K"
-    mcap_s = fm(mcap) if mcap>0 else ""
-
-    #   6    
-    kz      = get_killzone_status()
-    sqf     = signal_quality_filter(a, pa, coin)
-    tkn     = get_tokenomics(symbol)
-    btc_ctx = get_btc_market_context()
-    news    = get_coin_news(symbol)
-    bt      = backtest_signal(symbol, is_long, lookback_candles=60)
-
-    #  1  Confluence Matrix
-    cm  = confluence_matrix(a, pa, coin, btc_ctx, kz)
-    #  2  Volume Profile
-    vp  = get_volume_profile(symbol)
-    #  3  Order Book
-    ob  = get_order_book_analysis(symbol)
-    #  4  Macro (DXY/ETH-BTC/Gold/NQ)
-    mac = get_macro_context()
-    #  5  
-    sea = get_seasonality()
-    #  6  On-chain
-    onc = get_onchain_data(symbol)
-
-    ps  = calc_position_size(
-        price    = price,
-        sl       = a["sl"],
-        deposit  = 1000.0,
-        risk_pct = 1.0,
-        leverage = 3.0 if not (ch90d < -40) else 1.0,
-        quality  = sqf["quality"],
-    )
-
-    kz_e   = {"A+":"","A":"","B":"","C":"","D":""}.get(kz["active"]["quality"],"")
-    sqf_e  = "" if "A+" in sqf["quality"] else ("" if "A " in sqf["quality"] else "")
-
-    #  CONFLUENCE MATRIX    
-    cm_bar = "" * (cm["hits"]) + "" * (15 - cm["hits"])
-    parts_header_extra = [
-        "",
-        f" *CONFLUENCE MATRIX: {cm['grade']}*  ({cm['hits']}/15 )",
-        f"`{cm_bar}`",
-    ]
-    if cm["factors"]:
-        parts_header_extra.append("  " + "    ".join(cm["factors"][:6]))
-
-    #     
-    parts = [
-        f"*{symbol}USDT* {side_e} *{side_t}*",
-        f" BEST TRADE PRO   Rank #{rank}",
-        "",
-        f" *{fp(price)}*   Vol {vol_s}   MCap {mcap_s}",
-    ]
-
-    # Confluence Matrix   
-    parts += parts_header_extra
-
-    if ath > 0:
-        parts.append(f" ATH `{fp(ath)}`   `~x{x_ath:.1f}` (+{to_ath:.0f}%)")
-    if atl > 0:
-        parts.append(f" ATL `{fp(atl)}`   ATL +{from_atl:.0f}%")
-
-    parts += [
-        "",
-        f" 1H`{fc(ch1h)}`  24H`{fc(ch24h)}`  7D`{fc(ch7d)}`  30D`{fc(ch30d)}`  90D`{fc(ch90d)}`",
-        "",
-        f" *PRO Score: `{pro_score}/100`*    : *{entry_q}*",
-        f"`{eq_bar}`",
-        f" : *{setup}*",
-        "",
-    ]
-
-    #  
-    tf_map = {"bullish": "", "bearish": "", "neutral": ""}
-    if pa["ok"]:
-        tf_line = (f"TF: 1H{tf_map.get(pa['tf_1h'],'?')}  "
-                   f"4H{tf_map.get(pa['tf_4h'],'?')}  "
-                   f"1D{tf_map.get(pa['tf_1d'],'?')}  "
-                   f"1W{tf_map.get(pa['tf_1w'],'?')}")
-        conf = pa.get("tf_confluence", 0)
-        conf_str = f"  Confluence: {abs(conf)}/4 {'' if conf > 0 else ''}"
-        parts.append(tf_line + conf_str)
-
-    parts += [
-        f"RSI(1H){ri(pa.get('rsi_1h',50))}`{pa.get('rsi_1h',rsi_4h):.0f}`  "
-        f"RSI(4H){ri(rsi_4h)}`{rsi_4h:.0f}`  "
-        f"RSI(1D){ri(rsi_1d)}`{rsi_1d:.0f}`",
-    ]
-    if ema200_4h:
-        parts.append(f"EMA200(4H)`{fp(ema200_4h)}` {'' if price>ema200_4h else ''}  "
-                     f"EMA200(1D)`{fp(ema200_1d)}` {'' if price>ema200_1d>0 else ''}")
-
-    # ICT / SMC 
-    ict_hits = []
-    if pa.get("ict_ob_bull"):     ict_hits.append("OB Bull ")
-    if pa.get("ict_ob_bear"):     ict_hits.append("OB Bear ")
-    if pa.get("ict_fvg_bull"):    ict_hits.append("FVG Bull ")
-    if pa.get("ict_fvg_bear"):    ict_hits.append("FVG Bear ")
-    if pa.get("ict_liquidity_sweep"): ict_hits.append("Liq Sweep ")
-    if pa.get("smc_bos"):         ict_hits.append(f"BOS {pa['smc_bos']} ")
-    if pa.get("smc_choch"):       ict_hits.append(f"CHoCH {pa['smc_choch']} ")
-    if pa.get("ict_pd_array"):    ict_hits.append(pa["ict_pd_array"])
-    if ict_hits:
-        parts.append(f"SMC/ICT: `{'    '.join(ict_hits[:4])}`")
-
-    # Wyckoff + Elliott
-    if pa.get("wyckoff_phase"):
-        parts.append(f"Wyckoff: `{pa['wyckoff_phase']}`  {pa.get('wyckoff_event','')}")
-    if pa.get("elliott_wave"):
-        parts.append(f"Elliott: `{pa['elliott_wave']}`")
-
-    # OI / Funding
-    if pa.get("oi_signal"):
-        parts.append(pa["oi_signal"])
-    if pa.get("funding_rate") is not None:
-        fr = pa["funding_rate"]
-        fr_e = "" if fr < -0.02 else ("" if fr > 0.05 else "")
-        parts.append(f"Funding: {fr_e}`{fr:+.4f}%`")
-
-    # Volume
-    vol_info = []
-    if pa.get("vol_climax"):  vol_info.append("Climax ")
-    if pa.get("vol_dry_up"):  vol_info.append("Dry-up ")
-    if pa.get("vol_trend") == "increasing": vol_info.append("Vol ")
-    if vol_info:
-        parts.append(f"Volume: `{'    '.join(vol_info)}`")
-
-    #  
-    factors = pa.get("factors", [])
-    if factors:
-        parts += ["", " * :*"]
-        for f_ in factors[:6]:
-            parts.append(f"  {f_}")
-
-    # 
-    warnings = pa.get("warnings", [])
-    if warnings:
-        parts += [""]
-        for w in warnings[:3]:
-            parts.append(w)
-
-    # Volume Profile ( 2)
-    if vp["ok"]:
-        parts += [
-            "",
-            f" *Volume Profile:*",
-            f"  POC: `{fp(vp['poc'])}`  VAH: `{fp(vp['vah'])}`  VAL: `{fp(vp['val'])}`",
-            f"  {vp['label']}",
-        ]
-
-    # Order Book ( 3)
-    if ob["ok"]:
-        parts += ["", f" *:* {ob['label']}"]
-        if ob["bid_wall"]:
-            parts.append(f"    : `{fp(ob['bid_wall'])}`")
-        if ob["ask_wall"]:
-            parts.append(f"    : `{fp(ob['ask_wall'])}`")
-
-    # Macro / ETH-BTC / Gold / AMD ( 4)
-    if mac["ok"]:
-        parts += ["", f" * :*"]
-        if mac["altseason_label"]:
-            parts.append(f"  {mac['altseason_label']}")
-        if mac["macro_label"]:
-            parts.append(f"  {mac['macro_label']}")
-        if mac.get("gold_label"):
-            parts.append(f"  {mac['gold_label']}")
-        trad = mac.get("traditional_risk", "neutral")
-        if trad == "risk_off":
-            parts.append(f"      risk-off    ")
-        elif trad == "cautious":
-            parts.append(f"   Gold    ")
-
-    # AMD Phase (ICT Power of Three)
-    amd_lbl = pa.get("amd_label") if pa.get("ok") else None
-    if amd_lbl:
-        parts.append(f"  {amd_lbl}")
-
-    #  ( 5)
-    if sea["ok"]:
-        parts += [
-            "",
-            f" *:* {sea['label']}",
-            f"  {sea['month_note']}",
-            f"    : `{sea['halving_phase']}`  "
-            f"({sea['cycle_pct']:.0f}% )  "
-            f" : `{sea['days_to_next_halving']}`",
-        ]
-
-    # On-chain ( 6)
-    if onc["ok"]:
-        parts += [
-            "",
-            f" *On-chain:* {onc['flow_label']}",
-            f"  {onc['whale_label']}",
-        ]
-
-    # Killzone
-    kz_active = kz["active"]
-    kz_nxt    = kz.get("next")
-    parts.append(
-        f"{kz_e} *Killzone:* {kz_active['name']}   `{kz_active['quality']}`"
-        + (f"   {kz_active.get('remaining_min',0)} " if kz_active.get('remaining_min') else "")
-    )
-    if kz_nxt:
-        parts.append(f"    : {kz_nxt['name']}  {kz_nxt.get('in_min',0)} ")
-
-    #  
-    parts += [
-        "",
-        f"{sqf_e} * : {sqf['quality']}*  (Score: {sqf['score']}/100)",
-    ]
-    for r_ in sqf["reasons"][:4]:
-        parts.append(f"  {r_}")
-    for w_ in sqf["warnings"][:2]:
-        parts.append(f"  {w_}")
-
-    #  / 
-    if news["ok"]:
-        parts += ["", f" *:* {news['label']}"]
-        if news["catalyst"]:
-            cat = news["catalyst"]
-            e   = "" if cat["sentiment"] == "positive" else ""
-            parts.append(f"  {e} {cat['title'][:80]}  _{cat['age']}_")
-        for n in news["news"][1:3]:
-            e = "" if n["sentiment"]=="positive" else ("" if n["sentiment"]=="negative" else "")
-            parts.append(f"  {e} {n['title'][:70]}")
-
-    # Backtesting
-    if bt["ok"]:
-        bt_e = "" if bt["winrate"] >= 60 else ("" if bt["winrate"] >= 50 else ("" if bt["winrate"] >= 40 else ""))
-        parts += [
-            "",
-            f" *Backtesting ( 60  4H):*",
-            f"  {bt_e} Winrate: `{bt['winrate']:.0f}%`  "
-            f": `{bt['total']}`  "
-            f"Expectancy: `{bt['expectancy']:+.2f}R`",
-            f"   : `{bt['best_streak']}`   "
-            f": `{bt['worst_streak']}` ",
-            f"  {bt['label']}",
-        ]
-
-    # 
-    if tkn["has_data"]:
-        parts += ["", f" *:* {tkn['risk_label']}"]
-        parts.append(f"  {tkn['note']}")
-        parts.append(f"  {tkn['recommendation']}")
-        if not tkn["spot_ok"]:
-            parts.append("   *    *")
-
-    # BTC 
-    if btc_ctx["ok"]:
-        btc_ok = btc_ctx["long_ok"] if is_long else btc_ctx["short_ok"]
-        btc_e  = "" if btc_ok else ""
-        parts += [
-            "",
-            f" *BTC :* {btc_ctx['label']}",
-            f"  BTC `${btc_ctx['btc_price']:,.0f}`  "
-            f"1H`{fc(btc_ctx['btc_ch1h'])}`  24H`{fc(btc_ctx['btc_ch24h'])}`  "
-            f"RSI4H`{btc_ctx['rsi_4h']:.0f}`",
-            f"  {btc_e} {' ' if btc_ok else '   BTC '}"
-        ]
-        if btc_ctx["warning"]:
-            parts.append(f"  {btc_ctx['warning']}")
-
-    #  
-    if ps.get("ok"):
-        parts += ["", format_position_size(ps, is_long)]
-
-    parts += [""]  #   TP/SL
-
-    # TP/SL
-    parts += [
-        f" * :* `{fp(price)}`",
-        "",
-        f" *TP1:* `{fp(a['tp1'])}` *({pct(a['tp1'])})* _{a.get('tp1_source','')}_",
-        f" *TP2:* `{fp(a['tp2'])}` *({pct(a['tp2'])})* _{a.get('tp2_source','')}_",
-        f" *TP3:* `{fp(a['tp3'])}` *({pct(a['tp3'])})* _{a.get('tp3_source','')}_",
-        "",
-        f" *SL:* `{fp(a['sl'])}` _{a.get('sl_source','')}_  R:R `1:{a['rr']:.1f}`",
-    ]
-
-    #  DCA 
-    if ath > 0 and ch90d < -30:
-        parts += [
-            "",
-            f" * DCA :*",
-            f"   1 (40%): `{fp(buy_hi)}`",
-            f"   2 (40%): `{fp(buy_lo)}`",
-            f"   3 (20%): `{fp(atl*1.05 if atl>0 else price*0.7)}`",
-            f"  : `{fp(sell_t)}`  (~x{sell_t/price:.1f})",
-        ]
-
-    # 
-    if pro_score >= 75:    ve, vt = "", " "
-    elif pro_score >= 60:  ve, vt = "", " "
-    elif pro_score >= 45:  ve, vt = "", "   "
-    else:                  ve, vt = "", "  "
-
-    if is_long and rsi_1d < 35 and ch90d < -40:
-        rec = "    DCA"
-    elif is_long:
-        rec = "   2-5x"
-    else:
-        rec = "   2-5x"
-
-    parts += [
-        "",
-        f"{ve} *{vt}*   {rec}",
-        f"  1-2%    SL ",
-        f"#{symbol}USDT",
-    ]
-
-    text = "\n".join(parts)
-    if len(text) > 4096:
-        text = text[:4090] + "..."
-
-    await send_coin(bot, chat_id, symbol, slug, a, text)
+    card = fa_engine.render_full_analysis_card(result)
+    chunks = fa_engine.split_card(card, limit=4096)
+    for i, chunk in enumerate(chunks):
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="show_menu")]]) if i == len(chunks) - 1 else None
+        try:
+            await bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_markup=kb)
+        except Exception:
+            # markdown  -    ( * _ )    -
+            await bot.send_message(chat_id, chunk, reply_markup=kb)
     return True
 
 
@@ -9380,6 +9026,24 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         await msg.delete()
     except: pass
+    await _do_full_analysis(ctx.bot, update.effective_chat.id, symbol)
+
+
+async def handle_text_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает свободный текст только для кнопки «Полный анализ» (menu_full),
+    которая просит прислать тикер следующим сообщением. Никаких других свободных
+    текстовых сценариев в боте нет — если флаг не установлен, сообщение игнорируется."""
+    if not ctx.user_data.pop("awaiting_full_symbol", False):
+        return
+    symbol = (update.message.text or "").strip().upper().replace("USDT", "").replace("BUSD", "")
+    if not symbol or len(symbol) > 15 or not symbol.replace("/", "").isalnum():
+        await update.message.reply_text("Не похоже на тикер. Пример: `BTC`", parse_mode="Markdown")
+        return
+    msg = await update.message.reply_text(f"🔍 Анализирую *{symbol}USDT*...", parse_mode="Markdown")
+    try:
+        await msg.delete()
+    except Exception:
+        pass
     await _do_full_analysis(ctx.bot, update.effective_chat.id, symbol)
 
 
@@ -9618,6 +9282,7 @@ def main():
     app.add_handler(CommandHandler("precision", cmd_precision))
     app.add_handler(CommandHandler("x100",      cmd_x100_scanner))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
 
     scheduler = AsyncIOScheduler(timezone=TZ)
     scheduler.add_job(
