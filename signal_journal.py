@@ -73,7 +73,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
                entry_lo: float, entry_hi: float, sl: float,
                tp1: float = None, tp2: float = None, tp3: float = None,
                rr: float = None, rocket_score=None,
-               ema_stack=None, sweep=None, levels_source=None) -> int:
+               ema_stack=None, sweep=None, levels_source=None, grade=None) -> int:
     """Логирует новый сигнал, статус PENDING. direction: "long"/"short". Для скалярного
     входа (не зоны) передать одно и то же значение в entry_lo и entry_hi. Только
     наблюдение — вызывается ПОСЛЕ уже принятого решения сгенерировать сигнал, не влияет
@@ -86,7 +86,10 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
 
     levels_source: "structure" (find_sr_zones/build_trade_from_structure), "fallback_atr"
     (нет структуры вообще), или None (сигнал не через real_full_analysis, напр. авто-сканы
-    с a_stub) -- позволяет позже сравнить win rate между источниками уровней."""
+    с a_stub) -- позволяет позже сравнить win rate между источниками уровней.
+
+    grade: "A+"/"A"/"B"/"C" (или None) -- грейд карточки на момент сигнала (см.
+    bot._signal_grade), для разбивки win rate по грейдам в /journal."""
     global _next_id
     rec_id = _next_id
     _next_id += 1
@@ -99,7 +102,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
         "entry_lo": entry_lo, "entry_hi": entry_hi, "sl": sl,
         "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "rr": rr, "rocket_score": rocket_score,
-        "ema_stack": ema_stack, "sweep": sweep, "levels_source": levels_source,
+        "ema_stack": ema_stack, "sweep": sweep, "levels_source": levels_source, "grade": grade,
         "price_at_signal": price_at_signal,
         "status": "PENDING",
         "entered_ts": None, "entered_price": None,
@@ -253,9 +256,32 @@ def get_journal_summary(window_sec=None) -> dict:
         elif r.get("outcome") in ("TP1_HIT", "TP2_HIT", "TP3_HIT"):
             agg["wins"] += 1
 
+    by_grade = {}
+    for r in closed_with_outcome:
+        g = r.get("grade") or "?"
+        agg = by_grade.setdefault(g, {"total": 0, "wins": 0, "losses": 0})
+        agg["total"] += 1
+        if r["outcome"] == "SL_HIT":
+            agg["losses"] += 1
+        else:
+            agg["wins"] += 1
+    for agg in by_grade.values():
+        agg["win_rate"] = round(agg["wins"] / agg["total"] * 100, 1) if agg["total"] else None
+
     return {
         "total": total, "entered_count": len(entered), "entered_pct": entered_pct,
         "win_rate": win_rate, "avg_r": avg_r,
         "wins": len(wins), "losses": len(losses),
-        "by_source": by_source,
+        "by_source": by_source, "by_grade": by_grade,
     }
+
+
+def get_stats_for_source(source: str) -> dict:
+    """Для строки в карточке сигнала: '📒 Journal: N закрытых сигналов этого типа,
+    win rate X%'. closed -- количество ЗАКРЫТЫХ С ИСХОДОМ (не EXPIRED) записей этого
+    source, win_rate -- None если closed==0."""
+    recs = [r for r in _journal.values() if r["source"] == source and r.get("outcome") in OUTCOME_STATUSES]
+    closed = len(recs)
+    wins = sum(1 for r in recs if r["outcome"] != "SL_HIT")
+    win_rate = round(wins / closed * 100, 1) if closed else None
+    return {"closed": closed, "wins": wins, "win_rate": win_rate}

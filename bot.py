@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v101"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v102"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -7472,6 +7472,96 @@ def _load_signals():
     except Exception as e:
         log.error(f"_load_signals: {e}")
 
+def _signal_grade(a: dict, is_long: bool) -> str:
+    """5-факторный грейд (A+/A/B/C) -- та же логика, что показывается в карточке
+    (_build_signal_post), вынесена сюда, чтобы сканы могли скрывать C-грейд ДО рендера
+    карточки, а не просто помечать его предупреждением."""
+    rsi_4h = a.get("rsi_4h", 50)
+    macd_bull = a.get("macd_bullish", False)
+    macd_bear = a.get("macd_bearish", False)
+    trend_4h = a.get("trend_4h", "neutral")
+    st_label = (a.get("st_label") or "").upper()
+    above_ema200 = a.get("above_ema200", False)
+    above_ema50 = a.get("above_ema50", False)
+
+    n_ok = 0
+    if is_long:
+        if rsi_4h < 50: n_ok += 1
+        if macd_bull: n_ok += 1
+        if trend_4h == "bullish": n_ok += 1
+        if "UP" in st_label or "BULL" in st_label: n_ok += 1
+        if above_ema200 or above_ema50: n_ok += 1
+    else:
+        if rsi_4h > 55: n_ok += 1
+        if macd_bear: n_ok += 1
+        if trend_4h == "bearish": n_ok += 1
+        if "DOWN" in st_label or "BEAR" in st_label: n_ok += 1
+        if not above_ema200: n_ok += 1
+
+    if n_ok >= 5:   return "A+"
+    if n_ok >= 4:   return "A"
+    if n_ok >= 3:   return "B"
+    return "C"
+
+
+def _counter_trend_blocked(a: dict, direction: str) -> bool:
+    """Блокирует контртрендовый сигнал: шорт против сильного бычьего технического фона
+    (Тренд 4H восходящий + Supertrend BUY + бычий EMA-стек), лонг -- зеркально против
+    медвежьего. Исключение: свежий ПОДТВЕРЖДЁННЫЙ объёмом свип в направлении сигнала --
+    манипуляция достаточное обоснование для контртренда, обычный сетап без неё -- нет."""
+    ema_ctx = a.get("ema_ctx") or {}
+    tf_4h = ema_ctx.get("tf_4h") or {}
+    stack = tf_4h.get("stack")
+    trend_4h = a.get("trend_4h")
+    st_label = (a.get("st_label") or "").upper()
+    st_bull = "UP" in st_label or "BULL" in st_label
+    st_bear = "DOWN" in st_label or "BEAR" in st_label
+
+    def _fresh_confirmed_sweep(kind: str) -> bool:
+        for sweep in (a.get("sweep_1h"), a.get("sweep_4h")):
+            if (sweep and sweep.get("type") == kind
+                    and sweep.get("bars_ago", 999) <= ta_extra.FRESH_SWEEP_BARS
+                    and sweep.get("volume_confirmed") is True):
+                return True
+        return False
+
+    if direction == "short":
+        strong_bull = (trend_4h == "bullish" and st_bull and stack == "бычий")
+        if not strong_bull:
+            return False
+        return not _fresh_confirmed_sweep("sweep_high")
+    else:
+        strong_bear = (trend_4h == "bearish" and st_bear and stack == "медвежий")
+        if not strong_bear:
+            return False
+        return not _fresh_confirmed_sweep("sweep_low")
+
+
+_JOURNAL_FOOTER_SOURCES = {
+    "long":  ["TOP_LONG", "TOP_LONG_AUTO"],
+    "short": ["TOP_SHORT", "TOP_SHORT_AUTO"],
+    "spot":  ["TOP_SPOT", "TOP_SPOT_AUTO"],
+    "x100":  ["X100"],
+}
+
+
+def _journal_footer_line(mode: str) -> str:
+    """'📒 Journal: N закрытых сигналов этого типа, win rate X%' -- статистика по уже
+    закрытым (с исходом) сигналам того же типа (ручные + авто-сканы вместе). Если данных
+    меньше 10 -- честное предупреждение вместо возможно случайного числа."""
+    sources = _JOURNAL_FOOTER_SOURCES.get(mode, [])
+    closed = 0
+    wins = 0
+    for src in sources:
+        st = signal_journal.get_stats_for_source(src)
+        closed += st["closed"]
+        wins += st["wins"]
+    if closed < 10:
+        return "📒 Journal: статистика копится, торговать с осторожностью"
+    win_rate = round(wins / closed * 100, 1)
+    return f"📒 Journal: {closed} закрытых сигналов этого типа, win rate {win_rate}%"
+
+
 def _signal_kb(symbol: str, msg_id: int = 0, chat_id: int = 0, mode: str = "long") -> InlineKeyboardMarkup:
     """  """
     tv = tv_link(symbol)
@@ -7600,12 +7690,10 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
         else:
             factors_bad.append("Выше EMA200")
 
-    # Grade by factor count
+    # Grade by factor count -- via shared helper so scan-time gating (_signal_grade) and
+    # card render never drift apart.
     n_ok = len(factors_ok)
-    if n_ok >= 5:   grade_name = "A+"
-    elif n_ok >= 4: grade_name = "A"
-    elif n_ok >= 3: grade_name = "B"
-    else:           grade_name = "C"
+    grade_name = _signal_grade(a, is_long)
 
     # --- Support / Resistance from swing ---
     swing = a.get("swing", price)
@@ -7798,6 +7886,8 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
         "  B  = 3 фактора",
         "  C  = 1–2 фактора — осторожно",
         "",
+        _journal_footer_line(mode),
+        "",
         # === Блок 8: разделитель + хэштег (кнопки — отдельно, через send_coin/_signal_kb) ===
         SEP,
         f"#{symbol}USDT",
@@ -7880,7 +7970,11 @@ async def _cmd_x100_scanner_body(update, ctx):
                 if ch30d > 50 and ch7d < -10: score += 2; reasons.append("♻️ Откат после роста")
                 if 0 < price < 0.01: score += 1; reasons.append("💰 <$0.01")
                 elif price < 0.1:    score += 1; reasons.append("💰 <$0.10")
-                if score >= 5 and mcap < 500_000_000:
+                # Ужесточение качества: x100 не считает RSI/MACD/тренд/Supertrend (нет OHLC
+                # до этой точки), поэтому здесь используется его СОБСТВЕННАЯ шкала (0-12) --
+                # порог поднят с >=5 (показывал и 📈-тир) до >=7, оставляя только 💎/🔥-тир,
+                # эквивалент "скор>=60 и грейд A/B" для этого типа сигнала.
+                if score >= 7 and mcap < 500_000_000:
                     def fmt_mcap(m):
                         if m >= 1e9: return f"${m/1e9:.2f}B"
                         if m >= 1e6: return f"${m/1e6:.1f}M"
@@ -7911,11 +8005,11 @@ async def _cmd_x100_scanner_body(update, ctx):
                 "",
                 SEP,
             ]
-            if not top:
-                lines.append("\n❌ Кандидатов не найдено")
-            else:
-                lines.append(f"\n💎 *Найдено: {len(top)} кандидатов*\n")
-                for i, c in enumerate(top, 1):
+            card_blocks = []
+            shown_x100 = 0
+            rejected_x100 = 0
+            if top:
+                for c in top:
                     grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
                     try:
                         from live_prices import resolve_price
@@ -7950,8 +8044,8 @@ async def _cmd_x100_scanner_body(update, ctx):
                             rr_dbg = trade_x100["rr_tp1"] if trade_x100 else "n/a"
                             log.info(f"[SR-GATE] x100: {c['sym']} отброшен -- "
                                      f"R:R по TP1 {rr_dbg} < {ta_extra.SR_MIN_RR_TP1}")
-                            spot = []
-                            price_line = f"💰 Цена: {fp(p)}  _{p_fresh}_ | МКап: {c['mcap']} (отброшен: слабый R:R)"
+                            rejected_x100 += 1
+                            continue  # скрыт полностью, не показан с предупреждением
                         else:
                             low_52w  = min((cc["low"] for cc in candles_1d_x100), default=p * 0.35) if candles_1d_x100 else p * 0.35
                             high_52w = max((cc["high"] for cc in candles_1d_x100), default=p * 3.2) if candles_1d_x100 else p * 3.2
@@ -7997,15 +8091,25 @@ async def _cmd_x100_scanner_body(update, ctx):
                     except Exception:
                         spot = []
                         price_line = f"💰 Цена: {c['price']} | МКап: {c['mcap']}"
-                    lines += [
+                    shown_x100 += 1
+                    card_blocks += [
                         SEP,
-                        f"{grade} #{i} {c['sym']} — {c['name']}",
+                        f"{grade} #{shown_x100} {c['sym']} — {c['name']}",
                         price_line,
                         f"📊 24ч: {sign(c['ch24'])} | 7д: {sign(c['ch7d'])} | 30д: {sign(c['ch30d'])}",
                         *spot,
                         f"⚡ {' · '.join(c['reasons'])}",
                         f"🎯 Скор: {c['score']}/12",
+                        _journal_footer_line("x100"),
                     ]
+            if card_blocks:
+                lines.append(f"\n💎 *Найдено: {shown_x100} кандидатов*"
+                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5)_" if rejected_x100 else "") + "\n")
+                lines += card_blocks
+            elif rejected_x100:
+                lines.append(f"\n❌ Кандидатов не найдено -- {rejected_x100} отброшено по R:R < 1:1.5")
+            else:
+                lines.append("\n❌ Кандидатов не найдено")
             lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Обновить", callback_data="x100_scan"),
@@ -8290,6 +8394,12 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             n_ok_spot = len(fok)
             grade_spot = "A+" if n_ok_spot >= 5 else ("A" if n_ok_spot >= 4 else ("B" if n_ok_spot >= 3 else "C"))
 
+            if not (spot_rocket >= 60 and grade_spot in ("A+", "A", "B")):
+                log.info(f"[QUALITY-GATE] top_spot: {sym} скрыт -- "
+                         f"скор {spot_rocket}/100, грейд {grade_spot}")
+                await prog.delete()
+                continue
+
             lines = [
                 f"*{sym}/USDT* \u2b50 *СПОТ*",
                 f"_Скор: {spot_rocket}/100 | Качество: {grade_spot}_",
@@ -8377,7 +8487,7 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                            tp1=_spot_sell_target, rocket_score=spot_rocket,
                                            ema_stack=a.get("ema_ctx"),
                                            sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                                           levels_source="ath_recovery")
+                                           levels_source="ath_recovery", grade=grade_spot)
             except Exception as e:
                 log.error(f"[JOURNAL] TOP_SPOT {sym}: {e}")
 
@@ -8443,9 +8553,15 @@ def _scan_top_long_sync():
 
             pa  = pro_analysis(sym, coin)
             sqf = signal_quality_filter(a, pa, coin)
-            if not (sqf["pass"] or a["rocket"] >= 65):
+
+            grade = _signal_grade(a, True)
+            if not (a["rocket"] >= 60 and grade in ("A+", "A", "B")):
                 rejected.append((sym, f"качество недостаточно (Rocket {a.get('rocket', 0)}/100, "
-                                       f"{sqf['quality']})", a.get("rocket", 0)))
+                                       f"грейд {grade})", a.get("rocket", 0)))
+                continue
+            if _counter_trend_blocked(a, "long"):
+                rejected.append((sym, "контртренд без подтверждённого свипа (медвежий фон)",
+                                  a.get("rocket", 0)))
                 continue
             if not a.get("rr_gate_pass"):
                 rejected.append((sym, f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}",
@@ -8455,6 +8571,7 @@ def _scan_top_long_sync():
                 continue
 
             a["_sqf"] = sqf
+            a["_grade"] = grade
             scored.append((coin, a))
         except: pass
 
@@ -8574,7 +8691,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                                rr=a["rr"], rocket_score=a.get("rocket"),
                                                ema_stack=a.get("ema_ctx"),
                                                sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                                               levels_source=a.get("levels_source"))
+                                               levels_source=a.get("levels_source"), grade=a.get("_grade"))
                 except Exception as e:
                     log.error(f"[JOURNAL] TOP_LONG {sym}: {e}")
                 await asyncio.sleep(1.5)
@@ -8623,16 +8740,30 @@ def _scan_top_short_sync():
                 if a["rsi_4h"] < RSI_EXTREME_SHORT:
                     rejected.append((sym, f"RSI перепродан ({a['rsi_4h']:.0f}) для шорта", a.get("rocket", 0)))
                     continue
-                if a["rocket"] < 40:
-                    rejected.append((sym, f"качество недостаточно (Rocket {a['rocket']}/100)", a.get("rocket", 0)))
+                grade = _signal_grade(a, False)
+                if not (a["rocket"] >= 60 and grade in ("A+", "A", "B")):
+                    rejected.append((sym, f"качество недостаточно (Rocket {a['rocket']}/100, грейд {grade})",
+                                      a.get("rocket", 0)))
+                    continue
+                if _counter_trend_blocked(a, "short"):
+                    rejected.append((sym, "контртренд без подтверждённого свипа (бычий фон)",
+                                      a.get("rocket", 0)))
                     continue
                 if not a.get("rr_gate_pass"):
                     rejected.append((sym, f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}", a.get("rocket", 0)))
                     log.info(f"[SR-GATE] top_short: {sym} отброшен -- "
                              f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
                     continue
+                a["_grade"] = grade
                 scored.append((coin, a))
             elif a.get("rsi_4h", 50) > 72 and a["vol"] >= 2_000_000:
+                # Контрарианский шорт против объективно бычьего фона -- разрешён ТОЛЬКО от
+                # подтверждённой манипуляции (свежий sweep_high с volume_confirmed=True),
+                # RSI-перекуп сам по себе больше не считается достаточным обоснованием.
+                if _counter_trend_blocked(a, "short"):
+                    rejected.append((sym, "контртренд (RSI-перекуп) без подтверждённого свипа -- "
+                                           "недостаточное обоснование", a.get("rocket", 0)))
+                    continue
                 # a была построена под is_long (изначальное направление real_full_analysis)
                 # -- entry/SL/TP нужно пересобрать под short заново от тех же зон, иначе
                 # уровни останутся зеркально неверными (лонговая структура на шорт-сигнале).
@@ -8658,6 +8789,12 @@ def _scan_top_short_sync():
                 # читаются как противоречащие друг другу).
                 a_short["smc_factors"] = [f for f in a.get("smc_factors", []) if "Bull" not in f]
                 a_short["tf_aligned_bull"] = False
+                grade = _signal_grade(a_short, False)
+                if not (a_short["rocket"] >= 60 and grade in ("A+", "A", "B")):
+                    rejected.append((sym, f"качество недостаточно (Rocket {a_short['rocket']}/100, грейд {grade}, "
+                                           f"RSI-override)", a_short.get("rocket", 0)))
+                    continue
+                a_short["_grade"] = grade
                 scored.append((coin, a_short))
         except: pass
 
@@ -8764,7 +8901,7 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                                rr=a["rr"], rocket_score=a.get("rocket"),
                                                ema_stack=a.get("ema_ctx"),
                                                sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                                               levels_source=a.get("levels_source"))
+                                               levels_source=a.get("levels_source"), grade=a.get("_grade"))
                 except Exception as e:
                     log.error(f"[JOURNAL] TOP_SHORT {sym}: {e}")
                 await asyncio.sleep(1.5)
@@ -9366,6 +9503,11 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if s["by_source"]:
             src_str = ", ".join(f"{k}: {v['total']}" for k, v in sorted(s["by_source"].items()))
             lines.append(f"  По источникам: {src_str}")
+        by_grade = s.get("by_grade", {})
+        grade_parts = [f"{g}: {by_grade[g]['win_rate']}% ({by_grade[g]['total']})"
+                       for g in ("A+", "A", "B") if g in by_grade]
+        if grade_parts:
+            lines.append(f"  По грейдам: {', '.join(grade_parts)}")
         return "\n".join(lines)
 
     text = "\n\n".join([

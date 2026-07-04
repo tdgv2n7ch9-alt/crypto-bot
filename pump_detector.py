@@ -52,9 +52,9 @@ VOLUME_MULT_THRESHOLD = 5.0
 CANDLE_INTERVAL = "1m"
 WATCH_TIMEOUT_SEC = 30 * 60        # WATCHING без разворота -> EXPIRED
 CONFIRMED_GRACE_SEC = 15 * 60      # доп. окно после REVERSAL_CONFIRMED без промоушена/добавления
-REVERSAL_DRAWDOWN_PCT = 3.0        # откат от пика для памп-REVERSAL_CONFIRMED
-REVERSAL_RED_STREAK = 2            # мин. кол-во красных/зелёных 1м свечей подряд
-REVERSAL_VOL_MULT = 1.5            # объём отката/отскока >= x от среднего
+REVERSAL_DRAWDOWN_PCT = 4.0        # откат от пика для памп-REVERSAL_CONFIRMED
+REVERSAL_RED_STREAK = 3            # мин. кол-во красных/зелёных 1м свечей подряд
+REVERSAL_VOL_MULT = 2.0            # объём отката/отскока >= x от среднего
 SL_BUFFER_PCT = 1.5                # памп: SL выше пика на +1.5%
 DUMP_SL_BUFFER_PCT = 2.5           # дамп: SL под дном на -2.5% (буфер 2-3%)
 PROMOTE_SCORE_THRESHOLD = 60       # порог pro_analysis().pro_score для авто-PROMOTED (памп)
@@ -863,10 +863,12 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     risk = abs(watch["sl"] - watch["entry_lo"])
     watch["tp1"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * risk
     watch["tp2"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * 1.6 * risk
+    rr = abs(watch["tp1"] - close) / abs(close - watch["sl"]) if close != watch["sl"] else 0
     text = await _compose_alert(ctx, symbol, watch, "REVERSAL CONFIRMED 🔻",
                                  [f"🎯 Зона входа (шорт): `{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}`",
                                   f"🛑 SL: `{_fmt_price(watch['sl'])}` (пик +{SL_BUFFER_PCT}%)",
                                   f"🎯 TP1: `{_fmt_price(watch['tp1'])}`  TP2: `{_fmt_price(watch['tp2'])}`",
+                                  f"R:R по TP1: 1:{rr:.1f}",
                                   _risk_block(watch["entry_lo"], watch["sl"]),
                                   "",
                                   "🛡 *Position Protection:* если уже в позиции — частичная фиксация на TP1, "
