@@ -44,6 +44,7 @@ import requests
 import websockets
 
 import live_prices
+import ta_extra
 
 # ── Конфигурация: fine-grained (kline) слой, как в v1 ────────────
 WINDOW_DAYS = 14
@@ -61,7 +62,14 @@ PROMOTE_SCORE_THRESHOLD = 60       # порог pro_analysis().pro_score для 
 PROMOTE_MIN_RR = 2.0               # памп: R:R >= 1:2 для авто-промоушена
 DUMP_MIN_RR = 1.5                  # дамп: R:R-гейт >= 1:1.5 по TP1 для кнопки "Добавить в ТОП ЛОНГ"
 MEMECOIN_MCAP_USD = 50_000_000     # ниже — помечаем ⚠️ МЕМКОИН
-CHART_CANDLES = 90                 # свечей 1м в чарт к алерту
+CHART_5M_BARS = 60                 # 5m-баров в чарт v2 (агрегируются из 1m WS-свечей)
+CHART_CANDLES = CHART_5M_BARS * 5 + 20   # 1m-истории нужно с запасом на агрегацию+варм-ап индикаторов
+CHART_BB_PERIOD = 20
+CHART_BB_STD = 2
+CHART_EMA_FAST = 20
+CHART_EMA_SLOW = 50
+CHART_VOL_MA_PERIOD = 20
+CHART_SWING_LOOKBACK = 3            # баров с каждой стороны для локального экстремума
 TOP_N_SYMBOLS = 20                 # всегда-live база — топ-N по объёму (для live_prices/фолбэка)
 SYMBOL_REFRESH_SEC = 6 * 3600      # как часто пересобирать топ-N базу
 
@@ -87,7 +95,16 @@ COARSE_WATCHDOG_TIMEOUT_SEC = 60    # coarse молчит дольше — ав�
 COARSE_NO_DATA_ALERT_SEC = 5 * 60   # реконнект не восстанавливает данные 5 мин — "Радар без данных"
 COARSE_RECONNECT_NOTIFY_COOLDOWN_SEC = 10 * 60  # антиспам: не чаще 1 раза в 10 мин на "переподключён"
 
-BG, GREEN, RED, WHITE, GRAY, YELLOW = "#0D1421", "#16C784", "#EA3943", "#FFFFFF", "#7B8BB2", "#F0B90B"
+# Chart v2 -- палитра в стиле биржевых терминалов (TradingView-подобная тёмная тема)
+BG, GREEN, RED, WHITE, GRAY, YELLOW = "#131722", "#26A69A", "#EF5350", "#D1D4DC", "#787B86", "#F0B90B"
+CHART_GRID_COLOR = "#2A2E39"
+CHART_EMA_FAST_COLOR = "#2962FF"    # синий -- EMA20
+CHART_EMA_SLOW_COLOR = "#FF6D00"    # оранжевый -- EMA50
+CHART_BB_COLOR = "#787B86"          # серый -- полосы Боллинджера
+CHART_BB_MID_COLOR = "#B2B5BE"
+CHART_ENTRY_ZONE_COLOR = "#2962FF"
+CHART_DETECT_LINE_COLOR = "#787B86"
+CHART_PANEL_BG = "#1E222D"
 
 # ── Состояние fine-grained слоя (в памяти процесса) ──────────────
 _volume_history = {}              # symbol -> deque(volumes) — минутные объёмы с kline
@@ -140,7 +157,7 @@ class PumpContext:
     (killzone, OI-матрица, funding, скоринг) и не тащить сюда Binance REST."""
     def __init__(self, bot, owner_chat_id, get_coin_by_symbol, full_analysis, pro_analysis,
                  get_killzone_status, get_funding_pct, get_oi_usd, get_oi_change,
-                 add_top_short_signal):
+                 add_top_short_signal, get_ohlc=None):
         self.bot = bot
         self.owner_chat_id = owner_chat_id
         self.get_coin_by_symbol = get_coin_by_symbol
@@ -151,6 +168,9 @@ class PumpContext:
         self.get_oi_usd = get_oi_usd
         self.get_oi_change = get_oi_change
         self.add_top_short_signal = add_top_short_signal
+        self.get_ohlc = get_ohlc   # bot.get_binance_ohlc(symbol, interval, limit) -- для
+                                    # 1h/4h EMA-стека/свип-детектора в блоке "РАЗБОР" (см.
+                                    # _build_analysis_block), только на REVERSAL_CONFIRMED
 
 
 def get_pump_radar_state() -> dict:
@@ -643,58 +663,231 @@ def _log_memory_stats():
 
 # ── Чарт ─────────────────────────────────────────────────────────
 
+def _aggregate_5m(candles_1m: list, bars: int = CHART_5M_BARS) -> list:
+    """Агрегирует 1m Bybit-свечи в 5m бары (группировка по времени -- устойчиво к
+    пропускам данных из-за реконнектов WS, а не жёсткая нарезка по 5). Возвращает
+    последние `bars` баров (хронологически, последний может быть ещё не закрыт)."""
+    if not candles_1m:
+        return []
+    bucket_ms = 5 * 60 * 1000
+    buckets = {}
+    for c in candles_1m:
+        b_ts = (c["t"] // bucket_ms) * bucket_ms
+        b = buckets.get(b_ts)
+        if b is None:
+            buckets[b_ts] = {"t": b_ts, "o": c["o"], "h": c["h"], "l": c["l"], "c": c["c"], "v": c["v"]}
+        else:
+            b["h"] = max(b["h"], c["h"])
+            b["l"] = min(b["l"], c["l"])
+            b["c"] = c["c"]
+            b["v"] += c["v"]
+    out = [buckets[k] for k in sorted(buckets.keys())]
+    return out[-bars:]
+
+
+def _ema_series(values: list, period: int) -> list:
+    """EMA, выровненный по длине values (None, пока не накоплено period точек)."""
+    n = len(values)
+    if n < period:
+        return [None] * n
+    k = 2 / (period + 1)
+    out = [None] * (period - 1)
+    prev = sum(values[:period]) / period
+    out.append(prev)
+    for v in values[period:]:
+        prev = v * k + prev * (1 - k)
+        out.append(prev)
+    return out
+
+
+def _sma_series(values: list, period: int) -> list:
+    n = len(values)
+    out = [None] * n
+    for i in range(period - 1, n):
+        out[i] = sum(values[i - period + 1:i + 1]) / period
+    return out
+
+
+def _bollinger_bands(values: list, period: int = CHART_BB_PERIOD, std_mult: float = CHART_BB_STD):
+    """Возвращает (mid, up, dn) -- каждый список выровнен по длине values."""
+    n = len(values)
+    mid = _sma_series(values, period)
+    up, dn = [None] * n, [None] * n
+    for i in range(period - 1, n):
+        window = values[i - period + 1:i + 1]
+        std = statistics.pstdev(window)
+        up[i] = mid[i] + std_mult * std
+        dn[i] = mid[i] - std_mult * std
+    return mid, up, dn
+
+
+def _find_swings(bars: list, lookback: int = CHART_SWING_LOOKBACK):
+    """Локальные экстремумы (фрактал: lookback баров строго ниже/выше с каждой стороны).
+    Возвращает список (index, price, 'high'|'low')."""
+    swings = []
+    n = len(bars)
+    for i in range(lookback, n - lookback):
+        window = bars[i - lookback:i + lookback + 1]
+        highs = [b["h"] for b in window]
+        lows = [b["l"] for b in window]
+        if bars[i]["h"] == max(highs) and highs.count(bars[i]["h"]) == 1:
+            swings.append((i, bars[i]["h"], "high"))
+        if bars[i]["l"] == min(lows) and lows.count(bars[i]["l"]) == 1:
+            swings.append((i, bars[i]["l"], "low"))
+    return swings
+
+
 def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
-    candles = list(_candle_history.get(symbol, []))[-CHART_CANDLES:]
-    if len(candles) < 5:
+    """Chart v2 -- 5m свечи (агрегированы из 1m Bybit WS-данных), BB(20,2) + EMA20/50,
+    свинг-аннотации, зоны сделки, инфо-панель, объём с MA(20). Стиль биржевого терминала."""
+    candles_1m = list(_candle_history.get(symbol, []))
+    bars = _aggregate_5m(candles_1m, CHART_5M_BARS)
+    if len(bars) < 5:
         return None
 
-    fig, (ax_p, ax_v) = plt.subplots(2, 1, figsize=(10, 7), facecolor=BG,
+    closes = [b["c"] for b in bars]
+    vols = [b["v"] for b in bars]
+    n = len(bars)
+    kind = watch.get("kind", "pump")
+    current_price = watch.get("last_price", closes[-1])
+
+    ema_fast = _ema_series(closes, CHART_EMA_FAST)
+    ema_slow = _ema_series(closes, CHART_EMA_SLOW)
+    bb_mid, bb_up, bb_dn = _bollinger_bands(closes, CHART_BB_PERIOD, CHART_BB_STD)
+    vol_ma = _sma_series(vols, CHART_VOL_MA_PERIOD)
+    swings = _find_swings(bars, CHART_SWING_LOOKBACK)
+
+    fig, (ax_p, ax_v) = plt.subplots(2, 1, figsize=(11, 8.5), facecolor=BG,
                                       gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     for ax in (ax_p, ax_v):
         ax.set_facecolor(BG)
-        ax.tick_params(colors=WHITE, labelsize=8)
+        ax.tick_params(colors=WHITE, labelsize=10)
+        ax.grid(color=CHART_GRID_COLOR, linewidth=0.5, alpha=0.6)
         for spine in ax.spines.values():
-            spine.set_color(GRAY)
+            spine.set_color(CHART_GRID_COLOR)
 
-    avg_vol = statistics.mean([c["v"] for c in candles]) or 1.0
-    vol_std = statistics.pstdev([c["v"] for c in candles]) or 1.0
-
-    for i, c in enumerate(candles):
+    # --- Свечи 5m ---
+    for i, c in enumerate(bars):
         color = GREEN if c["c"] >= c["o"] else RED
         ax_p.plot([i, i], [c["l"], c["h"]], color=color, linewidth=1)
-        ax_p.add_patch(patches.Rectangle((i - 0.3, min(c["o"], c["c"])), 0.6,
-                                          max(abs(c["c"] - c["o"]), c["h"] * 0.0001),
+        ax_p.add_patch(patches.Rectangle((i - 0.32, min(c["o"], c["c"])), 0.64,
+                                          max(abs(c["c"] - c["o"]), c["h"] * 0.0006),
                                           color=color))
-        vol_color = YELLOW if (c["v"] - avg_vol) / vol_std > 3 else (GREEN if c["c"] >= c["o"] else RED)
-        ax_v.bar(i, c["v"], color=vol_color, width=0.7)
 
-    kind = watch.get("kind", "pump")
-    if kind == "pump":
-        level = watch["peak_price"]; level_label = "Пик"
-    else:
-        level = watch["bottom_price"]; level_label = "Дно"
-    ax_p.axhline(level, color=YELLOW, linestyle="--", linewidth=1, label=f"{level_label} {_fmt_price(level)}")
+    # --- Оверлеи: EMA 20/50 ---
+    xs = list(range(n))
+    ax_p.plot(xs, ema_fast, color=CHART_EMA_FAST_COLOR, linewidth=1.4, label=f"EMA{CHART_EMA_FAST}")
+    ax_p.plot(xs, ema_slow, color=CHART_EMA_SLOW_COLOR, linewidth=1.4, label=f"EMA{CHART_EMA_SLOW}")
+
+    # --- Оверлеи: Bollinger Bands(20,2) + подписи значений сверху (как на биржах) ---
+    ax_p.plot(xs, bb_up, color=CHART_BB_COLOR, linewidth=0.9, linestyle="-", alpha=0.8)
+    ax_p.plot(xs, bb_mid, color=CHART_BB_MID_COLOR, linewidth=0.9, linestyle="-", alpha=0.7)
+    ax_p.plot(xs, bb_dn, color=CHART_BB_COLOR, linewidth=0.9, linestyle="-", alpha=0.8)
+    if bb_up[-1] is not None:
+        boll_line = (f"BOLL({CHART_BB_PERIOD},{CHART_BB_STD})  "
+                     f"UP {_fmt_price(bb_up[-1])}   MB {_fmt_price(bb_mid[-1])}   DN {_fmt_price(bb_dn[-1])}")
+        ax_p.text(0.5, 1.05, boll_line, transform=ax_p.transAxes, color=CHART_BB_COLOR,
+                   fontsize=10, va="bottom", ha="center")
+
+    # --- Аннотации: свинг-хай/лоу (самый значимый видимый экстремум каждого типа) ---
+    highs = [s for s in swings if s[2] == "high"]
+    lows = [s for s in swings if s[2] == "low"]
+    if highs:
+        i, price, _ = max(highs, key=lambda s: s[1])
+        ax_p.annotate(_fmt_price(price), xy=(i, price), xytext=(i, price * 1.012),
+                       color=GREEN, fontsize=10, ha="center",
+                       arrowprops=dict(arrowstyle="->", color=GREEN, lw=1))
+    if lows:
+        i, price, _ = min(lows, key=lambda s: s[1])
+        ax_p.annotate(_fmt_price(price), xy=(i, price), xytext=(i, price * 0.988),
+                       color=RED, fontsize=10, ha="center", va="top",
+                       arrowprops=dict(arrowstyle="->", color=RED, lw=1))
+
+    # --- Текущая цена: горизонтальный пунктир + ценник у правой оси ---
+    ax_p.axhline(current_price, color=YELLOW, linestyle="--", linewidth=1)
+    ax_p.text(1.005, current_price, f" {_fmt_price(current_price)}", transform=ax_p.get_yaxis_transform(),
+               color=BG, fontsize=10, va="center", ha="left",
+               bbox=dict(boxstyle="round,pad=0.25", facecolor=YELLOW, edgecolor="none"))
+
+    # --- Момент детекта: вертикальный пунктир + метка времени ---
+    detect_ts_ms = watch.get("pump_time", time.time()) * 1000
+    detect_idx = 0
+    for i, b in enumerate(bars):
+        if b["t"] <= detect_ts_ms:
+            detect_idx = i
+        else:
+            break
+    ax_p.axvline(detect_idx, color=CHART_DETECT_LINE_COLOR, linestyle="--", linewidth=1)
+    ax_p.text(detect_idx, ax_p.get_ylim()[1], f" детект {time.strftime('%H:%M UTC', time.gmtime(watch.get('pump_time', time.time())))}",
+               color=CHART_DETECT_LINE_COLOR, fontsize=10, va="top", ha="left", rotation=0)
+
+    # --- Зоны сделки: вход (синий), TP (зелёный), SL (красный) с ценами и % ---
+    # Подписи -- у ЛЕВОГО края (не у правого), чтобы не конфликтовать с ценником текущей
+    # цены и инфо-панелью, которые всегда справа.
+    def _pct(level):
+        return (level - current_price) / current_price * 100 if current_price else 0
+
+    label_x = max(1, n * 0.02)
 
     if watch.get("entry_lo") and watch.get("entry_hi"):
-        zone_color = RED if kind == "pump" else GREEN
-        ax_p.axhspan(watch["entry_lo"], watch["entry_hi"], color=zone_color, alpha=0.15)
-    for key, color, lbl in [("sl", RED, "SL"), ("tp1", GREEN, "TP1"), ("tp2", GREEN, "TP2")]:
-        if watch.get(key):
-            ax_p.axhline(watch[key], color=color, linestyle=":", linewidth=1)
-            ax_p.text(len(candles) - 1, watch[key], f" {lbl} {_fmt_price(watch[key])}",
-                       color=color, fontsize=8, va="center")
+        lo, hi = sorted((watch["entry_lo"], watch["entry_hi"]))
+        ax_p.axhspan(lo, hi, color=CHART_ENTRY_ZONE_COLOR, alpha=0.18)
+        mid_e = (lo + hi) / 2
+        ax_p.text(label_x, mid_e, f"Вход {_fmt_price(lo)}-{_fmt_price(hi)} ({_pct(mid_e):+.1f}%)",
+                   color=CHART_ENTRY_ZONE_COLOR, fontsize=10, va="center", ha="left",
+                   bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.7))
 
-    detect_label = "детект" if kind == "pump" else "детект"
-    ax_p.set_title(f"{symbol.upper()} · 1m · {detect_label} {time.strftime('%H:%M UTC', time.gmtime(watch['pump_time']))}",
-                    color=WHITE, fontsize=11, loc="left")
-    ax_p.text(0.99, 0.02, "BEST TRADE 👑", color=GRAY, fontsize=9, alpha=0.6,
-               ha="right", va="bottom", transform=ax_p.transAxes)
-    ax_p.legend(loc="upper left", fontsize=8, facecolor=BG, labelcolor=WHITE, framealpha=0.3)
-    ax_v.set_ylabel("Vol", color=GRAY, fontsize=8)
+    for key, color, lbl in [("tp1", GREEN, "TP1"), ("tp2", GREEN, "TP2"), ("sl", RED, "SL")]:
+        level = watch.get(key)
+        if not level:
+            continue
+        band = level * 0.0015
+        ax_p.axhspan(level - band, level + band, color=color, alpha=0.22)
+        ax_p.text(label_x, level, f"{lbl} {_fmt_price(level)} ({_pct(level):+.1f}%)",
+                   color=color, fontsize=10, va="center", ha="left",
+                   bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.7))
+
+    # --- Инфо-панель (полупрозрачный блок в углу, снизу справа -- верх справа занят
+    # ценником текущей цены + BOLL-строкой) ---
+    last_1m = candles_1m[-1] if candles_1m else None
+    detect_price = watch.get("detect_price", current_price)
+    pct_from_detect = (current_price - detect_price) / detect_price * 100 if detect_price else 0
+    if last_1m:
+        candle_range_pct = (last_1m["h"] - last_1m["l"]) / last_1m["l"] * 100 if last_1m["l"] else 0
+        panel_lines = [
+            f"Время: {time.strftime('%H:%M:%S UTC', time.gmtime(last_1m['t'] / 1000))}",
+            f"O: {_fmt_price(last_1m['o'])}  H: {_fmt_price(last_1m['h'])}",
+            f"L: {_fmt_price(last_1m['l'])}  C: {_fmt_price(last_1m['c'])}",
+            f"%Изм от детекта: {pct_from_detect:+.2f}%",
+            f"Диапазон: {candle_range_pct:.2f}%",
+            f"Объём триггера: x{watch.get('volume_mult', 0):.1f} от нормы",
+            f"Z-Score: {watch.get('z_score', 0):.1f}σ",
+        ]
+        panel_text = "\n".join(panel_lines)
+        ax_p.text(0.98, 0.03, panel_text, transform=ax_p.transAxes, color=WHITE, fontsize=10.5,
+                   va="bottom", ha="right", linespacing=1.6,
+                   bbox=dict(boxstyle="round,pad=0.5", facecolor=CHART_PANEL_BG, edgecolor=CHART_GRID_COLOR, alpha=0.9))
+
+    # --- Объём: бары зелёные/красные + MA(20) ---
+    for i, c in enumerate(bars):
+        color = GREEN if c["c"] >= c["o"] else RED
+        ax_v.bar(i, c["v"], color=color, width=0.7, alpha=0.85)
+    ax_v.plot(xs, vol_ma, color=YELLOW, linewidth=1.2, label=f"MA{CHART_VOL_MA_PERIOD}")
+    ax_v.set_ylabel("Vol", color=GRAY, fontsize=10)
+    ax_v.legend(loc="upper left", fontsize=10, facecolor=BG, labelcolor=WHITE, framealpha=0.4)
+
+    detect_label = "детект"
+    ax_p.set_title(f"{symbol.upper()} · 5m · {detect_label} {time.strftime('%H:%M UTC', time.gmtime(watch.get('pump_time', time.time())))}",
+                    color=WHITE, fontsize=12, loc="left")
+    ax_p.text(0.01, 0.02, "BEST TRADE", color=GRAY, fontsize=10, alpha=0.6,
+               ha="left", va="bottom", transform=ax_p.transAxes)
+    ax_p.legend(loc="upper left", fontsize=10, facecolor=BG, labelcolor=WHITE, framealpha=0.35,
+                bbox_to_anchor=(0.0, 0.93))
 
     plt.tight_layout()
+    plt.subplots_adjust(right=0.88, top=0.90)
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", facecolor=BG, dpi=120)
+    plt.savefig(buf, format="png", facecolor=BG, dpi=150)
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -850,6 +1043,81 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
         print(f"Pump Radar: promote check {symbol}: {e}")
 
 
+async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict) -> str:
+    """Блок 'РАЗБОР' под графиком в тексте алерта REVERSAL_CONFIRMED: EMA-контекст (1h/4h
+    стек через ta_extra), BB-контекст (перерастяжение за полосы), свип-детектор если
+    сработал, OI/funding, killzone. Требует свежий фетч 1h/4h OHLC (ctx.get_ohlc) --
+    поэтому вызывается только на REVERSAL_CONFIRMED (точка принятия решения), а не на
+    каждом алерте радара, чтобы не грузить CoinGecko на каждый грубый детект."""
+    if not ctx.get_ohlc:
+        return ""
+    sym = symbol.upper().replace("USDT", "")
+    try:
+        loop = asyncio.get_event_loop()
+        candles_1h = await loop.run_in_executor(None, ctx.get_ohlc, sym, "1h", 100)
+        candles_4h = await loop.run_in_executor(None, ctx.get_ohlc, sym, "4h", 100)
+    except Exception as e:
+        print(f"Pump Radar: analysis block OHLC fetch {symbol}: {e}")
+        return ""
+    if not candles_1h and not candles_4h:
+        return ""
+
+    price = watch.get("last_price", 0)
+    lines = []
+
+    try:
+        ema_ctx = ta_extra.ema_context(candles_1h, candles_4h)
+        lines.append(ta_extra.format_ema_stack_line(ema_ctx))
+        tf4h = ema_ctx.get("tf_4h")
+        if tf4h and tf4h.get("ema", {}).get(20) and tf4h.get("ema", {}).get(50) and price:
+            pos20 = "выше" if price > tf4h["ema"][20] else "ниже"
+            pos50 = "выше" if price > tf4h["ema"][50] else "ниже"
+            lines.append(f"Цена {pos20} EMA20 (4h), {pos50} EMA50 (4h)")
+    except Exception as e:
+        print(f"Pump Radar: analysis block EMA {symbol}: {e}")
+
+    try:
+        closes_4h = [c["close"] for c in candles_4h] if candles_4h else []
+        if len(closes_4h) >= CHART_BB_PERIOD and price:
+            _, bb_up, bb_dn = _bollinger_bands(closes_4h, CHART_BB_PERIOD, CHART_BB_STD)
+            if bb_up[-1] is not None:
+                if price > bb_up[-1]:
+                    lines.append(f"BB(4h): цена ВЫШЕ верхней ленты ({_fmt_price(bb_up[-1])}) -- перерастяжение вверх")
+                elif price < bb_dn[-1]:
+                    lines.append(f"BB(4h): цена НИЖЕ нижней ленты ({_fmt_price(bb_dn[-1])}) -- перерастяжение вниз")
+                else:
+                    lines.append(f"BB(4h): цена внутри полос ({_fmt_price(bb_dn[-1])}-{_fmt_price(bb_up[-1])})")
+    except Exception as e:
+        print(f"Pump Radar: analysis block BB {symbol}: {e}")
+
+    try:
+        sweep_1h = ta_extra.detect_sweep(candles_1h) if candles_1h else None
+        sweep_4h = ta_extra.detect_sweep(candles_4h) if candles_4h else None
+        sweep_line = ta_extra.format_sweep_line(sweep_1h, sweep_4h, price_fmt=_fmt_price)
+        if sweep_line:
+            lines.append(sweep_line)
+    except Exception as e:
+        print(f"Pump Radar: analysis block sweep {symbol}: {e}")
+
+    try:
+        funding = ctx.get_funding_pct(sym)
+        oi_now = ctx.get_oi_usd(sym)
+        oi_chg = ctx.get_oi_change(sym)
+        lines.append(f"Funding: {funding:+.4f}%  ·  OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин)")
+    except Exception as e:
+        print(f"Pump Radar: analysis block OI/funding {symbol}: {e}")
+
+    try:
+        kz = ctx.get_killzone_status()
+        lines.append(f"Killzone: {kz['active']['name']}")
+    except Exception as e:
+        print(f"Pump Radar: analysis block killzone {symbol}: {e}")
+
+    if not lines:
+        return ""
+    return "📋 *РАЗБОР:*\n" + "\n".join(f"  {l}" for l in lines)
+
+
 async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     watch["stage"] = "REVERSAL_CONFIRMED"
     peak = watch["peak_price"]
@@ -873,6 +1141,9 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
                                   "",
                                   "🛡 *Position Protection:* если уже в позиции — частичная фиксация на TP1, "
                                   "трейлинг-стоп в безубыток после TP1."])
+    analysis = await _build_analysis_block(ctx, symbol, watch)
+    if analysis:
+        text = text + "\n\n" + analysis
     await _send_alert(ctx, symbol, text, watch, f"pump_sub_{symbol.upper().replace('USDT','')}")
     await _try_promote_pump(ctx, symbol, watch)
 
@@ -906,6 +1177,10 @@ async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
                                   "",
                                   "🛡 *Position Protection:* если уже в позиции — частичная фиксация на TP1, "
                                   "трейлинг-стоп в безубыток после TP1."])
+
+    analysis = await _build_analysis_block(ctx, symbol, watch)
+    if analysis:
+        text = text + "\n\n" + analysis
 
     extra_button = None
     if show_button:
