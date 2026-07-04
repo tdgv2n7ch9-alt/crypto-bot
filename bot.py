@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v100"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v101"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -8395,13 +8395,23 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+RSI_EXTREME_LONG = 75   # RSI(4H) выше этого -- перекуп, жёсткий отказ для лонга вне зависимости
+                        # от остального скора (signal_quality_filter даёт за это лишь -10,
+                        # недостаточно чтобы одно это остановило слабый но "проходной" сигнал)
+RSI_EXTREME_SHORT = 25  # зеркально для шорта (RSI ниже -- перепроданность)
+
+
 def _scan_top_long_sync():
-    """Тяжёлая, полностью синхронная часть /long: CMC-фетч + до 50(+30 фоллбек)
-    блокирующих real_full_analysis()-вызовов + BTC-контекст. Выполняется в
-    run_in_executor, чтобы не морозить event loop бота на минуты (см. _scan_busy)."""
+    """Тяжёлая, полностью синхронная часть /long: CMC-фетч + до 50 блокирующих
+    real_full_analysis()-вызовов + BTC-контекст. Выполняется в run_in_executor, чтобы не
+    морозить event loop бота на минуты (см. _scan_busy).
+
+    Без fallback-логики: плохой сигнал хуже отсутствия сигнала. Если ни один кандидат не
+    прошёл все гейты (качество, RSI, R:R) -- top_long пуст, и cmd_top_long честно
+    сообщает об этом + показывает топ-3 отклонённых с причиной (см. rejected)."""
     coins = get_top500()
     if not coins:
-        return None, None, None
+        return None, None, None, None
 
     pre = []
     for coin in coins:
@@ -8416,41 +8426,44 @@ def _scan_top_long_sync():
     pre.sort(key=lambda c: c["quote"]["USDT"].get("percent_change_24h", 0) or 0, reverse=True)
 
     scored = []
+    rejected = []  # (symbol, reason, rocket) -- для честной сводки, когда никто не прошёл
     for coin in pre[:50]:  # сокращено с 150 до 50
         try:
             a   = real_full_analysis(coin)
-            pa  = pro_analysis(coin["symbol"], coin)
+            sym = coin["symbol"]
+            if not a["is_long"]:
+                continue  # не наше направление -- не считаем "отклонённым лонг-кандидатом"
+
+            if a.get("suspicious"):
+                rejected.append((sym, "подозрительный объём (возможен памп)", a.get("rocket", 0)))
+                continue
+            if a["rsi_4h"] > RSI_EXTREME_LONG:
+                rejected.append((sym, f"RSI перегрет ({a['rsi_4h']:.0f}) для лонга", a.get("rocket", 0)))
+                continue
+
+            pa  = pro_analysis(sym, coin)
             sqf = signal_quality_filter(a, pa, coin)
-            if a["is_long"] and not a.get("suspicious"):
-                if sqf["pass"] or a["rocket"] >= 65:
-                    if not a.get("rr_gate_pass"):
-                        log.info(f"[SR-GATE] top_long: {coin['symbol']} отброшен -- "
-                                 f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
-                        continue
-                    a["_sqf"] = sqf
-                    scored.append((coin, a))
+            if not (sqf["pass"] or a["rocket"] >= 65):
+                rejected.append((sym, f"качество недостаточно (Rocket {a.get('rocket', 0)}/100, "
+                                       f"{sqf['quality']})", a.get("rocket", 0)))
+                continue
+            if not a.get("rr_gate_pass"):
+                rejected.append((sym, f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}",
+                                  a.get("rocket", 0)))
+                log.info(f"[SR-GATE] top_long: {sym} отброшен -- "
+                         f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
+                continue
+
+            a["_sqf"] = sqf
+            scored.append((coin, a))
         except: pass
 
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
     top_long = scored[:5]
-
-    if not top_long:
-        fallback = []
-        for coin in pre[:30]:
-            try:
-                a = real_full_analysis(coin)
-                if not a.get("suspicious") and a["rsi_4h"] < 45:
-                    if not a.get("rr_gate_pass"):
-                        log.info(f"[SR-GATE] top_long fallback: {coin['symbol']} отброшен -- "
-                                 f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
-                        continue
-                    fallback.append((coin, a))
-            except: pass
-        fallback.sort(key=lambda x: x[1]["rsi_4h"])
-        top_long = fallback[:5]
+    rejected.sort(key=lambda r: r[2], reverse=True)  # ближе всех к проходу -- наверх сводки
 
     btc_ctx = get_btc_market_context()
-    return coins, top_long, btc_ctx
+    return coins, top_long, rejected[:3], btc_ctx
 
 
 async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -8463,7 +8476,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text("🟢 Анализирую рынок... ~20 сек")
 
         loop = asyncio.get_event_loop()
-        coins, top_long, btc_ctx = await loop.run_in_executor(None, _scan_top_long_sync)
+        coins, top_long, rejected_top3, btc_ctx = await loop.run_in_executor(None, _scan_top_long_sync)
 
         if coins is None:
             await msg.edit_text("❌ Нет данных CMC", reply_markup=nav_kb("top_long")); return
@@ -8476,9 +8489,18 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ])
 
         if not top_long:
+            # Плохой сигнал хуже отсутствия сигнала -- никакого fallback, честный ответ +
+            # топ-3 отклонённых кандидатов с причиной для прозрачности.
+            lines = [
+                "🟡 *Сейчас нет сетапов с R:R ≥ 1:1.5*",
+                "Рынок не даёт качественных входов.",
+            ]
+            if rejected_top3:
+                lines += ["", "*Ближе всех к проходу (для прозрачности):*", ""]
+                for sym, reason, _rocket in rejected_top3:
+                    lines.append(f"  • {sym}: {reason}")
             await msg.edit_text(
-                "🟡 *Лонг-кандидатов нет*\n\nРынок не даёт чётких сигналов.\nПопробуй позже.",
-                parse_mode="Markdown", reply_markup=nav
+                "\n".join(lines), parse_mode="Markdown", reply_markup=nav
             ); return
 
         btc_warn = ""
@@ -8570,10 +8592,13 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def _scan_top_short_sync():
     """Тяжёлая, полностью синхронная часть /short: CMC-фетч + до 80 блокирующих
-    real_full_analysis()-вызовов. Выполняется в run_in_executor (см. _scan_busy)."""
+    real_full_analysis()-вызовов. Выполняется в run_in_executor (см. _scan_busy).
+
+    Без fallback-логики: плохой сигнал хуже отсутствия сигнала (см. _scan_top_long_sync).
+    Отклонённые кандидаты собираются в rejected для честной сводки в cmd_top_short."""
     coins = get_top500()
     if not coins:
-        return None, None
+        return None, None, None
 
     pre = []
     for coin in coins:   #
@@ -8585,13 +8610,25 @@ def _scan_top_short_sync():
             pre.append(coin)
 
     scored = []
+    rejected = []  # (symbol, reason, rocket)
     for coin in pre[:80]:
         try:
             a = real_full_analysis(coin)
+            sym = coin["symbol"]
             #
-            if not a["is_long"] and not a.get("suspicious") and a["rocket"] >= 40:
+            if not a["is_long"]:
+                if a.get("suspicious"):
+                    rejected.append((sym, "подозрительный объём (возможен памп)", a.get("rocket", 0)))
+                    continue
+                if a["rsi_4h"] < RSI_EXTREME_SHORT:
+                    rejected.append((sym, f"RSI перепродан ({a['rsi_4h']:.0f}) для шорта", a.get("rocket", 0)))
+                    continue
+                if a["rocket"] < 40:
+                    rejected.append((sym, f"качество недостаточно (Rocket {a['rocket']}/100)", a.get("rocket", 0)))
+                    continue
                 if not a.get("rr_gate_pass"):
-                    log.info(f"[SR-GATE] top_short: {coin['symbol']} отброшен -- "
+                    rejected.append((sym, f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}", a.get("rocket", 0)))
+                    log.info(f"[SR-GATE] top_short: {sym} отброшен -- "
                              f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
                     continue
                 scored.append((coin, a))
@@ -8601,9 +8638,11 @@ def _scan_top_short_sync():
                 # уровни останутся зеркально неверными (лонговая структура на шорт-сигнале).
                 trade = ta_extra.build_trade_from_structure("short", a["price"], a.get("zones", {"above": [], "below": []}))
                 if not trade:
+                    rejected.append((sym, "нет зоны сопротивления для контрарианского входа", a.get("rocket", 0)))
                     continue
                 if not trade["rr_gate_pass"]:
-                    log.info(f"[SR-GATE] top_short (RSI-override): {coin['symbol']} отброшен -- "
+                    rejected.append((sym, f"R:R по TP1 {trade['rr_tp1']} < {ta_extra.SR_MIN_RR_TP1} (RSI-override)", a.get("rocket", 0)))
+                    log.info(f"[SR-GATE] top_short (RSI-override): {sym} отброшен -- "
                              f"R:R по TP1 {trade['rr_tp1']} < {ta_extra.SR_MIN_RR_TP1}")
                     continue
                 a_short = dict(a)
@@ -8624,7 +8663,8 @@ def _scan_top_short_sync():
 
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
     top_short = scored[:5]
-    return coins, top_short
+    rejected.sort(key=lambda r: r[2], reverse=True)
+    return coins, top_short, rejected[:3]
 
 
 async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -8637,7 +8677,7 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = await update.message.reply_text("🔴 Сканирую рынок на шорт-сетапы... ~40 сек")
 
         loop = asyncio.get_event_loop()
-        coins, top_short = await loop.run_in_executor(None, _scan_top_short_sync)
+        coins, top_short, rejected_top3 = await loop.run_in_executor(None, _scan_top_short_sync)
 
         if coins is None:
             await msg.edit_text("❌ Нет данных"); return
@@ -8650,9 +8690,16 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ])
 
         if not top_short:
+            lines = [
+                "🟡 *Сейчас нет сетапов с R:R ≥ 1:1.5*",
+                "Рынок не даёт качественных входов.",
+            ]
+            if rejected_top3:
+                lines += ["", "*Ближе всех к проходу (для прозрачности):*", ""]
+                for sym, reason, _rocket in rejected_top3:
+                    lines.append(f"  • {sym}: {reason}")
             await msg.edit_text(
-                "🟡 *Шорт-кандидатов нет*\n\nРынок не даёт чётких сигналов.\nПопробуй позже.",
-                parse_mode="Markdown", reply_markup=nav
+                "\n".join(lines), parse_mode="Markdown", reply_markup=nav
             ); return
 
         SEP = "━━━━━━━━━━━━━━━━━━━━"
