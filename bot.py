@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v102"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v103"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -9541,7 +9541,9 @@ async def _start_pump_detector(app):
     asyncio.create_task(run_miniticker_stream(ctx))
 
     signal_journal.init(app.bot, owner_id)
+    await signal_journal.startup_sync()
     asyncio.create_task(signal_journal.run_tracker())
+    asyncio.create_task(signal_journal.run_github_sync_loop())
 
 def main():
     # concurrent_updates=True -- иначе PTB диспетчит апдейты СТРОГО последовательно и не

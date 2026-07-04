@@ -6,18 +6,24 @@ BEST TRADE — Signal Journal (paper-trading трекер)
 TPx_HIT/SL_HIT, либо EXPIRED без входа за 72ч) — только наблюдение, никакого влияния
 на генерацию сигналов.
 
-Хранение: JSON-файл в рабочей директории (Railway ephemeral — при редеплое история
-обнуляется, это принято) + in-memory. Каждая запись несёт schema_version для будущей
-миграции формата.
+Хранение: JSON-файл в рабочей директории (Railway ephemeral -- при редеплое обнуляется)
++ in-memory, ПЛЮС персистентность через GitHub Contents API (journal/signals.json в том
+же приватном репо, что и код) -- см. блок GitHub-персистентности ниже. При старте бот
+подтягивает историю оттуда и мержит с локальной (last-write-wins по updated_ts), при
+каждом закрытии сигнала и раз в час фоном -- коммитит изменения обратно (не чаще 1
+коммита в 5 минут, батчем). Каждая запись несёт schema_version для будущей миграции
+формата.
 """
 
 import asyncio
+import base64
 import json
 import os
 import time
 from datetime import datetime
 
 import pytz
+import requests
 
 import live_prices
 
@@ -35,6 +41,173 @@ _journal = {}      # id (int) -> record dict
 _next_id = 1
 _bot = None
 _owner_chat_id = None
+
+# --- GitHub-персистентность ---------------------------------------------------------
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_OWNER = os.getenv("GITHUB_OWNER", "")
+GITHUB_REPO  = os.getenv("GITHUB_REPO", "")
+GITHUB_JOURNAL_PATH = "journal/signals.json"
+GITHUB_COMMIT_MIN_INTERVAL_SEC = 5 * 60     # не чаще 1 коммита в 5 минут
+GITHUB_SYNC_INTERVAL_SEC = 3600             # фоновый пресс раз в час
+
+_github_sha = None       # sha последнего известного содержимого файла (для PUT/конфликтов)
+_dirty = False           # есть несохранённые в GitHub изменения
+_last_commit_ts = 0.0
+_github_lock = None      # asyncio.Lock, создаётся лениво (нужен running loop)
+
+
+def _github_configured() -> bool:
+    return bool(GITHUB_TOKEN and GITHUB_OWNER and GITHUB_REPO)
+
+
+def _github_api_base() -> str:
+    return f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+
+
+def _github_headers() -> dict:
+    return {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+
+
+def _github_get_file_sync():
+    """GET journal/signals.json из репо. Возвращает (records_dict, sha) либо (None, None),
+    если файла ещё нет или GitHub не настроен/недоступен. Синхронно (блокирующий HTTP) --
+    вызывать только через run_in_executor из async-кода."""
+    if not _github_configured():
+        return None, None
+    try:
+        r = requests.get(f"{_github_api_base()}/contents/{GITHUB_JOURNAL_PATH}",
+                          headers=_github_headers(), timeout=15)
+        if r.status_code == 404:
+            return None, None
+        r.raise_for_status()
+        data = r.json()
+        content = base64.b64decode(data["content"]).decode()
+        payload = json.loads(content)
+        records = {int(k): v for k, v in payload.get("records", {}).items()}
+        return records, data["sha"]
+    except Exception as e:
+        print(f"Signal Journal: GitHub load failed ({e})")
+        return None, None
+
+
+def _github_put_file_sync(records: dict, sha):
+    """PUT journal/signals.json (создаёт либо обновляет, если sha совпадает с текущим на
+    GitHub). Возвращает новый sha при успехе, None при ошибке, "conflict" при 409 (sha
+    устарел -- вызывающий должен перечитать sha и повторить). Синхронно -- см. выше."""
+    if not _github_configured():
+        return None
+    try:
+        payload = {"schema_version": SCHEMA_VERSION, "records": records}
+        body = {
+            "message": f"journal: sync {len(records)} записей ({datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')})",
+            "content": base64.b64encode(json.dumps(payload).encode()).decode(),
+        }
+        if sha:
+            body["sha"] = sha
+        r = requests.put(f"{_github_api_base()}/contents/{GITHUB_JOURNAL_PATH}",
+                          headers=_github_headers(), json=body, timeout=20)
+        if r.status_code == 409:
+            return "conflict"
+        r.raise_for_status()
+        return r.json()["content"]["sha"]
+    except Exception as e:
+        print(f"Signal Journal: GitHub save failed ({e})")
+        return None
+
+
+def _merge_records(local: dict, remote: dict) -> dict:
+    """last-write-wins по id: для записей, встречающихся в обоих наборах, побеждает та,
+    у которой позже updated_ts (либо ts как фолбэк для старых записей без этого поля).
+    Записи, встречающиеся только в одном из наборов, сохраняются как есть."""
+    merged = dict(local)
+    for rid, rrec in remote.items():
+        lrec = merged.get(rid)
+        if lrec is None:
+            merged[rid] = rrec
+            continue
+        l_ts = lrec.get("updated_ts", lrec.get("ts", 0))
+        r_ts = rrec.get("updated_ts", rrec.get("ts", 0))
+        if r_ts > l_ts:
+            merged[rid] = rrec
+    return merged
+
+
+def _get_github_lock():
+    global _github_lock
+    if _github_lock is None:
+        _github_lock = asyncio.Lock()
+    return _github_lock
+
+
+async def startup_sync():
+    """Вызывается один раз при старте бота (после init()/_load()): подтягивает историю
+    из GitHub и мержит с локальной (last-write-wins по id). Не бросает исключений наружу
+    -- отсутствие/недоступность GitHub не должно мешать боту стартовать."""
+    global _journal, _next_id, _github_sha
+    if not _github_configured():
+        print("Signal Journal: GITHUB_TOKEN/GITHUB_OWNER/GITHUB_REPO не заданы -- "
+              "персистентность через GitHub отключена, история только локальная (ephemeral)")
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        remote_records, sha = await loop.run_in_executor(None, _github_get_file_sync)
+        _github_sha = sha
+        if remote_records is None:
+            print("Signal Journal: файл в GitHub ещё не создан -- будет создан при первом коммите")
+            return
+        before = len(_journal)
+        _journal = _merge_records(_journal, remote_records)
+        if _journal:
+            _next_id = max(_next_id, max(_journal.keys()) + 1)
+        _save()
+        print(f"Signal Journal: загружено {len(remote_records)} записей из GitHub "
+              f"(локально было {before}, после мержа {len(_journal)})")
+    except Exception as e:
+        print(f"Signal Journal: startup_sync failed ({e})")
+
+
+async def _commit_to_github(force: bool = False):
+    """Коммитит текущий _journal в GitHub, если есть несохранённые изменения (_dirty) и с
+    последнего коммита прошло >= GITHUB_COMMIT_MIN_INTERVAL_SEC (либо force=True -- для
+    часового фонового прохода). При конфликте sha (409) перечитывает файл и повторяет
+    один раз. Не бросает исключений наружу -- ошибка сети не должна ронять бота."""
+    global _dirty, _last_commit_ts, _github_sha
+    if not _github_configured() or not _dirty:
+        return
+    now = time.time()
+    if not force and (now - _last_commit_ts) < GITHUB_COMMIT_MIN_INTERVAL_SEC:
+        return
+
+    async with _get_github_lock():
+        if not _dirty:  # другой вызов уже закоммитил, пока мы ждали лок
+            return
+        loop = asyncio.get_event_loop()
+        records = dict(_journal)
+        for attempt in range(2):
+            result = await loop.run_in_executor(None, _github_put_file_sync, records, _github_sha)
+            if result == "conflict":
+                remote_records, sha = await loop.run_in_executor(None, _github_get_file_sync)
+                _github_sha = sha
+                if remote_records is not None:
+                    records = _merge_records(records, remote_records)
+                continue
+            if result:  # новый sha -- успех
+                _github_sha = result
+                _dirty = False
+                _last_commit_ts = now
+            break
+
+
+async def run_github_sync_loop():
+    """Фоновый цикл: раз в час форсирует коммит в GitHub (если есть несохранённые
+    изменения) -- подстраховка на случай, если событийные коммиты (при закрытии сигнала)
+    были пропущены (краш, рейт-лимит и т.п.)."""
+    while True:
+        await asyncio.sleep(GITHUB_SYNC_INTERVAL_SEC)
+        try:
+            await _commit_to_github(force=True)
+        except Exception as e:
+            print(f"Signal Journal: run_github_sync_loop: {e}")
 
 
 def init(bot, owner_chat_id):
@@ -90,13 +263,14 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
 
     grade: "A+"/"A"/"B"/"C" (или None) -- грейд карточки на момент сигнала (см.
     bot._signal_grade), для разбивки win rate по грейдам в /journal."""
-    global _next_id
+    global _next_id, _dirty
     rec_id = _next_id
     _next_id += 1
     now = time.time()
     rec = {
         "id": rec_id, "schema_version": SCHEMA_VERSION,
         "ts": now, "timestamp": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_ts": now,
         "source": source, "symbol": symbol.upper().replace("USDT", ""),
         "direction": direction,
         "entry_lo": entry_lo, "entry_hi": entry_hi, "sl": sl,
@@ -109,6 +283,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
         "outcome": None, "outcome_ts": None, "outcome_level": None, "actual_r": None,
     }
     _journal[rec_id] = rec
+    _dirty = True
     _save()
     return rec_id
 
@@ -181,10 +356,14 @@ async def _notify_outcome(rec):
 
 async def run_tracker():
     """Каждые 30с сверяет активные записи с live_prices, обновляет статус. Только
-    наблюдение -- не влияет на генерацию сигналов."""
+    наблюдение -- не влияет на генерацию сигналов. При каждом ЗАКРЫТИИ сигнала (переход
+    в TERMINAL_STATUSES) -- пробует закоммитить журнал в GitHub (см. _commit_to_github,
+    сам ограничен 1 коммитом в 5 минут)."""
+    global _dirty
     while True:
         now = time.time()
         changed = False
+        closed = False
         for rec in list(_journal.values()):
             if rec["status"] in TERMINAL_STATUSES:
                 continue
@@ -197,12 +376,15 @@ async def run_tracker():
                     rec["status"] = "ENTERED"
                     rec["entered_ts"] = now
                     rec["entered_price"] = price
+                    rec["updated_ts"] = now
                     changed = True
                 elif now - rec["ts"] > PENDING_EXPIRE_SEC:
                     rec["status"] = "EXPIRED"
                     rec["outcome"] = "EXPIRED"
                     rec["outcome_ts"] = now
+                    rec["updated_ts"] = now
                     changed = True
+                    closed = True
 
             elif rec["status"] == "ENTERED":
                 status, level = _check_outcome(rec["direction"], price, rec["sl"],
@@ -213,11 +395,19 @@ async def run_tracker():
                     rec["outcome_level"] = level
                     rec["outcome_ts"] = now
                     rec["actual_r"] = _compute_actual_r(rec, level)
+                    rec["updated_ts"] = now
                     changed = True
+                    closed = True
                     await _notify_outcome(rec)
 
         if changed:
+            _dirty = True
             _save()
+        if closed:
+            try:
+                await _commit_to_github()
+            except Exception as e:
+                print(f"Signal Journal: _commit_to_github (on closure) failed: {e}")
         await asyncio.sleep(TRACK_INTERVAL_SEC)
 
 
