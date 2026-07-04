@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": {"999999": {"id": 999999, "source": "MANUAL_TOKEN_TEST", "symbol": "TEST", "note": "one-off write-permission check by Claude, safe to ignore/overwrite"}}}
