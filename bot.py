@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v104"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v105"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -9533,11 +9533,20 @@ async def cmd_journal_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "⚠️ GitHub-персистентность не настроена -- нет GITHUB_TOKEN/GITHUB_OWNER/GITHUB_REPO "
             "в переменных окружения. Журнал работает только локально (ephemeral).")
         return
-    text = (
-        f"{'✅ Коммит выполнен' if status['was_dirty'] else 'ℹ️ Пропущено — нечего сохранять'}\n"
-        f"Записей в журнале: {status['records']}\n"
-        f"GitHub sha: `{status.get('sha') or '—'}`"
-    )
+    if not status["success"]:
+        text = (
+            f"❌ Коммит НЕ выполнен (ошибка GitHub API)\n"
+            f"Записей в журнале: {status['records']}\n"
+            f"Ошибка: `{status.get('error') or 'неизвестна'}`"
+        )
+    elif not status["was_dirty"]:
+        text = f"ℹ️ Пропущено — нечего сохранять\nЗаписей в журнале: {status['records']}"
+    else:
+        text = (
+            f"✅ Коммит выполнен\n"
+            f"Записей в журнале: {status['records']}\n"
+            f"GitHub sha: `{status.get('sha') or '—'}`"
+        )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
