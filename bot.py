@@ -109,7 +109,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v103"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v104"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -9518,6 +9518,29 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(text, parse_mode="Markdown")
 
+
+async def cmd_journal_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: форсирует немедленный коммит Signal Journal в GitHub (в обход
+    5-минутного рейт-лимита) -- для проверки персистентности или перед плановым
+    редеплоем."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    status = await signal_journal.force_sync()
+    if not status["configured"]:
+        await update.message.reply_text(
+            "⚠️ GitHub-персистентность не настроена -- нет GITHUB_TOKEN/GITHUB_OWNER/GITHUB_REPO "
+            "в переменных окружения. Журнал работает только локально (ephemeral).")
+        return
+    text = (
+        f"{'✅ Коммит выполнен' if status['was_dirty'] else 'ℹ️ Пропущено — нечего сохранять'}\n"
+        f"Записей в журнале: {status['records']}\n"
+        f"GitHub sha: `{status.get('sha') or '—'}`"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def _start_pump_detector(app):
     """post_init hook — запускает pump_detector (kline-слой) и грубый Bybit tickers-детект
     (полное покрытие рынка) в том же event loop, что и бот."""
@@ -9559,6 +9582,7 @@ def main():
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
     app.add_handler(CommandHandler("journal",   cmd_journal))
+    app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
     app.add_handler(CommandHandler("long",      cmd_top_long))
     app.add_handler(CommandHandler("short",     cmd_top_short))

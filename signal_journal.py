@@ -210,6 +210,16 @@ async def run_github_sync_loop():
             print(f"Signal Journal: run_github_sync_loop: {e}")
 
 
+async def force_sync() -> dict:
+    """Форсирует немедленный коммит в GitHub в обход 5-минутного рейт-лимита -- для
+    owner-команды /journal_sync (проверка персистентности, или перед плановым редеплоем)."""
+    if not _github_configured():
+        return {"configured": False}
+    was_dirty = _dirty
+    await _commit_to_github(force=True)
+    return {"configured": True, "was_dirty": was_dirty, "records": len(_journal), "sha": _github_sha}
+
+
 def init(bot, owner_chat_id):
     """Вызывается один раз при старте бота — нужен для owner-уведомлений об исходах."""
     global _bot, _owner_chat_id
