@@ -87,6 +87,7 @@ def format_market_trend(ta):
 """
 
 import asyncio
+import sys
 import time
 import io
 import logging
@@ -105,12 +106,13 @@ import pytz
 import signal_journal
 import ta_extra
 import fa_engine
+import signal_loop
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v111"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v112"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2855,6 +2857,13 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try: await q.message.delete()
         except: pass
         await _do_full_analysis(ctx.bot, q.message.chat_id, symbol)
+
+    elif data.startswith("sigloop_watch_"):
+        # Слежение уже идёт автоматически с момента отправки алерта (см.
+        # signal_loop.run_exit_tracker) -- кнопка просто подтверждает это владельцу,
+        # отдельного watch-списка не заводим (не дублируем состояние).
+        symbol = data[len("sigloop_watch_"):]
+        await q.answer(f"Слежу за {symbol}USDT — оповещу о входе/TP/SL/развороте", show_alert=True)
 
     elif data == "market_overview":
         await q.edit_message_text("  ...", parse_mode="Markdown")
@@ -9231,11 +9240,21 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append(f"  По грейдам: {', '.join(grade_parts)}")
         return "\n".join(lines)
 
+    sl_stats = signal_journal.get_stats_for_source("signal_loop")
+    sl_active = signal_loop.get_active_count()
+    if sl_stats["closed"]:
+        sl_line = (f"*Сигнальный контур (signal_loop):* {sl_active} активных, "
+                   f"{sl_stats['closed']} закрытых, win rate {sl_stats['win_rate']}% "
+                   f"({sl_stats['wins']}W/{sl_stats['closed']-sl_stats['wins']}L)")
+    else:
+        sl_line = f"*Сигнальный контур (signal_loop):* {sl_active} активных, закрытых пока нет"
+
     text = "\n\n".join([
         "*Signal Journal — статистика*",
         _fmt_window(24 * 3600, "24ч"),
         _fmt_window(7 * 24 * 3600, "7д"),
         _fmt_window(None, "Всё время"),
+        sl_line,
     ])
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -9361,6 +9380,26 @@ def main():
         minutes=15,
         args=[app.bot],
         next_run_time=datetime.now(TZ)
+    )
+    # BUY/SELL сигнальный контур (signal_loop.py). Передаём sys.modules[__name__]
+    # (текущий реально исполняющийся модуль, __name__=="__main__" при запуске
+    # `python bot.py") -- а не `import bot" изнутри signal_loop.py, иначе Python
+    # создал бы ВТОРОЙ независимый экземпляр модуля bot (т.к. "bot" ещё не
+    # зарегистрирован в sys.modules при запуске как __main__) со своими копиями
+    # кэшей/rate-limiter'ов, отдельными от того, что используют все остальные
+    # хендлеры -- см. докстринг signal_loop.py.
+    owner_id_loop = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    scheduler.add_job(
+        signal_loop.run_signal_loop,
+        "interval",
+        minutes=signal_loop.STAGE1_INTERVAL_MIN,
+        args=[sys.modules[__name__], app.bot, owner_id_loop],
+    )
+    scheduler.add_job(
+        signal_loop.run_exit_tracker,
+        "interval",
+        minutes=signal_loop.EXIT_TRACKER_INTERVAL_MIN,
+        args=[sys.modules[__name__], app.bot],
     )
     scheduler.start()
     log.info(" BEST TRADE v32.0 | Supply/Demand | Real-time signals | UTC+3")
