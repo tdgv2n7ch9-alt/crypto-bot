@@ -274,6 +274,14 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
             return {"ok": True, "has_setup": False,
                     "reason": "нет зоны для входа от структуры (find_sr_zones не нашёл валидной зоны)",
                     "wait_for": "ждать формирования чёткого swing-уровня (2+ касания)"}
+        if not trade.get("rr_gate_pass"):
+            # Жёсткий R:R-гейт: даже если чеклист в сумме >= порога за счёт других
+            # пунктов, плохой R:R сам по себе блокирует план — "плохой сигнал хуже
+            # отсутствия сигнала" (тот же принцип, что и в bot.py real_full_analysis/
+            # TOP_LONG-TOP_SHORT после v101).
+            return {"ok": True, "has_setup": False,
+                    "reason": f"R:R по структуре {trade['rr_tp1']:.2f} < 1.5 — гейт не пройден",
+                    "wait_for": "ждать более выгодной цены входа или более дальнего TP"}
         entry1 = ta_extra.smart_round(trade["entry1"])
         entry2 = ta_extra.smart_round(trade["entry2"])
         entry3 = ta_extra.smart_round(trade["entry3"])
