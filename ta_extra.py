@@ -737,11 +737,17 @@ def equal_levels(candles: list, tolerance_pct: float = 0.3) -> list:
     return out
 
 
-def wyckoff_phase_heuristic(closes_1d: list, price: float) -> dict:
-    """Блок 9 ТЗ: Wyckoff-эвристика по диапазону/положению цены (БЕЗ объёма — CoinGecko
-    free OHLC не отдаёт объём по свече, честно помечаем это в note, а не подставляем
-    фиктивный сигнал)."""
-    out = {"phase": "не определена", "note": "объём: нет данных (CoinGecko free OHLC не отдаёт объём по свече)"}
+def wyckoff_phase_heuristic(closes_1d: list, price: float, vols_1d: list = None) -> dict:
+    """Блок 9 ТЗ: Wyckoff-эвристика по диапазону/положению цены. Классификация фазы —
+    только по цене (без объёмной компоненты, см. докстринг модуля — упрощённая
+    эвристика). vols_1d — опционально, только для честной пометки в note: если объём
+    реально есть в данных (Bybit — основной источник свечей), это отмечается явно, если
+    его нет вообще или он везде 0.0 (CoinGecko-фоллбек), note честно об этом говорит,
+    вместо того чтобы подставлять фиктивный сигнал."""
+    has_volume = bool(vols_1d) and any((v or 0) > 0 for v in vols_1d)
+    vol_note = ("объём: доступен, но не используется в этой упрощённой эвристике" if has_volume
+                else "объём: нет данных (источник свечей не отдаёт объём по этой монете)")
+    out = {"phase": "не определена", "note": vol_note}
     if len(closes_1d) < 20:
         out["note"] = "мало данных 1D для определения фазы. " + out["note"]
         return out

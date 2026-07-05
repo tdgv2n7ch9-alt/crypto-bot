@@ -236,13 +236,15 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
 
     # ── Блок 9: фаза рынка (BTC + символ), Wyckoff-эвристика ──
     def _phase():
-        sym_phase = ta_extra.wyckoff_phase_heuristic(closes_1d, price)
+        vols_1d = [c.get("vol", 0) for c in c1d] if c1d else []
+        sym_phase = ta_extra.wyckoff_phase_heuristic(closes_1d, price, vols_1d=vols_1d)
         if symbol == "BTC":
             btc_phase = sym_phase
         else:
             btc_c1d = bot.get_binance_ohlc("BTC", "1d", 365) or []
             btc_closes = [c["close"] for c in btc_c1d] if btc_c1d else []
-            btc_phase = (ta_extra.wyckoff_phase_heuristic(btc_closes, btc_closes[-1])
+            btc_vols = [c.get("vol", 0) for c in btc_c1d] if btc_c1d else []
+            btc_phase = (ta_extra.wyckoff_phase_heuristic(btc_closes, btc_closes[-1], vols_1d=btc_vols)
                         if btc_closes else {"phase": "нет данных", "note": ""})
         return {"ok": True, "symbol_phase": sym_phase, "btc_phase": btc_phase}
     b9 = _safe("Блок 9 (Фаза рынка)", _phase)

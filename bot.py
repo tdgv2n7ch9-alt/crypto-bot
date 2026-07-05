@@ -110,7 +110,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v108"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v109"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -486,8 +486,53 @@ def _cg_slug(symbol: str) -> str:
     sym = symbol.upper().replace("USDT","").replace("BUSD","").replace("USD","")
     return _CG_SLUG_MAP.get(sym, sym.lower())
 
-def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
-    """OHLC через CoinGecko (Binance заблокирован на Railway).
+BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
+_BYBIT_INTERVAL_MAP = {"1h": "60", "1H": "60", "4h": "240", "4H": "240",
+                        "1d": "D", "1D": "D", "1w": "W", "1W": "W"}
+_bybit_kline_lock = threading.Lock()
+_bybit_kline_last_call_ts = 0.0
+_BYBIT_KLINE_MIN_INTERVAL = 0.15   # щедрый лимит Bybit REST (не сравнить с CoinGecko free)
+
+
+def _get_ohlc_bybit(symbol: str, interval: str, limit: int) -> list:
+    """OHLC через Bybit /v5/market/kline (category=linear) — первичный источник свечей:
+    доступен из EU/Railway (в отличие от Binance), реальный volume по свече (в отличие от
+    CoinGecko free /ohlc, который всегда отдаёт vol=0.0), до 1000 баров за один запрос,
+    честные интервалы 1h/4h/1d/1w без гранулярной путаницы CoinGecko. Пустой список, если
+    символ не является Bybit USDT-linear перпетуалом или запрос не удался — вызывающая
+    сторона (get_binance_ohlc) в этом случае идёт в CoinGecko-фоллбек."""
+    biv = _BYBIT_INTERVAL_MAP.get(interval)
+    if not biv:
+        return []
+    global _bybit_kline_last_call_ts
+    try:
+        with _bybit_kline_lock:
+            wait = _BYBIT_KLINE_MIN_INTERVAL - (time.time() - _bybit_kline_last_call_ts)
+            if wait > 0:
+                time.sleep(wait)
+            r = requests.get(BYBIT_KLINE_URL, params={
+                "category": "linear", "symbol": f"{symbol.upper()}USDT",
+                "interval": biv, "limit": min(1000, max(1, limit)),
+            }, timeout=10)
+            _bybit_kline_last_call_ts = time.time()
+        r.raise_for_status()
+        rows = r.json().get("result", {}).get("list", [])
+        if not rows:
+            return []
+        rows = list(reversed(rows))  # Bybit отдаёт новые бары первыми — разворачиваем в хронологический порядок
+        return [{
+            "open": float(row[1]), "high": float(row[2]),
+            "low": float(row[3]), "close": float(row[4]),
+            "vol": float(row[5]), "timestamp": int(row[0]),
+        } for row in rows]
+    except Exception:
+        return []
+
+
+def _get_ohlc_coingecko(symbol: str, interval: str = "4h", limit: int = 200) -> list:
+    """OHLC через CoinGecko — фоллбек get_binance_ohlc() для монет вне Bybit USDT-linear
+    перпетуалов (делистнутые/неперпетуальные и т.п.), Binance сам по себе заблокирован
+    на Railway.
 
     CoinGecko free /ohlc отдаёт фиксированную гранулярность по диапазону days,
     а не по нашему interval: 1д -> 30-мин бары, 7-30д -> 4ч бары, 90-365д -> 4-дневные бары.
@@ -520,6 +565,18 @@ def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> lis
     except Exception:
         pass
     return []
+
+
+def get_binance_ohlc(symbol: str, interval: str = "4h", limit: int = 200) -> list:
+    """OHLC: Bybit REST (первичный источник — см. _get_ohlc_bybit) с фоллбеком на
+    CoinGecko (_get_ohlc_coingecko) для монет вне Bybit USDT-linear перпетуалов. Имя
+    оставлено прежним (get_binance_ohlc) — множество вызывающих мест по всему bot.py/
+    ta_extra.py/fa_engine.py, переименование не даёт функциональной пользы и рискует
+    разойтись местами; сам Binance по-прежнему недоступен с Railway."""
+    data = _get_ohlc_bybit(symbol, interval, limit)
+    if data:
+        return data
+    return _get_ohlc_coingecko(symbol, interval, limit)
 
 def get_binance_24h(symbol: str) -> dict:
     """24h stats: high, low, open, last price — через CoinGecko (Binance заблокирован на Railway)"""
