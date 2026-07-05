@@ -647,12 +647,24 @@ def elliott_wave_heuristic(closes_1d: list, rsi_1d: float) -> dict:
     return out
 
 
-def smc_setup_type(candles_4h: list) -> dict:
+def smc_setup_type(candles_4h: list, bias_direction: str = None) -> dict:
     """Блок 3 ТЗ: BOS (пробой по тренду) / CHoCH (смена характера) / range (равные хаи/лои),
-    по фрактальным swing-точкам 4h. Отличие BOS от CHoCH: BOS — продолжение уже
-    установленного тренда (пред. свинги тоже HH/HL или LH/LL), CHoCH — первый пробой
-    ПРОТИВ предыдущей структуры (разворотный сигнал)."""
-    out = {"type": None, "label": "структура не определена"}
+    по фрактальным swing-точкам 4h.
+
+    ВАЖНО (см. историю бага v110->v111): bias_direction (блок 1 — Multi-TF bias, тот же
+    единый источник структуры, что использует чеклист) — ЕДИНСТВЕННЫЙ критерий "по
+    тренду"/"против тренда" здесь. Раньше BOS/CHoCH определялись по собственной 4h-локальной
+    истории свингов (prior_up/prior_down), независимо от bias — из-за этого блоки 1/3/5
+    могли противоречить друг другу (bias SHORT + "BOS вверх ПО ТРЕНДУ" одновременно).
+    Теперь: пробой вверх при bias_direction=="long" -> BOS (продолжение, +скор), пробой
+    вверх при bias_direction=="short" -> CHoCH (разворот ПРОТИВ bias, предупреждение,
+    -скор). Если bias_direction не передан (NEUTRAL/неизвестен) — сверять не с чем,
+    возвращается только факт пробоя без BOS/CHoCH ярлыка (aligned=None).
+
+    Возвращает {"type", "label", "aligned": True/False/None} — aligned=True означает
+    "пробой согласован с bias" (BOS), False — "пробой против bias" (CHoCH,
+    контр-сигнал), None — bias не определён либо пробоя/структуры нет."""
+    out = {"type": None, "label": "структура не определена", "aligned": None}
     highs, lows = swing_points(candles_4h)
     if len(highs) < 3 or len(lows) < 3:
         return out
@@ -668,19 +680,27 @@ def smc_setup_type(candles_4h: list) -> dict:
         out.update(type="range", label="range (равные хаи/лои — накопление в диапазоне)")
         return out
 
-    prior_up = h[0] < h[1] and l[0] < l[1]
-    prior_down = h[0] > h[1] and l[0] > l[1]
     last_hh = h[2] > h[1]
     last_ll = l[2] < l[1]
+    if not last_hh and not last_ll:
+        return out  # ни пробоя вверх, ни вниз -- структура не определена
 
-    if prior_up and last_hh:
-        out.update(type="BOS_bull", label="BOS — пробой структуры вверх по тренду")
-    elif prior_down and last_hh:
-        out.update(type="CHoCH_bull", label="CHoCH — смена характера, первый пробой вверх")
-    elif prior_down and last_ll:
-        out.update(type="BOS_bear", label="BOS — пробой структуры вниз по тренду")
-    elif prior_up and last_ll:
-        out.update(type="CHoCH_bear", label="CHoCH — смена характера, первый пробой вниз")
+    break_dir = "long" if last_hh else "short"  # пробой вверх -- в пользу лонга, вниз -- шорта
+    break_word = "вверх" if last_hh else "вниз"
+
+    if bias_direction is None:
+        out.update(type=("break_up" if last_hh else "break_down"),
+                   label=f"Пробой структуры {break_word} (bias NEUTRAL — BOS/CHoCH не размечены)")
+        return out
+
+    if break_dir == bias_direction:
+        out.update(type=("BOS_bull" if last_hh else "BOS_bear"),
+                   label=f"BOS — пробой структуры {break_word} по тренду (согласовано с bias {bias_direction.upper()})",
+                   aligned=True)
+    else:
+        out.update(type=("CHoCH_bull" if last_hh else "CHoCH_bear"),
+                   label=f"CHoCH — пробой {break_word} ПРОТИВ bias {bias_direction.upper()} — возможный разворот",
+                   aligned=False)
     return out
 
 

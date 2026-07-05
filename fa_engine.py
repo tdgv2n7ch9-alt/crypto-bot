@@ -113,25 +113,29 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     b2 = _safe("Блок 2 (Elliott)", ta_extra.elliott_wave_heuristic, closes_1d, rsi_1d)
     result["block2_elliott"] = b2
 
-    # ── Блок 3: SMC-сетап ──
-    b3 = _safe("Блок 3 (SMC setup)", ta_extra.smc_setup_type, c4h)
+    # ── Блок 3: SMC-сетап (bias — единый источник "по тренду"/"против", см. ta_extra.smc_setup_type) ──
+    b3 = _safe("Блок 3 (SMC setup)", ta_extra.smc_setup_type, c4h, direction)
     result["block3_smc"] = b3
 
     # ── Блок 4: POI ──
     def _poi():
         poi = []
         for side in ("below", "above"):
+            # below цены -- поддержка (цена ищет опору снизу), above -- сопротивление
+            role = "поддержка" if side == "below" else "сопротивление"
             for z in zones.get(side, [])[:4]:
                 poi.append({
-                    "side": side, "price": z["mid"],
+                    "side": side, "role": role, "price": z["mid"],
                     "distance_pct": round((z["mid"] - price) / price * 100, 2),
                     "touches": z["touches"], "sources": z["sources"],
                 })
         fvg = ta_extra.find_fvg_zones(c4h, price)
         for f in fvg[:6]:
+            side = "above" if f["mid"] > price else "below"
             poi.append({
-                "side": "above" if f["mid"] > price else "below", "price": f["mid"],
-                "distance_pct": f["distance_pct"], "touches": 0, "sources": ["fvg " + f["type"]],
+                "side": side, "role": "сопротивление" if side == "above" else "поддержка",
+                "price": f["mid"], "distance_pct": f["distance_pct"], "touches": 0,
+                "sources": ["fvg " + f["type"]],
             })
         poi.sort(key=lambda p: abs(p["distance_pct"]))
         return {"ok": True, "poi": poi}
@@ -196,26 +200,43 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     result["block5_checklist"] = b5
 
     # ── Блок 7: OI-матрица + funding + L/S ──
+    def _funding_label(rate):
+        # Своя интерпретация funding rate (не bot.get_funding_rate()["signal"] --
+        # у той функции строки-константы повреждены отсутствующей кириллицей, см.
+        # историю бага v110->v111).
+        if rate > 0.1:    return "лонги перегреты (критически)"
+        if rate > 0.05:   return "лонги перегреты"
+        if rate > 0:      return "небольшой перевес в лонги"
+        if rate > -0.05:  return "небольшой перевес в шорты"
+        return "шорты перегреты — риск сквиза вверх"
+
     def _oi_matrix():
         oi_change = bot._get_oi_change(symbol)
         funding = b5.get("funding") or bot.get_funding_rate(symbol)
         ls_ratio = bot._get_ls_ratio(symbol)
+        oi_combo = None
         if oi_change and ch1h != 0:
             if ch1h > 0 and oi_change > 0:
+                oi_combo = "up_up"
                 oi_text = "Цена↑ OI↑ — новые лонги, тренд подтверждён объёмом позиций"
             elif ch1h > 0 and oi_change < 0:
+                oi_combo = "up_down"
                 oi_text = "Цена↑ OI↓ — шорт-сквиз, движение может исчерпаться"
             elif ch1h < 0 and oi_change > 0:
+                oi_combo = "down_up"
                 oi_text = "Цена↓ OI↑ — новые шорты, реальное давление продавцов"
             else:
+                oi_combo = "down_down"
                 oi_text = "Цена↓ OI↓ — закрытие позиций, движение слабеет"
         else:
             oi_text = "OI: недостаточно данных для интерпретации"
         ls_text = ("лонгов заметно больше шортов (риск шорт-сквиза выше)" if ls_ratio > 1.5
                    else "шортов заметно больше лонгов (риск лонг-сквиза выше)" if ls_ratio < 0.7
                    else "L/S сбалансирован")
-        return {"ok": True, "oi_change": oi_change, "oi_text": oi_text,
-                "funding": funding, "ls_ratio": ls_ratio, "ls_text": ls_text}
+        funding_label = _funding_label(funding["rate"]) if funding.get("ok") else None
+        return {"ok": True, "oi_change": oi_change, "oi_combo": oi_combo, "oi_text": oi_text,
+                "funding": funding, "funding_label": funding_label,
+                "ls_ratio": ls_ratio, "ls_text": ls_text}
     b7 = _safe("Блок 7 (OI/Funding/L-S)", _oi_matrix)
     result["block7_oi"] = b7
 
@@ -236,7 +257,10 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
 
     # ── Блок 9: фаза рынка (BTC + символ), Wyckoff-эвристика ──
     def _phase():
-        vols_1d = [c.get("vol", 0) for c in c1d] if c1d else []
+        # vols_1d должен зеркалить фоллбек closes_1d (c1d -> c4h) -- иначе при пустом
+        # c1d (но не c4h) честная пометка "объём: нет данных" ложно срабатывает даже
+        # когда объём реально есть в c4h (см. историю бага v110->v111).
+        vols_1d = [c.get("vol", 0) for c in c1d] if c1d else [c.get("vol", 0) for c in c4h]
         sym_phase = ta_extra.wyckoff_phase_heuristic(closes_1d, price, vols_1d=vols_1d)
         if symbol == "BTC":
             btc_phase = sym_phase
@@ -311,37 +335,75 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     b11 = _safe("Блок 11 (План сделки)", _trade_plan)
     result["block11_trade_plan"] = b11
 
-    # ── Блок 12: Rocket Score (агрегация) ──
+    # ── Блок 12: Rocket Score (агрегация — база 50 + сумма факторов ВСЕХ блоков) ──
     def _rocket_score():
         score = 50
-        factors = []
+        factors = []  # каждый пункт попадает сюда независимо от знака/нуля -- полная расшифровка
 
         d_ema = ta_extra.ema_stack_score_delta(ema_ctx, direction) if direction else 0
-        if d_ema: score += d_ema; factors.append((f"EMA-стек 4H {'за' if d_ema>0 else 'против'}", d_ema))
+        stack_4h = (ema_ctx.get("tf_4h") or {}).get("stack", "н/д")
+        score += d_ema
+        factors.append((f"EMA-стек 4H: {stack_4h}", d_ema))
 
         d_sweep = ta_extra.sweep_score_delta(sweep_1h, sweep_4h, direction) if direction else 0
-        if d_sweep: score += d_sweep; factors.append((f"Свип ликвидности {'за' if d_sweep>0 else 'против'}", d_sweep))
+        score += d_sweep
+        factors.append((f"Свип ликвидности {'за' if d_sweep>0 else 'против' if d_sweep<0 else '(нет свежего)'}", d_sweep))
 
         d_elliott = b2.get("score_delta", 0) if b2.get("ok", True) else 0
-        if d_elliott: score += d_elliott; factors.append((f"Elliott: {b2.get('label','')}", d_elliott))
+        score += d_elliott
+        factors.append((f"Elliott: {b2.get('label','н/д')}", d_elliott))
 
         checklist_score = b5.get("score", 0) if b5.get("ok") else 0
         d_checklist = (checklist_score - 3) * 5
-        if d_checklist: score += d_checklist; factors.append((f"Чеклист {checklist_score}/6", d_checklist))
+        score += d_checklist
+        factors.append((f"Чеклист {checklist_score}/6", d_checklist))
 
-        phase = b9.get("symbol_phase", {}).get("phase", "") if b9.get("ok") else ""
+        phase = b9.get("symbol_phase", {}).get("phase", "н/д") if b9.get("ok") else "н/д"
         d_phase = 0
         if direction == "long" and ("Накопление" in phase or "Маркап" in phase): d_phase = 8
         elif direction == "short" and ("Распределение" in phase or "Маркдаун" in phase): d_phase = 8
         elif direction == "long" and ("Распределение" in phase or "Маркдаун" in phase): d_phase = -8
         elif direction == "short" and ("Накопление" in phase or "Маркап" in phase): d_phase = -8
-        if d_phase: score += d_phase; factors.append((f"Фаза рынка: {phase}", d_phase))
+        score += d_phase
+        factors.append((f"Фаза рынка: {phase}", d_phase))
 
-        smc_type = b3.get("type") if b3.get("ok", True) else None
-        d_smc = 0
-        if smc_type and "CHoCH" in smc_type: d_smc = 10
-        elif smc_type and "BOS" in smc_type: d_smc = 6
-        if d_smc: score += d_smc; factors.append((f"SMC-сетап: {(smc_type or '').replace('_', ' ')}", d_smc))
+        # SMC: bias -- единственный критерий "по тренду"/"против" (см. ta_extra.smc_setup_type).
+        # aligned=True (BOS) -- продолжение bias, +скор; aligned=False (CHoCH) -- разворот
+        # ПРОТИВ bias, предупреждение, -скор; aligned=None (range/bias NEUTRAL/структура
+        # не определена) -- нейтрально, 0.
+        smc_aligned = b3.get("aligned") if b3.get("ok", True) else None
+        d_smc = 8 if smc_aligned is True else (-8 if smc_aligned is False else 0)
+        score += d_smc
+        factors.append((f"SMC-сетап: {b3.get('label','н/д')}", d_smc))
+
+        # OI-матрица: подтверждает ли реальное изменение открытого интереса направление сделки
+        oi_combo = b7.get("oi_combo") if b7.get("ok") else None
+        d_oi = 0
+        if oi_combo == "up_up":     d_oi = 6 if direction == "long" else -6
+        elif oi_combo == "down_up": d_oi = 6 if direction == "short" else -6
+        elif oi_combo == "up_down": d_oi = 2 if direction == "long" else 0
+        elif oi_combo == "down_down": d_oi = 2 if direction == "short" else 0
+        score += d_oi
+        factors.append((f"OI-матрица: {b7.get('oi_text','н/д') if b7.get('ok') else 'нет данных'}", d_oi))
+
+        # Funding: перегрев в одну сторону -- контр-сигнал для неё же (риск сквиза/ликвидаций)
+        fr = b7.get("funding", {}) if b7.get("ok") else {}
+        d_funding = 0
+        if fr.get("ok") and direction:
+            rate = fr["rate"]
+            if rate > 0.05:   d_funding = -4 if direction == "long" else 4
+            elif rate < -0.05: d_funding = 4 if direction == "long" else -4
+        score += d_funding
+        factors.append((f"Funding: {b7.get('funding_label','н/д') if fr.get('ok') else 'нет данных'}", d_funding))
+
+        # L/S ratio: перекос в сторону -- риск сквиза именно в эту сторону (контр-сигнал для неё)
+        ls_ratio = b7.get("ls_ratio", 1.0) if b7.get("ok") else 1.0
+        d_ls = 0
+        if direction:
+            if ls_ratio > 1.5:   d_ls = 3 if direction == "short" else -3
+            elif ls_ratio < 0.7: d_ls = 3 if direction == "long" else -3
+        score += d_ls
+        factors.append((f"L/S {ls_ratio:.2f}: {b7.get('ls_text','н/д') if b7.get('ok') else 'нет данных'}", d_ls))
 
         entry_zone_touches = b11.get("entry_zone_touches", 0) if b11.get("has_setup") else 0
         d_polarity = 5 if entry_zone_touches >= 3 else 0
@@ -368,6 +430,13 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
                          f"R:R {b11['rr_tp1']} по TP1. Чеклист {b5.get('score',0)}/6.")
         else:
             lines.append(f"Сетапа нет: {b11.get('reason','н/д')}.")
+        # Блок 3 (фаза) ⟷ bias конфликт: шорт в фазе накопления/маркапа или лонг в
+        # фазе дистрибуции/маркдауна -- контртренд к фазе, отдельное предупреждение.
+        phase = b9.get("symbol_phase", {}).get("phase", "") if b9.get("ok") else ""
+        if direction == "short" and ("Накопление" in phase or "Маркап" in phase):
+            lines.append(f"⚠️ Контртренд к фазе рынка: шорт в фазе «{phase}» — повышенный риск.")
+        elif direction == "long" and ("Распределение" in phase or "Маркдаун" in phase):
+            lines.append(f"⚠️ Контртренд к фазе рынка: лонг в фазе «{phase}» — повышенный риск.")
         if meme_risk:
             lines.append("⚠️ Низкая ликвидность/мемкоин — при входе снизить размер позиции вдвое.")
         return {"ok": True, "text": " ".join(lines)}
@@ -448,7 +517,8 @@ def render_full_analysis_card(result: dict) -> str:
         parts.append(f"  {d}")
     parts.append(f"🌊 Elliott: {b2.get('label', b2.get('error','нет данных'))}"
                  + (f" — {b2['note']}" if b2.get("note") else ""))
-    parts.append(f"📐 SMC-сетап: {b3.get('label', b3.get('error','нет данных'))}")
+    smc_warn = "⚠️ " if b3.get("aligned") is False else ""
+    parts.append(f"📐 SMC-сетап: {smc_warn}{b3.get('label', b3.get('error','нет данных'))}")
     parts.append("")
 
     # 3. POI + Ликвидность/ловушки
@@ -460,7 +530,7 @@ def render_full_analysis_card(result: dict) -> str:
         for p in poi:
             arrow = "▲" if p["side"] == "above" else "▼"
             parts.append(f"  {arrow} `{_fp(p['price'])}` ({_fpct(p['distance_pct'])}) "
-                         f"— {', '.join(p['sources'])}, {p['touches']} кас.")
+                         f"— {p.get('role','')}, {', '.join(p['sources'])}, {p['touches']} кас.")
     else:
         parts.append("  нет чётких зон")
     if b6.get("sweep_line"):
@@ -486,7 +556,7 @@ def render_full_analysis_card(result: dict) -> str:
         parts.append(f"  {b7.get('oi_text','нет данных')}")
         fr = b7.get("funding", {})
         if fr.get("ok"):
-            parts.append(f"  Funding `{fr['rate']:+.4f}%` — {fr.get('signal','')}")
+            parts.append(f"  Funding `{fr['rate']:+.4f}%` — {b7.get('funding_label','')}")
         parts.append(f"  L/S `{b7.get('ls_ratio', 1.0):.2f}` — {b7.get('ls_text','')}")
     else:
         parts.append(f"  {b7.get('error','нет данных')}")
