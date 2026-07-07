@@ -219,6 +219,13 @@ def build_trade_chart_v4(symbol: str, candles: list, direction: str,
     # --- Мульти-ТФ зоны (POI/K-LVL) -- позади свечей (zorder=0) ---
     prepared_zones = prepare_zones_for_chart(zones, candles_4h)
     zone_label_x = n - 1 + max(1, extension * 0.06)
+    # Порог "слишком близко": зоны часто близки по цене к DCA/TP-уровням (одна и та же
+    # структура find_sr_zones лежит и в основе плана сделки) -- без стаггера их подписи
+    # рендерятся друг на друге и превращаются в нечитаемую кашу (см. живую проверку v119).
+    all_prices = [c["high"] for c in candles] + [c["low"] for c in candles]
+    price_span = (max(all_prices) - min(all_prices)) if all_prices else price * 0.1
+    min_label_gap = max(price_span, price * 0.01) * 0.025
+    placed_label_prices = []
     for z in prepared_zones:
         bounds = _zone_lo_hi(z)
         if bounds is None:
@@ -235,7 +242,11 @@ def build_trade_chart_v4(symbol: str, candles: list, direction: str,
         mark = "⚡" if is_klvl else ""
         label = f"{mark}{tf_lbl}".strip()
         if label:
-            ax.text(zone_label_x, (lo + hi) / 2, label, color=color, fontsize=8.5,
+            mid = (lo + hi) / 2
+            collisions = sum(1 for py in placed_label_prices if abs(mid - py) < min_label_gap)
+            placed_label_prices.append(mid)
+            label_x = zone_label_x + collisions * extension * 0.10
+            ax.text(label_x, mid, label, color=color, fontsize=8.5,
                    va="center", ha="left", alpha=0.95,
                    fontweight="bold" if is_klvl else "normal", zorder=6)
 
