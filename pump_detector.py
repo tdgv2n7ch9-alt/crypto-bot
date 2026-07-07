@@ -767,23 +767,23 @@ def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
         for spine in ax.spines.values():
             spine.set_color(CHART_GRID_COLOR)
 
-    # --- Свечи 5m ---
+    # --- Свечи 5m --- (zorder=3: выше зон сделки/фона, ниже EMA/BB/уровней-оверлеев)
     for i, c in enumerate(bars):
         color = GREEN if c["c"] >= c["o"] else RED
-        ax_p.plot([i, i], [c["l"], c["h"]], color=color, linewidth=1)
+        ax_p.plot([i, i], [c["l"], c["h"]], color=color, linewidth=1, zorder=3)
         ax_p.add_patch(patches.Rectangle((i - 0.32, min(c["o"], c["c"])), 0.64,
                                           max(abs(c["c"] - c["o"]), c["h"] * 0.0006),
-                                          color=color))
+                                          color=color, zorder=3))
 
-    # --- Оверлеи: EMA 20/50 ---
+    # --- Оверлеи: EMA 20/50 --- (zorder=4 -- поверх свечей, как на биржевых терминалах)
     xs = list(range(n))
-    ax_p.plot(xs, ema_fast, color=CHART_EMA_FAST_COLOR, linewidth=1.4, label=f"EMA{CHART_EMA_FAST}")
-    ax_p.plot(xs, ema_slow, color=CHART_EMA_SLOW_COLOR, linewidth=1.4, label=f"EMA{CHART_EMA_SLOW}")
+    ax_p.plot(xs, ema_fast, color=CHART_EMA_FAST_COLOR, linewidth=1.4, label=f"EMA{CHART_EMA_FAST}", zorder=4)
+    ax_p.plot(xs, ema_slow, color=CHART_EMA_SLOW_COLOR, linewidth=1.4, label=f"EMA{CHART_EMA_SLOW}", zorder=4)
 
     # --- Оверлеи: Bollinger Bands(20,2) + подписи значений сверху (как на биржах) ---
-    ax_p.plot(xs, bb_up, color=CHART_BB_COLOR, linewidth=0.9, linestyle="-", alpha=0.8)
-    ax_p.plot(xs, bb_mid, color=CHART_BB_MID_COLOR, linewidth=0.9, linestyle="-", alpha=0.7)
-    ax_p.plot(xs, bb_dn, color=CHART_BB_COLOR, linewidth=0.9, linestyle="-", alpha=0.8)
+    ax_p.plot(xs, bb_up, color=CHART_BB_COLOR, linewidth=0.9, linestyle="-", alpha=0.8, zorder=4)
+    ax_p.plot(xs, bb_mid, color=CHART_BB_MID_COLOR, linewidth=0.9, linestyle="-", alpha=0.7, zorder=4)
+    ax_p.plot(xs, bb_dn, color=CHART_BB_COLOR, linewidth=0.9, linestyle="-", alpha=0.8, zorder=4)
     if bb_up[-1] is not None:
         boll_line = (f"BOLL({CHART_BB_PERIOD},{CHART_BB_STD})  "
                      f"UP {_fmt_price(bb_up[-1])}   MB {_fmt_price(bb_mid[-1])}   DN {_fmt_price(bb_dn[-1])}")
@@ -804,11 +804,9 @@ def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
                        color=RED, fontsize=10, ha="center", va="top",
                        arrowprops=dict(arrowstyle="->", color=RED, lw=1))
 
-    # --- Текущая цена: горизонтальный пунктир + ценник у правой оси ---
-    ax_p.axhline(current_price, color=YELLOW, linestyle="--", linewidth=1)
-    ax_p.text(1.005, current_price, f" {_fmt_price(current_price)}", transform=ax_p.get_yaxis_transform(),
-               color=BG, fontsize=10, va="center", ha="left",
-               bbox=dict(boxstyle="round,pad=0.25", facecolor=YELLOW, edgecolor="none"))
+    # --- Текущая цена: горизонтальный пунктир (без ценника здесь -- ценник идёт через
+    # общую анти-коллизионную правую колонку ниже, вместе с Вход/TP/SL) ---
+    ax_p.axhline(current_price, color=YELLOW, linestyle="--", linewidth=1, zorder=5)
 
     # --- Момент детекта: вертикальный пунктир + метка времени ---
     detect_ts_ms = watch.get("pump_time", time.time()) * 1000
@@ -818,35 +816,67 @@ def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
             detect_idx = i
         else:
             break
-    ax_p.axvline(detect_idx, color=CHART_DETECT_LINE_COLOR, linestyle="--", linewidth=1)
+    ax_p.axvline(detect_idx, color=CHART_DETECT_LINE_COLOR, linestyle="--", linewidth=1, zorder=5)
     ax_p.text(detect_idx, ax_p.get_ylim()[1], f" детект {time.strftime('%H:%M UTC', time.gmtime(watch.get('pump_time', time.time())))}",
-               color=CHART_DETECT_LINE_COLOR, fontsize=10, va="top", ha="left", rotation=0)
+               color=CHART_DETECT_LINE_COLOR, fontsize=10, va="top", ha="left", rotation=0, zorder=7)
 
-    # --- Зоны сделки: вход (синий), TP (зелёный), SL (красный) с ценами и % ---
-    # Подписи -- у ЛЕВОГО края (не у правого), чтобы не конфликтовать с ценником текущей
-    # цены и инфо-панелью, которые всегда справа.
+    # --- Зоны сделки: вход (синий), TP (зелёный), SL (красный) ---
+    # Зоны -- полупрозрачный фон (zorder=0, ПОД свечами, alpha в пределах ТЗ: синяя
+    # range-зона <=0.15, красная/зелёная trade-зоны <=0.25), поверх зоны -- чёткая линия
+    # уровня (lw=1.5, zorder=5, как и текущая цена), подписи -- в правой колонке (тот же
+    # приём, что и текущая цена/чарты v3-v4), с анти-коллизией: если два уровня по цене
+    # ближе 1% друг к другу -- второй смещается вертикально + получает тонкую стрелку-
+    # выноску к своему реальному уровню, вместо наложения текста друг на друга.
     def _pct(level):
         return (level - current_price) / current_price * 100 if current_price else 0
 
-    label_x = max(1, n * 0.02)
+    all_prices_visible = [c["h"] for c in bars] + [c["l"] for c in bars]
+    price_span = (max(all_prices_visible) - min(all_prices_visible)) if all_prices_visible else current_price * 0.1
+    min_label_gap = max(price_span, current_price * 0.01) * 0.06  # ~6% видимого диапазона между подписями
+
+    right_x = 1.02  # чуть дальше текущей цены (1.005), чтобы не залезать на её область
+
+    level_entries = [("Цена", current_price, YELLOW, f" {_fmt_price(current_price)}")]
 
     if watch.get("entry_lo") and watch.get("entry_hi"):
         lo, hi = sorted((watch["entry_lo"], watch["entry_hi"]))
-        ax_p.axhspan(lo, hi, color=CHART_ENTRY_ZONE_COLOR, alpha=0.18)
+        ax_p.axhspan(lo, hi, color=CHART_ENTRY_ZONE_COLOR, alpha=0.15, zorder=0)
         mid_e = (lo + hi) / 2
-        ax_p.text(label_x, mid_e, f"Вход {_fmt_price(lo)}-{_fmt_price(hi)} ({_pct(mid_e):+.1f}%)",
-                   color=CHART_ENTRY_ZONE_COLOR, fontsize=10, va="center", ha="left",
-                   bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.7))
+        ax_p.axhline(mid_e, color=CHART_ENTRY_ZONE_COLOR, linewidth=1.5, zorder=5)
+        level_entries.append(("Вход", mid_e, CHART_ENTRY_ZONE_COLOR,
+                              f" Вход {_fmt_price(lo)}-{_fmt_price(hi)} ({_pct(mid_e):+.1f}%)"))
 
     for key, color, lbl in [("tp1", GREEN, "TP1"), ("tp2", GREEN, "TP2"), ("sl", RED, "SL")]:
         level = watch.get(key)
         if not level:
             continue
         band = level * 0.0015
-        ax_p.axhspan(level - band, level + band, color=color, alpha=0.22)
-        ax_p.text(label_x, level, f"{lbl} {_fmt_price(level)} ({_pct(level):+.1f}%)",
-                   color=color, fontsize=10, va="center", ha="left",
-                   bbox=dict(boxstyle="round,pad=0.15", facecolor=BG, edgecolor="none", alpha=0.7))
+        ax_p.axhspan(level - band, level + band, color=color, alpha=0.22, zorder=0)
+        ax_p.axhline(level, color=color, linewidth=1.5, zorder=5)
+        level_entries.append((lbl, level, color, f" {lbl} {_fmt_price(level)} ({_pct(level):+.1f}%)"))
+
+    # Анти-коллизия: сортируем по цене, каждой следующей подписи, если она ближе
+    # min_label_gap к уже размещённой -- назначаем накопительное вертикальное смещение и
+    # рисуем тонкую стрелку-выноску от реального уровня к смещённой подписи.
+    level_entries.sort(key=lambda e: e[1])
+    placed = []  # (price, offset_price)
+    for name, price, color, label_text in level_entries:
+        offset = 0.0
+        for prev_price, prev_offset in placed:
+            if abs((price + offset) - (prev_price + prev_offset)) < min_label_gap:
+                offset += min_label_gap
+        placed.append((price, offset))
+        label_y = price + offset
+        if abs(offset) > 1e-9:
+            ax_p.annotate("", xy=(1.005, price), xytext=(right_x, label_y),
+                          xycoords=ax_p.get_yaxis_transform(), textcoords=ax_p.get_yaxis_transform(),
+                          arrowprops=dict(arrowstyle="-", color=color, lw=0.8, alpha=0.7), zorder=6)
+        ax_p.text(right_x, label_y, label_text, transform=ax_p.get_yaxis_transform(),
+                   color=BG if name == "Цена" else color, fontsize=10, va="center", ha="left", zorder=7,
+                   bbox=dict(boxstyle="round,pad=0.2",
+                             facecolor=YELLOW if name == "Цена" else BG,
+                             edgecolor="none" if name == "Цена" else color,
+                             linewidth=0.8 if name != "Цена" else 0, alpha=0.85))
 
     # --- Инфо-панель (полупрозрачный блок в углу, снизу справа -- верх справа занят
     # ценником текущей цены + BOLL-строкой) ---
@@ -866,7 +896,7 @@ def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
         ]
         panel_text = "\n".join(panel_lines)
         ax_p.text(0.98, 0.03, panel_text, transform=ax_p.transAxes, color=WHITE, fontsize=10.5,
-                   va="bottom", ha="right", linespacing=1.6,
+                   va="bottom", ha="right", linespacing=1.6, zorder=8,
                    bbox=dict(boxstyle="round,pad=0.5", facecolor=CHART_PANEL_BG, edgecolor=CHART_GRID_COLOR, alpha=0.9))
 
     # --- Объём: бары зелёные/красные + MA(20) ---
@@ -875,18 +905,36 @@ def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
         ax_v.bar(i, c["v"], color=color, width=0.7, alpha=0.85)
     ax_v.plot(xs, vol_ma, color=YELLOW, linewidth=1.2, label=f"MA{CHART_VOL_MA_PERIOD}")
     ax_v.set_ylabel("Vol", color=GRAY, fontsize=10)
-    ax_v.legend(loc="upper left", fontsize=10, facecolor=BG, labelcolor=WHITE, framealpha=0.4)
+    # dict(zip(labels, handles)) схлопывает повторы одного и того же label -- защита от
+    # дублей в легенде, даже если функция когда-нибудь начнёт вызываться с переиспользуемой
+    # осью/повторным plot() того же ряда.
+    handles_v, labels_v = ax_v.get_legend_handles_labels()
+    dedup_v = dict(zip(labels_v, handles_v))
+    ax_v.legend(dedup_v.values(), dedup_v.keys(), loc="upper left", fontsize=10,
+                facecolor=BG, labelcolor=WHITE, framealpha=0.4)
 
+    # Направление сигнала -- ЕДИНЫЙ источник с самими уровнями (watch["kind"]: "pump" ->
+    # шорт (фейд импульса вверх), "dump" -> лонг (выкуп просадки), см. _try_confirm_reversal/
+    # exit-tracker, где то же kind уже определяет hit_tp1/near_sl направленно). Заголовок
+    # обязан совпадать с направлением зон/уровней на этом же графике -- не независимый
+    # источник, тот же watch["kind"], что построил entry/tp/sl выше.
+    side_ru = "ШОРТ" if kind == "pump" else "ЛОНГ"
+    side_col = RED if kind == "pump" else GREEN
     detect_label = "детект"
-    ax_p.set_title(f"{symbol.upper()} · 5m · {detect_label} {time.strftime('%H:%M UTC', time.gmtime(watch.get('pump_time', time.time())))}",
-                    color=WHITE, fontsize=12, loc="left")
+    ax_p.set_title(f"{symbol.upper()} · 5m · {side_ru} · {detect_label} "
+                   f"{time.strftime('%H:%M UTC', time.gmtime(watch.get('pump_time', time.time())))}",
+                    color=side_col, fontsize=12, loc="left")
     ax_p.text(0.01, 0.02, "BEST TRADE", color=GRAY, fontsize=10, alpha=0.6,
-               ha="left", va="bottom", transform=ax_p.transAxes)
-    ax_p.legend(loc="upper left", fontsize=10, facecolor=BG, labelcolor=WHITE, framealpha=0.35,
-                bbox_to_anchor=(0.0, 0.93))
+               ha="left", va="bottom", transform=ax_p.transAxes, zorder=8)
+    handles_p, labels_p = ax_p.get_legend_handles_labels()
+    dedup_p = dict(zip(labels_p, handles_p))
+    ax_p.legend(dedup_p.values(), dedup_p.keys(), loc="upper left", fontsize=10,
+                facecolor=BG, labelcolor=WHITE, framealpha=0.35, bbox_to_anchor=(0.0, 0.93))
 
     plt.tight_layout()
-    plt.subplots_adjust(right=0.88, top=0.90)
+    # right=0.74 (было 0.88) -- под правую колонку подписей уровней (Вход/TP1/TP2/SL/
+    # цена), которые теперь заметно длиннее одного ценника и обрезались по краю холста.
+    plt.subplots_adjust(right=0.74, top=0.90)
     buf = io.BytesIO()
     plt.savefig(buf, format="png", facecolor=BG, dpi=150)
     plt.close(fig)
