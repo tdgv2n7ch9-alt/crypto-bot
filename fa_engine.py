@@ -288,10 +288,24 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     result["block9_phase"] = b9
 
     # ── Блок 10: мемкоин-фильтр ──
-    meme_risk = rank > MEME_RANK_THRESHOLD or mcap < MEME_MCAP_THRESHOLD or vol24 < MEME_VOL_THRESHOLD
+    # rank==9999 / mcap==0 -- НЕ "реально низкий ранг/капа", а sentinel "нет данных"
+    # (тот же конвеншен, что и везде в bot.py: coin.get("cmc_rank", 9999)). Отсутствие
+    # данных != мемкоин -- иначе при недоступности источника рангов ВСЁ помечается как
+    # высокий риск (см. историю бага: CMC-квота исчерпана -> ложное срабатывание на
+    # каждой монете). Объём -- независимый сигнал, обычно доступен даже без ранга/капы.
+    rank_known = rank < 9999
+    mcap_known = mcap > 0
+    meme_risk = ((rank_known and rank > MEME_RANK_THRESHOLD)
+                or (mcap_known and mcap < MEME_MCAP_THRESHOLD)
+                or vol24 < MEME_VOL_THRESHOLD)
+    reason_parts = []
+    if meme_risk:
+        if rank_known and rank > MEME_RANK_THRESHOLD: reason_parts.append(f"rank #{rank}")
+        if mcap_known and mcap < MEME_MCAP_THRESHOLD: reason_parts.append(f"mcap ${mcap/1e6:.0f}M")
+        if vol24 < MEME_VOL_THRESHOLD: reason_parts.append(f"vol24h ${vol24/1e6:.0f}M")
     result["block10_meme_risk"] = {
-        "ok": True, "flagged": meme_risk,
-        "reason": (f"rank #{rank}, mcap ${mcap/1e6:.0f}M, vol24h ${vol24/1e6:.0f}M" if meme_risk else ""),
+        "ok": True, "flagged": meme_risk, "reason": ", ".join(reason_parts),
+        "rank_known": rank_known, "mcap_known": mcap_known,
     }
 
     # ── Блок 11: план сделки ──
@@ -548,8 +562,8 @@ def render_full_analysis_card(result: dict) -> str:
 
     # 1. Заголовок
     parts.append(f"*{sym}USDT* · Полный анализ")
-    parts.append(f"💰 `{_fp(price)}` {result.get('price_fresh','')}   "
-                 f"Rank #{result.get('rank','?')}")
+    rank_disp = f"Rank #{result.get('rank')}" if result.get("rank", 9999) < 9999 else "Rank — (нет данных)"
+    parts.append(f"💰 `{_fp(price)}` {result.get('price_fresh','')}   {rank_disp}")
     parts.append(f"1H `{_fpct(result.get('ch1h',0))}`  24H `{_fpct(result.get('ch24h',0))}`  "
                  f"7D `{_fpct(result.get('ch7d',0))}`")
     meme = result.get("block10_meme_risk", {})

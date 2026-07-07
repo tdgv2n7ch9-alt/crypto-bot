@@ -112,7 +112,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v113"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v114"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -277,132 +277,154 @@ STABLECOINS = {
     "MIM","FEI","OUSD","DOLA","CUSD","CEUR","USDX","USDJ","USDN","BITCNY",
 }
 
-def get_all_coins():
-    """
-      :
-    1. CMC:  5000  (3   ~1667) 
-    2. Binance:   USDT  (    CMC)
-     30 .
-    """
-    #        30 
-    now_ts = datetime.now(TZ).timestamp()
-    cache_key = "_all_coins_cache"
-    if hasattr(get_all_coins, "_cache"):
-        cached_time, cached_data = get_all_coins._cache
-        if now_ts - cached_time < 1800 and cached_data:
-            return cached_data
+_ALL_COINS_CACHE_TTL = 600   # 10 мин (см. ТЗ) -- было 1800с, но теперь первичный источник
+                             # (CoinGecko markets) не расходует дефицитную месячную квоту
 
-    result    = []
+# Статус источников рангов/mcap -- для /radar_status. CMC теперь ФОЛЛБЕК (вызывается,
+# только когда CoinGecko markets вернул пусто), поэтому его статус может быть "не
+# проверялся в этом запуске", если CoinGecko всё это время исправно работал -- это
+# нормально, не баг.
+_DATA_SOURCE_STATUS = {
+    "coingecko_markets": {"ok": None, "last_error": None, "last_ts": 0},
+    "cmc": {"ok": None, "last_error": None, "last_ts": 0},
+}
+
+
+def get_data_source_status() -> dict:
+    """Для /radar_status: последнее известное состояние источников рангов/mcap."""
+    return _DATA_SOURCE_STATUS
+
+
+def _fetch_coingecko_markets(pages: int = 3, per_page: int = 250) -> list:
+    """Первичный источник get_all_coins(): CoinGecko /coins/markets -- ранг/mcap/объём/
+    цена/% изменения без месячной квоты CMC (freemium, наш общий rate-limit из _cg_get).
+    До pages*per_page монет (по умолчанию верхние ~750 по капе).
+
+    Ограничение: CoinGecko /coins/markets не отдаёт 90-дневное % изменение (только 1h/
+    24h/7d/30d/200d/1y) -- percent_change_90d честно 0.0 для монет из этого источника
+    (не фабрикуем; см. fa_engine.py-конвенцию "нет данных != придуманное значение)."""
+    result = []
+    for page in range(1, pages + 1):
+        try:
+            data = _cg_get("https://api.coingecko.com/api/v3/coins/markets", params={
+                "vs_currency": "usd", "order": "market_cap_desc",
+                "per_page": per_page, "page": page,
+                "price_change_percentage": "1h,24h,7d,30d",
+            }, timeout=20)
+        except Exception as e:
+            _DATA_SOURCE_STATUS["coingecko_markets"] = {"ok": False, "last_error": str(e), "last_ts": time.time()}
+            log.error(f"CoinGecko markets page {page}: {e}")
+            break
+        if not data:
+            break
+        for d in data:
+            sym = (d.get("symbol") or "").upper()
+            if not sym or sym in STABLECOINS:
+                continue
+            mcap = d.get("market_cap") or 0
+            if mcap and mcap < 100_000:
+                continue
+            result.append({
+                "symbol": sym, "slug": d.get("id", sym.lower()),
+                "cmc_rank": d.get("market_cap_rank") or 9999,
+                "tags": [], "name": d.get("name", sym),
+                "quote": {"USDT": {
+                    "price": d.get("current_price", 0) or 0,
+                    "volume_24h": d.get("total_volume", 0) or 0,
+                    "market_cap": mcap,
+                    "percent_change_1h": d.get("price_change_percentage_1h_in_currency", 0) or 0,
+                    "percent_change_24h": d.get("price_change_percentage_24h_in_currency",
+                                                d.get("price_change_percentage_24h", 0)) or 0,
+                    "percent_change_7d": d.get("price_change_percentage_7d_in_currency", 0) or 0,
+                    "percent_change_30d": d.get("price_change_percentage_30d_in_currency", 0) or 0,
+                    "percent_change_90d": 0.0,
+                }},
+            })
+        if len(data) < per_page:
+            break
+    if result:
+        _DATA_SOURCE_STATUS["coingecko_markets"] = {"ok": True, "last_error": None, "last_ts": time.time()}
+    return result
+
+
+def _fetch_cmc_markets() -> list:
+    """Фоллбек get_all_coins(): CMC listings (полный список до 5000, платная месячная
+    квота) -- используется, только когда CoinGecko markets вернул пусто (недоступен/
+    лимит). При исчерпании квоты CMC отвечает 429 с error_code 1010 -- фиксируем это в
+    _DATA_SOURCE_STATUS для /radar_status, не пытаемся угадать/повторить (не тратим
+    оставшийся кредит впустую)."""
+    result = []
     seen_syms = set()
-
-    #   1: CMC listings   5000   
     try:
-        url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-
-        #   1000,  5 
         for start in range(1, 5001, 1000):
             try:
-                params = {
-                    "start":   start,
-                    "limit":   1000,
-                    "convert": "USDT",
-                    "sort":    "market_cap",
-                }
+                params = {"start": start, "limit": 1000, "convert": "USDT", "sort": "market_cap"}
                 r = requests.get(url, headers=headers, params=params, timeout=25)
                 if r.status_code != 200:
+                    err = r.json().get("status", {}).get("error_message", f"HTTP {r.status_code}")
+                    _DATA_SOURCE_STATUS["cmc"] = {"ok": False, "last_error": err, "last_ts": time.time()}
+                    log.error(f"CMC batch start={start}: {err}")
                     break
                 batch = r.json().get("data", [])
                 if not batch:
                     break
-
                 added = 0
                 for coin in batch:
-                    sym  = coin.get("symbol", "")
+                    sym = coin.get("symbol", "")
                     tags = [t.lower() for t in coin.get("tags", [])]
-                    q    = coin.get("quote", {}).get("USDT", {})
+                    q = coin.get("quote", {}).get("USDT", {})
                     mcap = q.get("market_cap", 0) or 0
-
-                    if sym in STABLECOINS:          continue
-                    if "stablecoin" in tags:        continue
-                    if "wrapped-tokens" in tags:    continue
-                    if sym in seen_syms:            continue
-                    if mcap > 0 and mcap < 100_000: continue  #  $100K  
-
+                    if sym in STABLECOINS: continue
+                    if "stablecoin" in tags: continue
+                    if "wrapped-tokens" in tags: continue
+                    if sym in seen_syms: continue
+                    if mcap > 0 and mcap < 100_000: continue
                     seen_syms.add(sym)
                     result.append(coin)
                     added += 1
-
-                log.info(f"CMC batch start={start}: +{added}  ( {len(result)})")
-
-                #    500    
+                log.info(f"CMC batch start={start}: +{added} (всего {len(result)})")
                 if len(batch) < 500:
                     break
-
-                time.sleep(0.5)  # rate limit
-
+                time.sleep(0.5)
             except Exception as e:
                 log.error(f"CMC batch start={start}: {e}")
                 break
-
+        if result:
+            _DATA_SOURCE_STATUS["cmc"] = {"ok": True, "last_error": None, "last_ts": time.time()}
     except Exception as e:
+        _DATA_SOURCE_STATUS["cmc"] = {"ok": False, "last_error": str(e), "last_ts": time.time()}
         log.error(f"CMC all coins: {e}")
+    return result
 
-    #   2: Binance   USDT     CMC 
-    try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=20)
-        if r.status_code == 200:
-            binance_tickers = r.json()
-            for t in binance_tickers:
-                sym_full = t.get("symbol", "")
-                if not sym_full.endswith("USDT"):
-                    continue
-                sym = sym_full[:-4]
 
-                if sym in STABLECOINS:   continue
-                if sym in seen_syms:     continue
+def get_all_coins():
+    """Список монет с рангом/mcap/объёмом/% изменениями. Первичный источник --
+    CoinGecko /coins/markets (без месячной квоты). CMC -- фоллбек, только если
+    CoinGecko недоступен. НЕТ более "Binance-заглушки" с фиктивным rank=9999/mcap=0
+    для монет вне обоих источников -- такая заглушка раньше молчаливо ложно
+    срабатывала на мемкоин-фильтре (rank=9999 воспринимался как "супер-мемкоин", а не
+    "неизвестно"). Если и CoinGecko, и CMC недоступны -- возвращаем последний кэш
+    (даже протухший) вместо пустого списка, честнее, чем полное отсутствие данных."""
+    now_ts = datetime.now(TZ).timestamp()
+    if hasattr(get_all_coins, "_cache"):
+        cached_time, cached_data = get_all_coins._cache
+        if now_ts - cached_time < _ALL_COINS_CACHE_TTL and cached_data:
+            return cached_data
 
-                vol_usd = float(t.get("quoteVolume", 0))
-                price   = float(t.get("lastPrice", 0))
-                if vol_usd < 50_000:    continue  #   
-                if price <= 0:          continue
+    result = _fetch_coingecko_markets(pages=3, per_page=250)
+    source_used = "coingecko"
+    if not result:
+        result = _fetch_cmc_markets()
+        source_used = "cmc" if result else "none"
 
-                #    
-                coin_stub = {
-                    "symbol":   sym,
-                    "slug":     sym.lower(),
-                    "cmc_rank": 9999,
-                    "tags":     [],
-                    "name":     sym,
-                    "quote": {"USDT": {
-                        "price":              price,
-                        "volume_24h":         vol_usd,
-                        "market_cap":         0,
-                        "percent_change_1h":  float(t.get("priceChangePercent", 0)),
-                        "percent_change_24h": float(t.get("priceChangePercent", 0)),
-                        "percent_change_7d":  0,
-                        "percent_change_30d": 0,
-                        "percent_change_90d": 0,
-                    }}
-                }
-                seen_syms.add(sym)
-                result.append(coin_stub)
+    if not result and hasattr(get_all_coins, "_cache"):
+        log.error("get_all_coins: оба источника недоступны, отдаём протухший кэш")
+        return get_all_coins._cache[1]
 
-            log.info(f"Binance   . : {len(result)}")
-
-    except Exception as e:
-        log.error(f"Binance all pairs: {e}")
-
-    # : CMC   , Binance-only     
-    cmc_coins    = [c for c in result if c.get("cmc_rank", 9999) < 9999]
-    binance_only = [c for c in result if c.get("cmc_rank", 9999) == 9999]
-    cmc_coins.sort(key=lambda x: x.get("cmc_rank", 9999))
-    binance_only.sort(key=lambda x: x.get("quote",{}).get("USDT",{}).get("volume_24h",0), reverse=True)
-    result = cmc_coins + binance_only
-
-    log.info(f" : {len(result)} (CMC: {len(cmc_coins)}, Binance-only: {len(binance_only)})")
-
-    #   
+    result.sort(key=lambda x: x.get("cmc_rank", 9999))
+    log.info(f"Список монет: {len(result)} (источник: {source_used})")
     get_all_coins._cache = (now_ts, result)
     return result
 
@@ -9207,6 +9229,21 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]
     journal_active, journal_closed = signal_journal.get_status_counts()
     lines.append(f"Journal: {journal_active} активных, {journal_closed} закрытых")
+
+    ds = get_data_source_status()
+    def _src_line(name, label):
+        s = ds.get(name, {})
+        if s.get("ok") is None:
+            return f"⚪ {label}: не проверялся в этом запуске"
+        if s.get("ok"):
+            return f"🟢 {label}: ok"
+        return f"🔴 {label}: ошибка — {s.get('last_error') or '—'}"
+    lines += [
+        "",
+        "*Источники рангов/mcap:*",
+        _src_line("coingecko_markets", "CoinGecko markets"),
+        _src_line("cmc", "CMC (фоллбек)"),
+    ]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
