@@ -116,7 +116,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v123"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v124"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -8432,6 +8432,7 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     }
 
     candidates = []
+    rejected = []  # (symbol, reason, ch90d) -- для честной сводки, если кандидатов не найдётся (см. ТОП ШОРТ)
     for coin in coins:
         q         = coin["quote"]["USDT"]
         ch90d     = q.get("percent_change_90d", 0) or 0
@@ -8444,13 +8445,24 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         rank      = coin.get("cmc_rank", 999)
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
         tags      = {t.lower() for t in coin.get("tags", [])}
+        sym       = coin["symbol"]
 
-        #   ( )
-        if vol_ratio > 60:          continue   # / 
-        if vol < 500_000:           continue   #  
-        if mcap < 10_000_000:       continue   #    
-        if "stablecoin" in tags:    continue
-        if ch90d > -20:             continue   #   
+        # Фильтры качества (памп/дамп, ликвидность, капа, стейблы, глубина просадки)
+        if vol_ratio > 60:
+            rejected.append((sym, f"подозрительный объём/капа (vol/mcap {vol_ratio:.0f}% > 60%)", ch90d))
+            continue
+        if vol < 500_000:
+            rejected.append((sym, f"низкий объём (${vol/1e6:.1f}M < $0.5M)", ch90d))
+            continue
+        if mcap < 10_000_000:
+            rejected.append((sym, f"низкая капитализация (${mcap/1e6:.1f}M < $10M)", ch90d))
+            continue
+        if "stablecoin" in tags:
+            rejected.append((sym, "стейблкоин", ch90d))
+            continue
+        if ch90d > -20:
+            rejected.append((sym, f"недостаточная просадка за 90д ({ch90d:.0f}% > -20%)", ch90d))
+            continue
 
         #   
         score = 0.0
@@ -8493,16 +8505,25 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     top_spot = candidates[:10]
 
     nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton(" ",     callback_data="top_spot"),
-         InlineKeyboardButton("  ", callback_data="show_menu")],
-        [InlineKeyboardButton("  ",    callback_data="top_long"),
-         InlineKeyboardButton("  ",    callback_data="top_short")],
+        [InlineKeyboardButton("🔄 Обновить",  callback_data="top_spot"),
+         InlineKeyboardButton("🏠 Меню",      callback_data="show_menu")],
+        [InlineKeyboardButton("🟢 ТОП ЛОНГ",  callback_data="top_long"),
+         InlineKeyboardButton("🔴 ТОП ШОРТ",  callback_data="top_short")],
     ])
 
     if not top_spot:
+        lines = [
+            "🟡 *Нет спот-кандидатов, прошедших фильтры качества*",
+            "Рынок сейчас не даёт монет с достаточной просадкой и ликвидностью.",
+        ]
+        rejected.sort(key=lambda r: r[2])  # по глубине просадки (ch90d) -- ближе к порогу первыми
+        rejected_top3 = rejected[:3]
+        if rejected_top3:
+            lines += ["", "*Ближе всех к проходу (для прозрачности):*", ""]
+            for sym, reason, _ch90d in rejected_top3:
+                lines.append(f"  • {sym}: {reason}")
         await msg.edit_text(
-            "   \n\n      .",
-            parse_mode="Markdown", reply_markup=nav)
+            "\n".join(lines), parse_mode="Markdown", reply_markup=nav)
         return
 
     #  
