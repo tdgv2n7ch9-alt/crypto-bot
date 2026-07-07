@@ -230,12 +230,14 @@ def _format_alert_text(symbol, result, reasons):
 
 
 def _build_alert_chart(symbol, result):
-    """Chart v3 (chart_v3.py) как основной график для signal_loop-алертов -- это
+    """Chart v4 (chart_v4.py) как основной график для signal_loop-алертов -- это
     свинг-сигналы (funding/OI/sweep, гейт через fa_engine), а не памп/дамп-разворот, им
     подходит 2h/~120 баров, а не 5m Chart v2 (тот остаётся для пампов, см. pump_detector.py
-    и его собственный вызов _build_chart в другом месте бота). Фоллбек на
-    generate_signal_chart (bot.py, Bybit REST candles), если Chart v3 почему-то не смог
-    (недостаточно баров и т.п.) — честный фоллбек, а не баг."""
+    и его собственный вызов _build_chart в другом месте бота). zones/candles_4h уже
+    посчитаны build_full_analysis() (result["zones"]/result["candles_4h"]), даёт Chart v4
+    мульти-ТФ POI-прямоугольники без доп. API-вызовов. Фоллбек Chart v4 -> Chart v3 (без
+    зон) -> generate_signal_chart (bot.py, Bybit REST candles), если оба почему-то не
+    смогли (недостаточно баров и т.п.) — честный фоллбек, а не баг."""
     b11 = result["block11_trade_plan"]
     b1 = result.get("block1_bias", {})
     direction = b11["direction"]
@@ -243,13 +245,24 @@ def _build_alert_chart(symbol, result):
 
     try:
         import bot
+        import chart_v4
         import chart_v3
         candles = bot.get_binance_ohlc(symbol, "2h", 120)
         key_high = (b1.get("key_high") or {}).get("price")
         key_low = (b1.get("key_low") or {}).get("price")
+        entry_levels = [b11["entry1"], b11["entry2"], b11["entry3"]]
+        try:
+            chart = chart_v4.build_trade_chart_v4(
+                symbol, candles, direction, entry_levels=entry_levels,
+                sl=b11["sl"], tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
+                rr=b11["rr_tp1"], key_high=key_high, key_low=key_low, tf_label="2h",
+                zones=result.get("zones"), candles_4h=result.get("candles_4h"))
+            if chart:
+                return chart
+        except Exception as e:
+            _log(f"{symbol}: Chart v4 unavailable ({e}), falling back to Chart v3")
         chart = chart_v3.build_trade_chart(
-            symbol, candles, direction,
-            entry_levels=[b11["entry1"], b11["entry2"], b11["entry3"]],
+            symbol, candles, direction, entry_levels=entry_levels,
             sl=b11["sl"], tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
             rr=b11["rr_tp1"], key_high=key_high, key_low=key_low, tf_label="2h")
         if chart:

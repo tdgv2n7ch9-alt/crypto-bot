@@ -109,12 +109,13 @@ import ta_extra
 import fa_engine
 import signal_loop
 import chart_v3
+import chart_v4
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v118"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v119"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2020,11 +2021,16 @@ def nav_kb(refresh_data=None):
     return InlineKeyboardMarkup([row])
 
 def _build_chart_v3_for_signal(symbol: str, a: dict):
-    """Chart v3 (chart_v3.py) для ТОП ЛОНГ/ШОРТ/СПОТ и обычных карточек монеты: 2h/~120
+    """Chart v4 (chart_v4.py) для ТОП ЛОНГ/ШОРТ/СПОТ и обычных карточек монеты: 2h/~120
     баров (свинг-сигнал, не памп/дамп), уровни из уже посчитанного a (real_full_analysis()-
-    формат — entry1/2/3, sl, tp1/2/3, rr, is_long). Только если в a реально есть уровни
-    сделки (entry/SL/TP) — см. ТЗ "прикреплять... где есть entry/SL/TP". None при любой
-    проблеме — вызывающая сторона (send_coin) фоллбечится на generate_signal_chart."""
+    формат — entry1/2/3, sl, tp1/2/3, rr, is_long, zones). Только если в a реально есть
+    уровни сделки (entry/SL/TP) — см. ТЗ "прикреплять... где есть entry/SL/TP". zones
+    (найдены в a["zones"] -- find_sr_zones уже вызван внутри real_full_analysis(), без
+    доп. API) даёт Chart v4 мульти-ТФ POI-прямоугольники; K-LVL-классификация зон
+    делается тут же, на уже кэшированных 4h-свечах (get_binance_ohlc с тем же ключом,
+    что и fa_engine — обычно cache hit). Chart v4 при исключении фоллбечится на Chart v3
+    (та же сигнатура + уровни, без зон); None при любой проблеме на обоих — вызывающая
+    сторона (send_coin) фоллбечится дальше на generate_signal_chart."""
     sl = a.get("sl")
     tp1 = a.get("tp1")
     entry1 = a.get("entry1", a.get("swing"))
@@ -2040,6 +2046,17 @@ def _build_chart_v3_for_signal(symbol: str, a: dict):
         # друг на друга подписи "N лимитка" в одной точке; честнее показать один уровень.
         entry_levels = [lvl for lvl in (a.get("entry1", entry1), a.get("entry2"), a.get("entry3")) if lvl]
         rr = a.get("rr", a.get("rr_tp1"))
+        try:
+            zones = a.get("zones")
+            candles_4h = get_binance_ohlc(symbol, "4h", 200) if zones else None
+            chart = chart_v4.build_trade_chart_v4(
+                symbol, candles, direction, entry_levels=entry_levels, sl=sl,
+                tp1=tp1, tp2=a.get("tp2"), tp3=a.get("tp3"), rr=rr, tf_label="2h",
+                zones=zones, candles_4h=candles_4h)
+            if chart is not None:
+                return chart
+        except Exception as e:
+            log.error(f"Chart v4 FAILED {symbol}: {type(e).__name__}: {e}, falling back to Chart v3")
         return chart_v3.build_trade_chart(
             symbol, candles, direction, entry_levels=entry_levels, sl=sl,
             tp1=tp1, tp2=a.get("tp2"), tp3=a.get("tp3"), rr=rr, tf_label="2h")
@@ -2526,6 +2543,45 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error(f"cmd_market: {e}")
         await msg.edit_text(f"❌ {e}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Меню",callback_data="show_menu")]]))
 
+_FA_ENGINE_COIN_CACHE: dict = {}          # {symbol: (ts, result)} -- см. _get_fa_engine_result_cached
+_FA_ENGINE_COIN_CACHE_TTL = 480            # 8 минут -- повторный /coin того же символа не жжёт лимит снова
+
+async def _get_fa_engine_result_cached(symbol: str, coin: dict = None, timeout: float = 12.0):
+    """Best-effort fa_engine.build_full_analysis() для /coin -- НЕ обязательное условие
+    ответа команды: /coin и без него работает на legacy full_analysis()/build_signal_text
+    (как до этого изменения). Даёт Chart v4 реальные зоны/структуру и данные для блока
+    "Разбор" (narrative.py), если fa_engine успел уложиться в timeout.
+
+    Жёсткий таймаут через asyncio.wait_for: при рейт-лимите CoinGecko fa_engine может
+    подвиснуть/сильно затормозить -- ручная команда должна отвечать быстро всегда, при
+    таймауте просто возвращаем None (карточка идёт как раньше, без зон/Разбора), не ждём
+    и не роняем /coin.
+
+    Кэш на _FA_ENGINE_COIN_CACHE_TTL секунд по символу (в памяти процесса, без TTL-обхода
+    файлов/Redis -- то же, что и остальные in-memory кэши бота) -- иначе повторные /coin
+    по одному и тому же символу подряд бьют по и так уже ограниченному CoinGecko-бюджету
+    без всякой пользы (данные за 8 минут не успевают значимо измениться)."""
+    now = time.time()
+    cached = _FA_ENGINE_COIN_CACHE.get(symbol)
+    if cached and now - cached[0] < _FA_ENGINE_COIN_CACHE_TTL:
+        return cached[1]
+    try:
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, fa_engine.build_full_analysis, symbol, coin),
+            timeout=timeout)
+    except asyncio.TimeoutError:
+        log.info(f"fa_engine (/coin best-effort) timeout for {symbol}, using legacy card only")
+        return None
+    except Exception as e:
+        log.error(f"fa_engine (/coin best-effort) failed for {symbol}: {type(e).__name__}: {e}")
+        return None
+    if result and result.get("ok"):
+        _FA_ENGINE_COIN_CACHE[symbol] = (now, result)
+        return result
+    return None
+
+
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
         await update.message.reply_text(": `/2 BTC`", parse_mode="Markdown")
@@ -2549,6 +2605,21 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     extras = get_market_extras(symbol)
     text   = build_signal_text(symbol, a, stats, atl, extras)
     await msg.delete()
+
+    # Best-effort fa_engine (см. _get_fa_engine_result_cached): даёт Chart v4 реальные
+    # зоны/структуру + план сделки для чарта (legacy full_analysis() выше их не считает
+    # вообще), и данные для блока "Разбор". Таймаут/кэш внутри -- при недоступности
+    # /coin отрабатывает ровно как раньше, без графика v4/Разбора.
+    fa_result = await _get_fa_engine_result_cached(symbol, coin)
+    if fa_result:
+        b11 = fa_result.get("block11_trade_plan", {})
+        if b11.get("has_setup"):
+            a["is_long"] = b11["direction"] == "long"
+            a["entry1"], a["entry2"], a["entry3"] = b11["entry1"], b11["entry2"], b11["entry3"]
+            a["sl"], a["tp1"], a["tp2"], a["tp3"] = b11["sl"], b11["tp1"], b11["tp2"], b11["tp3"]
+            a["rr"] = b11["rr_tp1"]
+            a["zones"] = fa_result.get("zones")
+
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -3837,12 +3908,22 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await q.answer("✅ Добавлено в ТОП ЛОНГ" if added else "Уже есть в ТОП ЛОНГ")
                 if added:
                     try:
+                        import functools
                         loop = asyncio.get_event_loop()
                         candles_2h = await loop.run_in_executor(None, get_binance_ohlc, sym, "2h", 120)
                         if candles_2h:
-                            chart = await loop.run_in_executor(
-                                None, chart_v3.build_trade_chart, sym, candles_2h, "long",
-                                [offer["entry"]], offer["sl"], offer["tp1"], offer["tp2"], None, offer["rr"])
+                            chart = None
+                            try:
+                                chart = await loop.run_in_executor(None, functools.partial(
+                                    chart_v4.build_trade_chart_v4, sym, candles_2h, "long",
+                                    entry_levels=[offer["entry"]], sl=offer["sl"],
+                                    tp1=offer["tp1"], tp2=offer["tp2"], rr=offer["rr"]))
+                            except Exception as e:
+                                log.error(f"promotion chart_v4 {sym}: {e}, falling back to chart_v3")
+                            if chart is None:
+                                chart = await loop.run_in_executor(
+                                    None, chart_v3.build_trade_chart, sym, candles_2h, "long",
+                                    [offer["entry"]], offer["sl"], offer["tp1"], offer["tp2"], None, offer["rr"])
                             if chart:
                                 await ctx.bot.send_photo(q.message.chat_id, photo=chart,
                                     caption=f"📊 {sym} — ТОП ЛОНГ (промоушен из Памп-радара)")
@@ -9092,6 +9173,47 @@ async def _search_coin_by_symbol(symbol: str) -> dict | None:
 
 
 
+async def _build_chart_v4_for_full(symbol: str, result: dict):
+    """Chart v4 (chart_v4.py) для /full -- строится только если fa_engine нашёл реальный
+    план сделки (block11_trade_plan.has_setup), т.к. build_trade_chart_v4/v3 требуют
+    entry/SL/TP1 (см. их сигнатуру, они же используются в /coin и signal_loop). zones/
+    candles_4h уже посчитаны build_full_analysis() (result["zones"]/result["candles_4h"])
+    -- без доп. API-вызовов, кроме отдельных 2h-свечей под сам график (та же
+    гранулярность, что и везде в проекте для свинг-сигналов, см. chart_v3.py). Фоллбек
+    Chart v4 -> Chart v3 -> None (текстовая карточка отправляется в любом случае,
+    картинка — бонус, а не обязательное условие)."""
+    b11 = result.get("block11_trade_plan", {})
+    if not b11.get("has_setup"):
+        return None
+    b1 = result.get("block1_bias", {})
+    direction = b11["direction"]
+    key_high = (b1.get("key_high") or {}).get("price")
+    key_low = (b1.get("key_low") or {}).get("price")
+    try:
+        loop = asyncio.get_event_loop()
+        candles = await loop.run_in_executor(None, get_binance_ohlc, symbol, "2h", 120)
+        if not candles or len(candles) < 20:
+            return None
+        entry_levels = [b11["entry1"], b11["entry2"], b11["entry3"]]
+        try:
+            chart = chart_v4.build_trade_chart_v4(
+                symbol, candles, direction, entry_levels=entry_levels,
+                sl=b11["sl"], tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
+                rr=b11["rr_tp1"], key_high=key_high, key_low=key_low, tf_label="2h",
+                zones=result.get("zones"), candles_4h=result.get("candles_4h"))
+            if chart is not None:
+                return chart
+        except Exception as e:
+            log.error(f"Chart v4 FAILED (/full) {symbol}: {type(e).__name__}: {e}, falling back to Chart v3")
+        return chart_v3.build_trade_chart(
+            symbol, candles, direction, entry_levels=entry_levels,
+            sl=b11["sl"], tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
+            rr=b11["rr_tp1"], key_high=key_high, key_low=key_low, tf_label="2h")
+    except Exception as e:
+        log.error(f"Chart (/full) FAILED {symbol}: {type(e).__name__}: {e}")
+        return None
+
+
 async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     """         """
     symbol = symbol.upper().replace("USDT","").replace("BUSD","")
@@ -9138,6 +9260,15 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
 
     card = fa_engine.render_full_analysis_card(result)
     chunks = fa_engine.split_card(card, limit=4096)
+
+    chart = await _build_chart_v4_for_full(symbol, result)
+    if chart is not None:
+        try:
+            chart.seek(0)
+            await bot.send_photo(chat_id, photo=chart, caption=f"📊 {symbol}USDT · график сделки")
+        except Exception as e:
+            log.error(f"send_photo (/full) FAILED {symbol}: {type(e).__name__}: {e}")
+
     for i, chunk in enumerate(chunks):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="show_menu")]]) if i == len(chunks) - 1 else None
         try:
@@ -9145,6 +9276,7 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
         except Exception:
             # markdown  -    ( * _ )    -
             await bot.send_message(chat_id, chunk, reply_markup=kb)
+
     return True
 
 

@@ -510,6 +510,7 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     result["sweep_1h"] = sweep_1h
     result["sweep_4h"] = sweep_4h
     result["zones"] = zones
+    result["candles_4h"] = c4h  # для Chart v4 (chart_v4.py) -- K-LVL-классификация зон без повторного фетча
 
     # ── Signal Journal: логируем только реальный план сделки, source="full_analysis" ──
     if b11.get("has_setup"):

@@ -1052,21 +1052,35 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
 
 async def _send_promotion_chart(ctx: PumpContext, sym: str, direction: str,
                                 entry: float, sl: float, tp1: float, tp2, rr: float):
-    """Chart v3 (2h/~120 баров, свинг-стиль) для промоушена в ТОП ЛОНГ/ШОРТ -- отдельно
+    """Chart v4 (2h/~120 баров, свинг-стиль) для промоушена в ТОП ЛОНГ/ШОРТ -- отдельно
     от 5m Chart v2, который остаётся на исходном памп/дамп-алерте (см. chart_v3.py).
-    Не критично для промоушена самого по себе -- ошибка здесь не должна ронять
-    _try_promote_pump/pump_addlong_, поэтому обёрнуто в try/except на уровне вызова."""
+    Памп-радар не считает структурные POI-зоны (только entry/SL/TP из своего собственного
+    watch-состояния) -- Chart v4 здесь рендерится без zones (валидный режим, см.
+    chart_v4.py), даёт только стрелку сценария и всё остальное из v3. Фоллбек на Chart v3
+    при исключении. Не критично для промоушена самого по себе -- ошибка здесь не должна
+    ронять _try_promote_pump/pump_addlong_, поэтому обёрнуто в try/except на уровне
+    вызова."""
     if not ctx.get_ohlc:
         return
     try:
+        import functools
+        import chart_v4
         import chart_v3
         loop = asyncio.get_event_loop()
         candles_2h = await loop.run_in_executor(None, ctx.get_ohlc, sym, "2h", 120)
         if not candles_2h:
             return
-        chart = await loop.run_in_executor(
-            None, chart_v3.build_trade_chart, sym, candles_2h, direction,
-            [entry], sl, tp1, tp2, None, round(rr, 2))
+        chart = None
+        try:
+            chart = await loop.run_in_executor(None, functools.partial(
+                chart_v4.build_trade_chart_v4, sym, candles_2h, direction,
+                entry_levels=[entry], sl=sl, tp1=tp1, tp2=tp2))
+        except Exception as e:
+            print(f"Pump Radar: promotion chart_v4 {sym}: {e}, falling back to chart_v3")
+        if chart is None:
+            chart = await loop.run_in_executor(
+                None, chart_v3.build_trade_chart, sym, candles_2h, direction,
+                [entry], sl, tp1, tp2, None, round(rr, 2))
         if chart:
             side_ru = "ТОП ЛОНГ" if direction == "long" else "ТОП ШОРТ"
             await ctx.bot.send_photo(ctx.owner_chat_id, photo=chart,
