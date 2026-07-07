@@ -116,7 +116,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v122"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v123"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -291,6 +291,8 @@ _ALL_COINS_CACHE_TTL = 600   # 10 мин (см. ТЗ) -- было 1800с, но �
 _DATA_SOURCE_STATUS = {
     "coingecko_markets": {"ok": None, "last_error": None, "last_ts": 0},
     "cmc": {"ok": None, "last_error": None, "last_ts": 0},
+    "cmc_quotes": {"ok": None, "last_error": None, "last_ts": 0},
+    "cmc_global_metrics": {"ok": None, "last_error": None, "last_ts": 0},
 }
 
 
@@ -316,8 +318,11 @@ def _fetch_coingecko_markets(pages: int = 3, per_page: int = 250) -> list:
                 "price_change_percentage": "1h,24h,7d,30d",
             }, timeout=20)
         except Exception as e:
-            _DATA_SOURCE_STATUS["coingecko_markets"] = {"ok": False, "last_error": str(e), "last_ts": time.time()}
-            log.error(f"CoinGecko markets page {page}: {e}")
+            detail = str(e)
+            if getattr(e, "response", None) is not None:
+                detail = f"HTTP {e.response.status_code}: {e.response.text[:100]}"
+            _DATA_SOURCE_STATUS["coingecko_markets"] = {"ok": False, "last_error": detail, "last_ts": time.time()}
+            log.error(f"CoinGecko markets page {page}: {type(e).__name__}: {e}", exc_info=True)
             break
         if not data:
             break
@@ -449,7 +454,11 @@ def get_global_metrics() -> dict:
         url     = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest"
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
         r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
+        if r.status_code != 200:
+            err = f"HTTP {r.status_code}: {r.text[:100]}"
+            _DATA_SOURCE_STATUS["cmc_global_metrics"] = {"ok": False, "last_error": err, "last_ts": _t.time()}
+            log.error(f"Global metrics HTTP {r.status_code}: {r.text[:300]}")
+            return _global_metrics_cache["data"]
         d = r.json().get("data", {})
         q = d.get("quote", {}).get("USD", {})
         result = {
@@ -460,9 +469,12 @@ def get_global_metrics() -> dict:
         }
         _global_metrics_cache["ts"] = _t.time()
         _global_metrics_cache["data"] = result
+        _DATA_SOURCE_STATUS["cmc_global_metrics"] = {"ok": True, "last_error": None, "last_ts": _t.time()}
         return result
     except Exception as e:
-        log.error(f"Global metrics error: {e}")
+        _DATA_SOURCE_STATUS["cmc_global_metrics"] = {
+            "ok": False, "last_error": f"{type(e).__name__}: {e}", "last_ts": _t.time()}
+        log.error(f"Global metrics error: {type(e).__name__}: {e}", exc_info=True)
         return _global_metrics_cache["data"]
 
 def get_btc_eth_price() -> dict:
@@ -471,7 +483,11 @@ def get_btc_eth_price() -> dict:
         headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
         params  = {"symbol": "BTC,ETH", "convert": "USD"}
         r = requests.get(url, headers=headers, params=params, timeout=10)
-        r.raise_for_status()
+        if r.status_code != 200:
+            err = f"HTTP {r.status_code}: {r.text[:100]}"
+            _DATA_SOURCE_STATUS["cmc_quotes"] = {"ok": False, "last_error": err, "last_ts": time.time()}
+            log.error(f"BTC/ETH price HTTP {r.status_code}: {r.text[:300]}")
+            return {}
         data   = r.json().get("data", {})
         result = {}
         for sym in ["BTC", "ETH"]:
@@ -483,9 +499,12 @@ def get_btc_eth_price() -> dict:
                     "ch1h":  q.get("percent_change_1h", 0),
                     "ch24h": q.get("percent_change_24h", 0),
                 }
+        _DATA_SOURCE_STATUS["cmc_quotes"] = {"ok": True, "last_error": None, "last_ts": time.time()}
         return result
     except Exception as e:
-        log.error(f"BTC/ETH price error: {e}")
+        _DATA_SOURCE_STATUS["cmc_quotes"] = {
+            "ok": False, "last_error": f"{type(e).__name__}: {e}", "last_ts": time.time()}
+        log.error(f"BTC/ETH price error: {type(e).__name__}: {e}", exc_info=True)
         return {}
 
 def _snap_cg_days(days: int) -> str:
@@ -2265,7 +2284,18 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         gm = get_global_metrics()
         coins = get_all_coins()
         if not prices or not coins:
-            await msg.edit_text("❌ API"); return
+            failures = []
+            if not prices:
+                st = _DATA_SOURCE_STATUS.get("cmc_quotes", {})
+                failures.append(f"CMC quotes/latest (цены BTC/ETH): {st.get('last_error') or 'нет данных'}")
+            if not coins:
+                st_cg = _DATA_SOURCE_STATUS.get("coingecko_markets", {})
+                st_cmc = _DATA_SOURCE_STATUS.get("cmc", {})
+                failures.append(f"CoinGecko /coins/markets: {st_cg.get('last_error') or 'нет данных'}")
+                failures.append(f"CMC /listings/latest (фоллбек): {st_cmc.get('last_error') or 'нет данных'}")
+            text = "❌ Обзор рынка недоступен — упавшие источники:\n" + "\n".join(f"• {f}" for f in failures)
+            await msg.edit_text(text)
+            return
 
         btc=prices.get("BTC",{}); eth=prices.get("ETH",{})
         btc_price=btc.get("price",0) or 0
@@ -2541,8 +2571,11 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🏛 Институционал",callback_data="institutional")
             ]]),disable_web_page_preview=True)
     except Exception as e:
-        log.error(f"cmd_market: {e}")
-        await msg.edit_text(f"❌ {e}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Меню",callback_data="show_menu")]]))
+        import traceback
+        log.error(f"cmd_market: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        await msg.edit_text(
+            f"❌ Обзор рынка: {type(e).__name__}: {str(e)[:200]}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Меню",callback_data="show_menu")]]))
 
 _FA_ENGINE_COIN_CACHE: dict = {}          # {symbol: (ts, result)} -- см. _get_fa_engine_result_cached
 _FA_ENGINE_COIN_CACHE_TTL = 480            # 8 минут -- повторный /coin того же символа не жжёт лимит снова
