@@ -116,7 +116,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v127"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v128"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -4286,12 +4286,34 @@ async def whale_monitor(bot: Bot):
         log.info(f"[WHALE]  {alerts_sent} алертов отправлено")
 
 
+AUTO_SCAN_CAP = 30  # макс. кандидатов на направление в прескрине -- см. докстринг send_scheduled
+
 async def send_scheduled(bot: Bot):
-    """
-      30 .
-           
-           .
-    """
+    """Автосигналы каждые 30 минут (см. scheduler.add_job(send_scheduled, interval, minutes=30)).
+
+    РАНЬШЕ: строил сигналы из сырых %-эвристик (ch1h/ch24h/ch7d пороги) с ФИКСИРОВАННЫМИ
+    TP +2/+4/+8% (long) или -2/-4/-8% (short), SL всегда -15%/+15%, R:R всегда захардкожен
+    2.5 -- БЕЗ какой-либо проверки реальной структуры или R:R-гейта, и рассылал это ВСЕМ
+    подписчикам автоматически. Ровно тот же класс бага, что и в /coin до фикса (см. историю
+    бага 4) -- только тут он бил не по одному ручному запросу, а по расписанию на всех
+    подписчиков сразу.
+
+    ТЕПЕРЬ: дешёвый прескрин по %-моментуму (как раньше) только СУЖАЕТ список кандидатов
+    -- не решает, слать сигнал или нет. Решение принимает real_full_analysis() (тот же
+    движок и ТЕ ЖЕ гейты, что и ручные /long и /short: rocket>=60 + грейд A+/A/B, не
+    подозрительный объём, не контртренд без свипа, R:R по структуре >= 1:1.5) -- сигнал
+    уходит, только если реально прошёл все проверки, entry/SL/TP/R:R честные, от структуры,
+    не выдуманные проценты. fa_engine здесь не используется (в отличие от /coin) --
+    прогон fa_engine на сотнях монет каждые 30 минут по стоимости неприемлем (см. историю
+    бага 3: даже real_full_analysis, который дешевле fa_engine, идёт ~1.5с/монету);
+    real_full_analysis -- тот же движок, что уже проверен и используется в ручных
+    /long и /short, с идентичными гейтами -- согласованно по всему боту.
+
+    Спот-автосигнал ПОЛНОСТЬЮ УБРАН: его условие (ch90d < -40) физически недостижимо с
+    v114 (get_all_coins() перешёл на CoinGecko, которая не отдаёт 90-дневное изменение --
+    percent_change_90d всегда 0.0, см. историю бага 2), и для "спот-восстановления" нет
+    структурной модели entry/SL/TP (в отличие от лонга/шорта) -- нечего чинить по тому же
+    принципу, там никогда не было реального сетапа за фиксированными процентами."""
     chat_ids = load_chat_ids() | user_chat_ids
     if not chat_ids:
         return
@@ -4300,210 +4322,117 @@ async def send_scheduled(bot: Bot):
         log.info("[AUTO] пропуск итерации -- активен ручной скан (top_long/top_short/top_spot/x100)")
         return
 
-    log.info(f"[AUTO]   {now_utc3()}")
+    log.info(f"[AUTO] автосигналы {now_utc3()}")
 
     try:
         coins = get_all_coins()
         if not coins:
-            log.error("[AUTO]  ")
+            log.error("[AUTO] нет данных по монетам")
             return
 
-        sent_long  = 0
-        sent_short = 0
-        sent_spot  = 0
         already_sent = set(list(TOP_LONG_SIGNALS.keys()) + list(TOP_SHORT_SIGNALS.keys()))
 
-        from live_prices import resolve_price
-
+        # Дешёвый прескрин по моментуму -- НЕ решение о сигнале, только сужает список для
+        # дорогих real_full_analysis()-вызовов (см. AUTO_SCAN_CAP).
+        long_candidates, short_candidates = [], []
         for coin in coins:
-            q         = coin["quote"]["USDT"]
-            sym       = coin["symbol"]
-            cg_price  = q.get("price",             0) or 0
-            price, price_fresh = resolve_price(sym, cg_price)  # live WS-цена, фоллбек на CoinGecko с пометкой
-            ch1h      = q.get("percent_change_1h",  0) or 0
-            ch24h     = q.get("percent_change_24h", 0) or 0
-            ch7d      = q.get("percent_change_7d",  0) or 0
-            ch30d     = q.get("percent_change_30d", 0) or 0
-            ch90d     = q.get("percent_change_90d", 0) or 0
-            vol       = q.get("volume_24h",         0) or 0
-            mcap      = q.get("market_cap",         0) or 0
-            rank      = coin.get("cmc_rank", 9999)
+            q = coin["quote"]["USDT"]
+            sym = coin["symbol"]
+            price = q.get("price", 0) or 0
+            ch1h = q.get("percent_change_1h", 0) or 0
+            ch24h = q.get("percent_change_24h", 0) or 0
+            ch7d = q.get("percent_change_7d", 0) or 0
+            vol = q.get("volume_24h", 0) or 0
+            mcap = q.get("market_cap", 0) or 0
             vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
-            slug      = coin.get("slug", sym.lower())
 
-            if price <= 0 or vol < 500_000: continue
-            if vol_ratio > 60:              continue
-            if sym in already_sent:         continue  #     
+            if price <= 0 or vol < 2_000_000 or vol_ratio > 60 or sym in already_sent:
+                continue
+            if ch1h > 0.5 and ch24h > 2.0 and ch7d > 0:
+                long_candidates.append(coin)
+            elif ch1h < -0.5 and ch24h < -2.0:
+                short_candidates.append(coin)
 
-            #  :   
-            if (ch1h > 0.5 and ch24h > 2.0 and ch7d > 0
-                    and vol >= 2_000_000 and sent_long < 10):
+        sent_long = sent_short = 0
+        work = ([(c, True) for c in long_candidates[:AUTO_SCAN_CAP]] +
+                [(c, False) for c in short_candidates[:AUTO_SCAN_CAP]])
 
-                tp1 = price * 1.02; tp2 = price * 1.04; tp3 = price * 1.08
-                sl  = price * 0.85; swing = price * 0.92
-                score = min(50 + int(ch1h*2 + ch24h*1.5), 95)
-
-                a_stub = {
-                    "price": price, "price_fresh": price_fresh, "is_long": True,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                    "sl": sl, "swing": swing, "rr": 2.5,
-                    "rocket": score, "rocket_label": " ",
-                    "rsi_4h": 50.0, "rsi_1h": 50.0, "rsi_1d": 50.0,
-                    "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d,
-                    "ch30d": ch30d, "ch90d": ch90d,
-                    "vol": vol, "mcap": mcap, "rank": rank,
-                    "above_ema20": ch24h > 0, "above_ema50": ch7d > 0,
-                    "above_ema200": False,
-                    "macd_bullish": ch1h > 0, "macd_bearish": False,
-                    "bb_squeeze": False, "vol_spike": False,
-                    "smc_factors": [], "suspicious": False,
-                    "st_label": "", "trend_4h": "bullish",
-                    "atr": price*0.03, "support": price*0.92,
-                    "resistance": price*1.08,
-                    "ema20_4h": price*0.99, "ema50_4h": price*0.97,
-                    "ema200_4h": price*0.85, "fund_recovery": False,
-                }
-
-                text = _build_signal_post(sym, a_stub, {}, mode="long")
-                TOP_LONG_SIGNALS[sym] = {
-                    "time": datetime.now(TZ), "entry": price,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                    "sl": sl, "rr": 2.5, "status": "active",
-                }
-                _save_signals()
-                try:
-                    signal_journal.log_signal("TOP_LONG_AUTO", sym, "long", price,
-                                               entry_lo=price, entry_hi=price, sl=sl,
-                                               tp1=tp1, tp2=tp2, tp3=tp3, rr=2.5,
-                                               rocket_score=score)
-                except Exception as e:
-                    log.error(f"[JOURNAL] TOP_LONG_AUTO {sym}: {e}")
-                already_sent.add(sym)
-                sent_long += 1
-
-                for cid in chat_ids:
-                    try:
-                        await send_coin(bot, cid, sym, slug, a_stub, text)
-                    except Exception as e:
-                        log.error(f"[AUTO LONG] {sym}  {cid}: {e}")
-                await asyncio.sleep(1.0)
-                continue  #   
-
-            #  :   
-            if (ch1h < -0.5 and ch24h < -2.0
-                    and vol >= 2_000_000 and sent_short < 10):
-
-                tp1 = price * 0.98; tp2 = price * 0.96; tp3 = price * 0.92
-                sl  = price * 1.15; swing = price * 1.08
-                score = min(50 + int(abs(ch1h)*2 + abs(ch24h)*1.5), 95)
-
-                a_stub = {
-                    "price": price, "price_fresh": price_fresh, "is_long": False,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                    "sl": sl, "swing": swing, "rr": 2.5,
-                    "rocket": score, "rocket_label": " ",
-                    "rsi_4h": 65.0, "rsi_1h": 65.0, "rsi_1d": 55.0,
-                    "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d,
-                    "ch30d": ch30d, "ch90d": ch90d,
-                    "vol": vol, "mcap": mcap, "rank": rank,
-                    "above_ema20": False, "above_ema50": False,
-                    "above_ema200": False,
-                    "macd_bullish": False, "macd_bearish": True,
-                    "bb_squeeze": False, "vol_spike": False,
-                    "smc_factors": [], "suspicious": False,
-                    "st_label": "", "trend_4h": "bearish",
-                    "atr": price*0.03, "support": price*0.85,
-                    "resistance": price*1.08,
-                    "ema20_4h": price*1.01, "ema50_4h": price*1.03,
-                    "ema200_4h": price*1.15, "fund_recovery": False,
-                }
-
-                text = _build_signal_post(sym, a_stub, {}, mode="short")
-                TOP_SHORT_SIGNALS[sym] = {
-                    "time": datetime.now(TZ), "entry": price,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                    "sl": sl, "rr": 2.5, "status": "active",
-                }
-                _save_signals()
-                try:
-                    signal_journal.log_signal("TOP_SHORT_AUTO", sym, "short", price,
-                                               entry_lo=price, entry_hi=price, sl=sl,
-                                               tp1=tp1, tp2=tp2, tp3=tp3, rr=2.5,
-                                               rocket_score=score)
-                except Exception as e:
-                    log.error(f"[JOURNAL] TOP_SHORT_AUTO {sym}: {e}")
-                already_sent.add(sym)
-                sent_short += 1
-
-                for cid in chat_ids:
-                    try:
-                        await send_coin(bot, cid, sym, slug, a_stub, text)
-                    except Exception as e:
-                        log.error(f"[AUTO SHORT] {sym}  {cid}: {e}")
-                await asyncio.sleep(1.0)
+        for coin, want_long in work:
+            if sent_long >= 10 and sent_short >= 10:
+                break
+            sym = coin["symbol"]
+            if sym in already_sent:
+                continue
+            if want_long and sent_long >= 10:
+                continue
+            if not want_long and sent_short >= 10:
                 continue
 
-            #  :   
-            if (ch90d < -40 and ch7d > 0
-                    and vol >= 1_000_000 and mcap >= 10_000_000
-                    and sent_spot < 3):
+            try:
+                a = real_full_analysis(coin)
+            except Exception as e:
+                log.error(f"[AUTO] real_full_analysis {sym}: {e}")
+                continue
 
-                x_ath = 1 / (1 + ch90d/100) if ch90d < -5 else 1.0
-                buy2  = price * 0.95; buy1 = price * 0.88; buy3 = price * 0.78
-                sell  = price * x_ath * 0.85
+            is_long = a["is_long"]
+            if is_long != want_long:
+                continue  # прескрин предполагал одно направление, структура даёт другое -- не наш кандидат
+            if a.get("suspicious"):
+                continue
+            if is_long and a["rsi_4h"] > RSI_EXTREME_LONG:
+                continue
+            if not is_long and a["rsi_4h"] < RSI_EXTREME_SHORT:
+                continue
+            grade = _signal_grade(a, is_long)
+            if not (a["rocket"] >= 60 and grade in ("A+", "A", "B")):
+                continue
+            if _counter_trend_blocked(a, "long" if is_long else "short"):
+                continue
+            if not a.get("rr_gate_pass"):
+                continue
 
-                a_stub = {
-                    "price": price, "price_fresh": price_fresh, "is_long": True,
-                    "tp1": buy2, "tp2": buy1, "tp3": buy3,
-                    "sl": price*0.70, "swing": price*0.80, "rr": 3.0,
-                    "rocket": 70, "rocket_label": "потенциал восстановления",
-                    "rsi_4h": 35.0, "rsi_1h": 35.0, "rsi_1d": 30.0,
-                    "ch1h": ch1h, "ch24h": ch24h, "ch7d": ch7d,
-                    "ch30d": ch30d, "ch90d": ch90d,
-                    "vol": vol, "mcap": mcap, "rank": rank,
-                    "above_ema20": False, "above_ema50": False,
-                    "above_ema200": False,
-                    "smc_factors": [], "suspicious": False,
-                    "fund_recovery": True,
-                    "macd_bullish": False, "macd_bearish": False,
-                    "ema20_4h": price, "ema50_4h": price, "ema200_4h": price,
-                }
+            slug = coin.get("slug", sym.lower())
+            mode = "long" if is_long else "short"
+            text = _build_signal_post(sym, a, {}, mode=mode)
+            target_dict = TOP_LONG_SIGNALS if is_long else TOP_SHORT_SIGNALS
+            target_dict[sym] = {
+                "time": datetime.now(TZ), "entry": a["price"],
+                "tp1": a["tp1"], "tp2": a["tp2"], "tp3": a["tp3"],
+                "sl": a["sl"], "rr": a["rr"], "status": "active",
+            }
+            _save_signals()
+            # entry_lo/entry_hi -- фактический ценовой порядок (lo<hi), не порядок DCA-входа:
+            # для LONG entry1 (первый транш) выше entry3, для SHORT -- наоборот (см. тот же
+            # конвеншен в fa_engine.py и в ручных /long, /short).
+            e_lo, e_hi = ((a["entry3"], a["entry1"]) if is_long else (a["entry1"], a["entry3"]))
+            try:
+                signal_journal.log_signal(
+                    "TOP_LONG_AUTO" if is_long else "TOP_SHORT_AUTO", sym, mode, a["price"],
+                    entry_lo=e_lo, entry_hi=e_hi, sl=a["sl"],
+                    tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"], rr=a["rr"],
+                    rocket_score=a.get("rocket"), ema_stack=a.get("ema_ctx"),
+                    sweep=a.get("sweep_4h") or a.get("sweep_1h"),
+                    levels_source=a.get("levels_source"), grade=grade)
+            except Exception as e:
+                log.error(f"[JOURNAL] {'TOP_LONG_AUTO' if is_long else 'TOP_SHORT_AUTO'} {sym}: {e}")
+            already_sent.add(sym)
+            if is_long:
+                sent_long += 1
+            else:
+                sent_short += 1
 
-                text = _build_signal_post(sym, a_stub, {}, mode="spot")
-
-                TOP_SPOT_SIGNALS[sym] = {
-                    "time": datetime.now(TZ), "entry": price,
-                    "buy_zone_lo": buy1, "buy_zone_hi": buy2,
-                    "atl": buy3, "sell_target": sell, "status": "watching",
-                }
-                _save_signals()
+            for cid in chat_ids:
                 try:
-                    signal_journal.log_signal("TOP_SPOT_AUTO", sym, "long", price,
-                                               entry_lo=buy1, entry_hi=buy2, sl=buy3,
-                                               tp1=sell, rocket_score=a_stub.get("rocket"))
+                    await send_coin(bot, cid, sym, slug, a, text)
                 except Exception as e:
-                    log.error(f"[JOURNAL] TOP_SPOT_AUTO {sym}: {e}")
-                already_sent.add(sym)
-                sent_spot += 1
+                    log.error(f"[AUTO {'LONG' if is_long else 'SHORT'}] {sym} -> {cid}: {e}")
+            await asyncio.sleep(1.0)
 
-                for cid in chat_ids:
-                    try:
-                        await send_coin(bot, cid, sym, slug, a_stub, text)
-                    except Exception as e:
-                        log.error(f"[AUTO SPOT] {sym}  {cid}: {e}")
-                await asyncio.sleep(1.0)
-
-            #    
-            if sent_long >= 10 and sent_short >= 10 and sent_spot >= 3:
-                break
-
-        log.info(
-            f"[AUTO] :  {sent_long}   "
-            f" {sent_short}    {sent_spot} "
-        )
+        log.info(f"[AUTO] итог: {sent_long} лонг, {sent_short} шорт "
+                 f"(из {len(long_candidates)}/{len(short_candidates)} кандидатов прескрина)")
 
     except Exception as e:
-        log.error(f"[AUTO]  : {e}")
+        log.error(f"[AUTO] ошибка: {e}")
 
 
 supertrend_cache = {}  # {symbol: last_direction}
