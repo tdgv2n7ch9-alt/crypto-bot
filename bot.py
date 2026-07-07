@@ -116,7 +116,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v125"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v126"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2624,52 +2624,43 @@ async def _get_fa_engine_result_cached(symbol: str, coin: dict = None, timeout: 
 
 
 async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/coin (и /2) -- по-тикерная карточка. ЕДИНЫЙ ИСТОЧНИК с /full: fa_engine (см.
+    _render_fa_result) -- раньше эта команда строила карточку из старого full_analysis()
+    (фиксированные TP +4/+8/+15%, SL -15%, R:R всегда ~1:0.27, БЕЗ гейта), из-за чего
+    карточка могла показать LONG с R:R 1:0.3, пока Chart v4/Разбор (уже на fa_engine)
+    показывали SHORT R:R 1:1.6 для той же монеты -- см. историю бага. fa_engine вызывается
+    best-effort с жёстким таймаутом + 8-мин кэшем (_get_fa_engine_result_cached) --
+    ручная команда должна отвечать быстро всегда; при таймауте/недоступности -- честное
+    сообщение, без отката на старые фиксированные проценты (см. bug 1: "нет данных !=
+    придуманное значение")."""
     if not ctx.args:
         await update.message.reply_text(": `/2 BTC`", parse_mode="Markdown")
         return
-    symbol = ctx.args[0].upper()
-    msg    = await update.message.reply_text(f"  {symbol}...")
+    symbol = ctx.args[0].upper().replace("USDT", "").replace("BUSD", "")
+    msg    = await update.message.reply_text(f"🔍 Анализирую *{symbol}USDT*...", parse_mode="Markdown")
     coins  = get_top500()
     coin   = next((c for c in coins if c["symbol"] == symbol), None)
     if not coin:
-        await msg.edit_text(f" {symbol}    -500")
+        await msg.edit_text(f"❌ {symbol} не найдена в топ-500")
         return
-    a      = full_analysis(coin)
-    slug   = coin.get("slug", symbol.lower())
     try:
-        st_data = get_supertrend_signal(symbol)
-        a["st_label"] = st_data["label"]
-    except:
-        a["st_label"] = ""
-    stats  = get_binance_24h(symbol)
-    atl    = get_binance_alltime_low(symbol)
-    extras = get_market_extras(symbol)
-    text   = build_signal_text(symbol, a, stats, atl, extras)
-    await msg.delete()
+        await msg.delete()
+    except Exception:
+        pass
 
-    # Best-effort fa_engine (см. _get_fa_engine_result_cached): даёт Chart v4 реальные
-    # зоны/структуру + план сделки для чарта (legacy full_analysis() выше их не считает
-    # вообще), и данные для блока "Разбор". Таймаут/кэш внутри -- при недоступности
-    # /coin отрабатывает ровно как раньше, без графика v4/Разбора.
     fa_result = await _get_fa_engine_result_cached(symbol, coin)
-    if fa_result:
-        b11 = fa_result.get("block11_trade_plan", {})
-        if b11.get("has_setup"):
-            a["is_long"] = b11["direction"] == "long"
-            a["entry1"], a["entry2"], a["entry3"] = b11["entry1"], b11["entry2"], b11["entry3"]
-            a["sl"], a["tp1"], a["tp2"], a["tp3"] = b11["sl"], b11["tp1"], b11["tp2"], b11["tp3"]
-            a["rr"] = b11["rr_tp1"]
-            a["zones"] = fa_result.get("zones")
+    if not fa_result or not fa_result.get("ok"):
+        await ctx.bot.send_message(
+            update.effective_chat.id,
+            f"⚠️ *{symbol}USDT*: не удалось построить структурный анализ "
+            f"(таймаут или лимит API). Попробуй `/full {symbol}` или повтори позже.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data="show_menu")
+            ]]))
+        return
 
-    await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
-
-    if fa_result:
-        narrative_block = narrative.render_narrative_block(fa_result)
-        if narrative_block:
-            try:
-                await ctx.bot.send_message(update.effective_chat.id, narrative_block, parse_mode="HTML")
-            except Exception as e:
-                log.error(f"narrative send (/coin) failed {symbol}: {type(e).__name__}: {e}")
+    await _render_fa_result(ctx.bot, update.effective_chat.id, symbol, fa_result)
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("  -500... ~60 ")
@@ -3127,19 +3118,29 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                       reply_markup=overview_kb(), disable_web_page_preview=True)
 
     elif data.startswith("coin_"):
+        # ЕДИНЫЙ ИСТОЧНИК с /coin и /full (см. _render_fa_result) -- раньше эта кнопка
+        # ("🔄 Обновить анализ") строила карточку из старого full_analysis() (фиксированные
+        # TP +4/+8/+15%, SL -15%, без R:R-гейта), что могло разойтись с fa_engine-графиком/
+        # Разбором для той же монеты. Теперь оба входа (команда и кнопка) идут через
+        # fa_engine best-effort с таймаутом+кэшем.
         symbol = data[5:]; cid = q.message.chat_id
-        await q.edit_message_text(f"  {symbol}...")
+        await q.edit_message_text(f"🔍 Анализирую {symbol}USDT...")
         coins = get_top500()
         coin  = next((c for c in coins if c["symbol"] == symbol), None)
         if not coin:
-            await q.edit_message_text(f" {symbol}  "); return
-        a    = full_analysis(coin)
-        slug = coin.get("slug", symbol.lower())
-        stats = get_binance_24h(symbol)
-        text  = build_signal_text(symbol, a, stats)
+            await q.edit_message_text(f"❌ {symbol} не найдена"); return
         try: await q.message.delete()
         except: pass
-        await send_coin(ctx.bot, cid, symbol, slug, a, text)
+        fa_result = await _get_fa_engine_result_cached(symbol, coin)
+        if not fa_result or not fa_result.get("ok"):
+            await ctx.bot.send_message(cid,
+                f"⚠️ *{symbol}USDT*: не удалось построить структурный анализ "
+                f"(таймаут или лимит API). Попробуй `/full {symbol}` или повтори позже.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Меню", callback_data="show_menu")]]))
+            return
+        await _render_fa_result(ctx.bot, cid, symbol, fa_result)
 
     elif data.startswith("period_"):
         period = data.split("_")[1]
@@ -9352,6 +9353,48 @@ async def _build_chart_v4_for_full(symbol: str, result: dict):
         return None
 
 
+async def _render_fa_result(bot, chat_id: int, symbol: str, result: dict) -> None:
+    """Единый рендер результата fa_engine.build_full_analysis() -- карточка (Markdown) +
+    Chart v4 (при наличии реального плана сделки) + "Разбор" (HTML, отдельным сообщением).
+
+    ЕДИНЫЙ ИСТОЧНИК ДЛЯ /full И /coin: раньше /coin строил карточку из старого
+    full_analysis()/build_signal_text() (фиксированные +4/+8/+15% TP, -15% SL, без R:R-
+    гейта), а Chart v4/Разбор -- уже из fa_engine (best-effort) -- при расхождении
+    направлений между движками карточка показывала LONG, а график и Разбор SHORT (или
+    наоборот). Теперь и /full, и /coin вызывают ЭТУ функцию с ОДНИМ и тем же result --
+    направление/entry/SL/TP/R:R везде из одного структурного расчёта, R:R-гейт ≥1:1.5 уже
+    встроен в fa_engine.block11_trade_plan (has_setup=False, если гейт не пройден -- см.
+    fa_engine._trade_plan()), поэтому карточка никогда не покажет R:R хуже 1.5 как готовую
+    сделку."""
+    card = fa_engine.render_full_analysis_card(result)
+    chunks = fa_engine.split_card(card, limit=4096)
+
+    chart = await _build_chart_v4_for_full(symbol, result)
+    if chart is not None:
+        try:
+            chart.seek(0)
+            await bot.send_photo(chat_id, photo=chart, caption=f"📊 {symbol}USDT · график сделки")
+        except Exception as e:
+            log.error(f"send_photo FAILED {symbol}: {type(e).__name__}: {e}")
+
+    for i, chunk in enumerate(chunks):
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="show_menu")]]) if i == len(chunks) - 1 else None
+        try:
+            await bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_markup=kb)
+        except Exception:
+            # markdown  -    ( * _ )    -
+            await bot.send_message(chat_id, chunk, reply_markup=kb)
+
+    # "Разбор" (narrative.py) -- отдельным сообщением с parse_mode="HTML" (карточка выше
+    # рендерится Markdown'ом, смешивать с HTML-тегами <b> нельзя, см. docstring narrative.py).
+    try:
+        narrative_block = narrative.render_narrative_block(result)
+        if narrative_block:
+            await bot.send_message(chat_id, narrative_block, parse_mode="HTML")
+    except Exception as e:
+        log.error(f"narrative send failed {symbol}: {type(e).__name__}: {e}")
+
+
 async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
     """         """
     symbol = symbol.upper().replace("USDT","").replace("BUSD","")
@@ -9396,33 +9439,7 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
             ]]))
         return False
 
-    card = fa_engine.render_full_analysis_card(result)
-    chunks = fa_engine.split_card(card, limit=4096)
-
-    chart = await _build_chart_v4_for_full(symbol, result)
-    if chart is not None:
-        try:
-            chart.seek(0)
-            await bot.send_photo(chat_id, photo=chart, caption=f"📊 {symbol}USDT · график сделки")
-        except Exception as e:
-            log.error(f"send_photo (/full) FAILED {symbol}: {type(e).__name__}: {e}")
-
-    for i, chunk in enumerate(chunks):
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="show_menu")]]) if i == len(chunks) - 1 else None
-        try:
-            await bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_markup=kb)
-        except Exception:
-            # markdown  -    ( * _ )    -
-            await bot.send_message(chat_id, chunk, reply_markup=kb)
-
-    # "Разбор" (narrative.py) -- отдельным сообщением с parse_mode="HTML" (карточка выше
-    # рендерится Markdown'ом, смешивать с HTML-тегами <b> нельзя, см. docstring narrative.py).
-    try:
-        narrative_block = narrative.render_narrative_block(result)
-        if narrative_block:
-            await bot.send_message(chat_id, narrative_block, parse_mode="HTML")
-    except Exception as e:
-        log.error(f"narrative send (/full) failed {symbol}: {type(e).__name__}: {e}")
+    await _render_fa_result(bot, chat_id, symbol, result)
     return True
 
 
