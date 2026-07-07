@@ -116,7 +116,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v124"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v125"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -128,6 +128,13 @@ _scan_busy = {k: False for k in _SCAN_TYPES}
 
 def _any_manual_scan_active() -> bool:
     return any(_scan_busy.values())
+
+# Кэш результата тяжёлых сканов (60с TTL) -- повторное нажатие "Обновить" сразу после
+# скана не должно снова гонять 80 блокирующих real_full_analysis()-вызовов. НЕ решает
+# саму медлительность скана (см. _scan_top_short_sync и TIMING-логи), только защищает
+# от бессмысленного повторного запуска в узком окне.
+_SCAN_RESULT_CACHE_TTL = 60
+_scan_result_cache = {k: {"ts": 0, "data": None} for k in _SCAN_TYPES}
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -8997,13 +9004,27 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         _scan_busy["top_long"] = False
 
 
-def _scan_top_short_sync():
+def _scan_top_short_sync(progress: dict = None):
     """Тяжёлая, полностью синхронная часть /short: CMC-фетч + до 80 блокирующих
     real_full_analysis()-вызовов. Выполняется в run_in_executor (см. _scan_busy).
 
     Без fallback-логики: плохой сигнал хуже отсутствия сигнала (см. _scan_top_long_sync).
-    Отклонённые кандидаты собираются в rejected для честной сводки в cmd_top_short."""
+    Отклонённые кандидаты собираются в rejected для честной сводки в cmd_top_short.
+
+    progress: опциональный shared dict {"i","total"} -- обновляется по ходу цикла,
+    читается из async-стороны (cmd_top_short) каждые 15с для апдейта сообщения
+    пользователю. Простое присваивание int в CPython атомарно под GIL, отдельная
+    блокировка не нужна для этого паттерна "один пишет, один читает".
+
+    Тайминги по фазам логируются отдельно (список символов / OHLC+TA+fa-проверки
+    совмещены внутри real_full_analysis() на каждую монету -- это ОДНА блокирующая
+    real_full_analysis()-транзакция на монету, а не отдельно разложимые под-фазы, см.
+    докстринг real_ta()) -- честно логируем как один блок, не выдумываем ложную
+    гранулярность, которой в архитектуре сейчас нет."""
+    t0 = time.time()
     coins = get_top500()
+    t_list = time.time()
+    log.info(f"[TIMING top_short] список символов: {len(coins) if coins else 0} монет за {t_list - t0:.1f}s")
     if not coins:
         return None, None, None
 
@@ -9015,10 +9036,19 @@ def _scan_top_short_sync():
         vol_ratio = (vol / mcap * 100) if mcap > 0 else 0
         if vol >= 1_000_000 and vol_ratio < 60:
             pre.append(coin)
+    t_prefilter = time.time()
+    candidates_n = len(pre[:80])
+    log.info(f"[TIMING top_short] прескрин: {len(pre)} прошли объём/ликвидность "
+             f"(берём первые {candidates_n}) за {t_prefilter - t_list:.1f}s")
+    if progress is not None:
+        progress["total"] = candidates_n
+        progress["i"] = 0
 
     scored = []
     rejected = []  # (symbol, reason, rocket)
-    for coin in pre[:80]:
+    for idx, coin in enumerate(pre[:80]):
+        if progress is not None:
+            progress["i"] = idx + 1
         try:
             a = real_full_analysis(coin)
             sym = coin["symbol"]
@@ -9091,6 +9121,12 @@ def _scan_top_short_sync():
     scored.sort(key=lambda x: x[1]["rocket"], reverse=True)
     top_short = scored[:5]
     rejected.sort(key=lambda r: r[2], reverse=True)
+    t_end = time.time()
+    avg = (t_end - t_prefilter) / candidates_n if candidates_n else 0
+    log.info(f"[TIMING top_short] анализ {candidates_n} монет (OHLC-загрузка+TA+fa-проверки "
+             f"через real_full_analysis, совмещено на монету): {t_end - t_prefilter:.1f}s "
+             f"(среднее {avg:.2f}s/монету) -- прошли {len(scored)}, отброшено {len(rejected)}. "
+             f"Итого весь скан: {t_end - t0:.1f}s")
     return coins, top_short, rejected[:3]
 
 
@@ -9103,8 +9139,47 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         msg = await update.message.reply_text("🔴 Сканирую рынок на шорт-сетапы... ~40 сек")
 
-        loop = asyncio.get_event_loop()
-        coins, top_short, rejected_top3 = await loop.run_in_executor(None, _scan_top_short_sync)
+        cached = _scan_result_cache["top_short"]
+        if time.time() - cached["ts"] < _SCAN_RESULT_CACHE_TTL and cached["data"] is not None:
+            coins, top_short, rejected_top3 = cached["data"]
+            log.info("[TIMING top_short] отдан кэш скана (< 60с с прошлого запуска)")
+        else:
+            # Прогресс-репортер: конкурентная корутина поверх run_in_executor -- каждые
+            # 15с читает progress (простой dict, пишется из sync-воркера в другом потоке,
+            # int-присваивание атомарно под GIL) и правит сообщение "Сканирую... i/N".
+            # ВАЖНО про concurrency guard: _scan_busy -- per-scan-type (top_short/top_spot/
+            # top_long/x100 -- независимые флаги), так что top_spot НЕ блокирует старт
+            # top_short через этот guard. Но оба (и любой другой скан на real_full_analysis())
+            # разделяют ГЛОБАЛЬНЫЕ rate-limit локи _bybit_kline_lock/_cg_lock -- если два
+            # скана реально идут одновременно, их HTTP-вызовы физически сериализуются через
+            # эти локи, а не через _scan_busy. top_spot сейчас OHLC вообще не грузит (см. bug 2),
+            # так что конкретно spot->short коллизии нет, но long/x100 -> short -- есть.
+            progress = {"i": 0, "total": 0}
+            loop = asyncio.get_event_loop()
+            scan_future = loop.run_in_executor(None, _scan_top_short_sync, progress)
+
+            async def _progress_reporter():
+                last_i = -1
+                while not scan_future.done():
+                    await asyncio.sleep(15)
+                    if scan_future.done():
+                        break
+                    i, total = progress["i"], progress["total"]
+                    if total and i != last_i:
+                        try:
+                            await msg.edit_text(f"🔴 Сканирую рынок на шорт-сетапы... {i}/{total}")
+                        except Exception:
+                            pass
+                        last_i = i
+
+            reporter_task = asyncio.create_task(_progress_reporter())
+            try:
+                coins, top_short, rejected_top3 = await scan_future
+            finally:
+                reporter_task.cancel()
+
+            if coins is not None:
+                _scan_result_cache["top_short"] = {"ts": time.time(), "data": (coins, top_short, rejected_top3)}
 
         if coins is None:
             await msg.edit_text("❌ Нет данных"); return
