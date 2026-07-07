@@ -110,12 +110,13 @@ import fa_engine
 import signal_loop
 import chart_v3
 import chart_v4
+import narrative
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v120"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v121"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2621,6 +2622,14 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             a["zones"] = fa_result.get("zones")
 
     await send_coin(ctx.bot, update.effective_chat.id, symbol, slug, a, text)
+
+    if fa_result:
+        narrative_block = narrative.render_narrative_block(fa_result)
+        if narrative_block:
+            try:
+                await ctx.bot.send_message(update.effective_chat.id, narrative_block, parse_mode="HTML")
+            except Exception as e:
+                log.error(f"narrative send (/coin) failed {symbol}: {type(e).__name__}: {e}")
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("  -500... ~60 ")
@@ -9277,6 +9286,14 @@ async def _do_full_analysis(bot, chat_id: int, symbol: str) -> bool:
             # markdown  -    ( * _ )    -
             await bot.send_message(chat_id, chunk, reply_markup=kb)
 
+    # "Разбор" (narrative.py) -- отдельным сообщением с parse_mode="HTML" (карточка выше
+    # рендерится Markdown'ом, смешивать с HTML-тегами <b> нельзя, см. docstring narrative.py).
+    try:
+        narrative_block = narrative.render_narrative_block(result)
+        if narrative_block:
+            await bot.send_message(chat_id, narrative_block, parse_mode="HTML")
+    except Exception as e:
+        log.error(f"narrative send (/full) failed {symbol}: {type(e).__name__}: {e}")
     return True
 
 
