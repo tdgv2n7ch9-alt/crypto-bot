@@ -543,8 +543,20 @@ def multi_tf_bias(candles_1d: list, candles_4h: list, candles_1h: list) -> dict:
     + EMA-стек 4h как согласованность, 1h — контекст входа (тоже EMA-стек).
 
     Возвращает {"bias", "structure_1d", "tf_agreement", "detail"}."""
-    out = {"bias": "NEUTRAL", "structure_1d": "не определена", "tf_agreement": "н/д", "detail": []}
+    out = {"bias": "NEUTRAL", "structure_1d": "не определена", "tf_agreement": "н/д", "detail": [],
+           "key_low": None, "key_high": None}
     highs, lows = swing_points(candles_1d)
+
+    # Локальная структура (ТЗ Блок 1): последний ключевой минимум (его пробой -- первая
+    # предпосылка разворота/продолжения вниз) и последний ключевой хай (его снятие --
+    # цель движения вверх) -- явно, с ценами, независимо от того, определился ли bias.
+    if lows:
+        idx, lvl = lows[-1]
+        out["key_low"] = {"price": lvl, "bars_ago": len(candles_1d) - 1 - idx}
+    if highs:
+        idx, lvl = highs[-1]
+        out["key_high"] = {"price": lvl, "bars_ago": len(candles_1d) - 1 - idx}
+
     structure_dir = None
     if len(highs) >= 2 and len(lows) >= 2:
         hh = highs[-1][1] > highs[-2][1]
@@ -577,6 +589,12 @@ def multi_tf_bias(candles_1d: list, candles_4h: list, candles_1h: list) -> dict:
         f"4H EMA-стек: {stack_4h}",
         f"1H EMA-стек (контекст входа): {stack_1h}",
     ]
+    if out["key_low"]:
+        out["detail"].append(f"Ключевой минимум: {smart_round(out['key_low']['price'])} "
+                             f"(пробой = предпосылка разворота/продолжения вниз)")
+    if out["key_high"]:
+        out["detail"].append(f"Ключевой хай: {smart_round(out['key_high']['price'])} "
+                             f"(снятие = цель движения вверх)")
 
     if structure_dir and ema_dir and structure_dir == ema_dir:
         out["bias"] = "LONG" if structure_dir == "long" else "SHORT"
@@ -788,3 +806,94 @@ def wyckoff_phase_heuristic(closes_1d: list, price: float, vols_1d: list = None)
     else:
         out["phase"] = "переходная/не определена"
     return out
+
+
+# ── K-LVL: усиленные уровни (методика K-LVL/ICT) ────────────────────────────
+
+KLVL_MIN_CRITERIA = 2             # зона становится K-LVL при выполнении >= этого числа критериев
+KLVL_MIN_TOUCHES = 3              # критерий (а): 3+ касания
+KLVL_IMPULSE_LOOKBACK_BARS = 3    # критерий (б): импульс в течение N баров после касания
+KLVL_IMPULSE_PCT = 2.0            # критерий (б): импульс >= этого % от цены касания
+KLVL_RANGE_LOOKBACK_BARS = 20     # критерий (г): диапазон последних N баров 4h
+KLVL_RANGE_EDGE_TOLERANCE_PCT = 1.0  # критерий (г): допуск близости к границе диапазона
+KLVL_POLARITY_FLIP_CLOSES = 2     # (3): пробой K-LVL подтверждён N закрытиями 4h за уровнем
+
+
+def _impulse_after_touch(candles: list, zone_lo: float, zone_hi: float) -> bool:
+    """Критерий (б): было ли хотя бы одно касание зоны (свеча зашла внутрь [lo,hi]),
+    после которого в течение KLVL_IMPULSE_LOOKBACK_BARS баров цена ушла от цены касания
+    на >= KLVL_IMPULSE_PCT% (реакция от уровня, а не просто прохождение сквозь него)."""
+    n = len(candles)
+    for i in range(n - 1):
+        c = candles[i]
+        touched = (zone_lo <= c["low"] <= zone_hi) or (zone_lo <= c["high"] <= zone_hi) or \
+                  (c["low"] <= zone_lo and c["high"] >= zone_hi)
+        if not touched:
+            continue
+        base_price = c["close"]
+        if base_price <= 0:
+            continue
+        future = candles[i + 1:i + 1 + KLVL_IMPULSE_LOOKBACK_BARS]
+        if not future:
+            continue
+        max_move_pct = max(abs(f["close"] - base_price) / base_price * 100 for f in future)
+        if max_move_pct >= KLVL_IMPULSE_PCT:
+            return True
+    return False
+
+
+def classify_klvl_zones(zones_side: list, candles_4h: list) -> list:
+    """Присваивает зонам (список из find_sr_zones()["above"|"below"]) метку K-LVL по
+    методике: зона -- K-LVL при выполнении >= KLVL_MIN_CRITERIA из:
+      (а) 3+ касания
+      (б) от уровня был импульс >= KLVL_IMPULSE_PCT% за KLVL_IMPULSE_LOOKBACK_BARS баров
+          после касания (реакция, не пробой навылет)
+      (в) зона построена частично из 1D-свинга (более значимый ТФ, чем чисто 1h/4h) --
+          "1d" в zone["sources"]
+      (г) зона совпадает с границей текущего диапазона (хай/лоу последних
+          KLVL_RANGE_LOOKBACK_BARS 4h-баров, в пределах KLVL_RANGE_EDGE_TOLERANCE_PCT%)
+    Возвращает НОВЫЙ список (не мутирует вход), каждая зона дополнена "klvl": bool и
+    "klvl_criteria": dict."""
+    range_hi = range_lo = None
+    if candles_4h:
+        window = candles_4h[-KLVL_RANGE_LOOKBACK_BARS:]
+        if window:
+            range_hi = max(c["high"] for c in window)
+            range_lo = min(c["low"] for c in window)
+
+    out = []
+    for z in zones_side:
+        crit_a = z.get("touches", 0) >= KLVL_MIN_TOUCHES
+        crit_b = _impulse_after_touch(candles_4h, z["lo"], z["hi"]) if candles_4h else False
+        crit_c = "1d" in z.get("sources", [])
+        crit_d = False
+        if range_hi is not None and z["mid"] > 0:
+            tol = z["mid"] * KLVL_RANGE_EDGE_TOLERANCE_PCT / 100
+            crit_d = abs(z["mid"] - range_hi) <= tol or abs(z["mid"] - range_lo) <= tol
+        criteria = {"touches3+": crit_a, "impulse": crit_b, "swing_1d": crit_c, "range_edge": crit_d}
+        z2 = dict(z)
+        z2["klvl"] = sum(criteria.values()) >= KLVL_MIN_CRITERIA
+        z2["klvl_criteria"] = criteria
+        out.append(z2)
+    return out
+
+
+def detect_polarity_flip(zone: dict, candles_4h: list, was_below: bool) -> dict:
+    """Критерий (3) ТЗ: K-LVL пробит и цена закрепилась (KLVL_POLARITY_FLIP_CLOSES
+    закрытий 4h за уровнем) -- "смена роли" (support->resistance или наоборот).
+    was_below: была ли зона исторически ПОДДЕРЖКОЙ (ниже цены на момент построения зоны) --
+    если пробита вверх устояла, это уже не имеет смысла (это не пробой); проверяем пробой
+    в сторону, разрушающую её изначальную роль (support пробит ВНИЗ, resistance -- ВВЕРХ).
+    Возвращает {"flipped": bool, "new_role": "support"|"resistance"|None}."""
+    if not candles_4h or len(candles_4h) < KLVL_POLARITY_FLIP_CLOSES:
+        return {"flipped": False, "new_role": None}
+    last_closes = [c["close"] for c in candles_4h[-KLVL_POLARITY_FLIP_CLOSES:]]
+    mid = zone["mid"]
+    if was_below:
+        # была поддержкой (below price) -- пробой ВНИЗ (закрытия ниже zone lo) рвёт её роль
+        broken = all(c < zone["lo"] for c in last_closes)
+        return {"flipped": broken, "new_role": "resistance" if broken else None}
+    else:
+        # была сопротивлением (above price) -- пробой ВВЕРХ (закрытия выше zone hi) рвёт роль
+        broken = all(c > zone["hi"] for c in last_closes)
+        return {"flipped": broken, "new_role": "support" if broken else None}

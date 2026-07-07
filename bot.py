@@ -112,7 +112,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v112"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v113"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2688,7 +2688,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             " или используй команду `/full SYMBOL`.\n\n"
             "📋 *Блоки анализа:*\n"
             "Multi-TF bias · Elliott Wave · SMC-сетап (BOS/CHoCH/range) · POI · "
-            "Чеклист Kira/ICT · Ликвидность/ловушки · OI/Funding/L-S · Killzone · "
+            "Чеклист K-LVL/ICT · Ликвидность/ловушки · OI/Funding/L-S · Killzone · "
             "Фаза рынка · Мемкоин-фильтр · План сделки · Rocket Score · Вердикт",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([

@@ -117,28 +117,41 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     b3 = _safe("Блок 3 (SMC setup)", ta_extra.smc_setup_type, c4h, direction)
     result["block3_smc"] = b3
 
-    # ── Блок 4: POI ──
+    # ── Блок 4: POI (+ K-LVL по методике K-LVL/ICT, см. ta_extra.classify_klvl_zones) ──
     def _poi():
         poi = []
+        classified_by_side = {"below": [], "above": []}  # для трейд-плана (блок 11) -- полный
+        # список (не только K-LVL), чтобы блок 11 мог проверить K-LVL-статус ИМЕННО той
+        # зоны, которую build_trade_from_structure() выбрал как вход (первая в списке).
         for side in ("below", "above"):
             # below цены -- поддержка (цена ищет опору снизу), above -- сопротивление
             role = "поддержка" if side == "below" else "сопротивление"
-            for z in zones.get(side, [])[:4]:
-                poi.append({
+            classified = ta_extra.classify_klvl_zones(zones.get(side, []), c4h)
+            classified_by_side[side] = classified
+            for z in classified[:4]:
+                entry = {
                     "side": side, "role": role, "price": z["mid"],
                     "distance_pct": round((z["mid"] - price) / price * 100, 2),
                     "touches": z["touches"], "sources": z["sources"],
-                })
+                    "klvl": z["klvl"], "klvl_criteria": z["klvl_criteria"],
+                    "_zone": z,  # для блока 11 -- сырые границы lo/hi без пересборки
+                }
+                if z["klvl"]:
+                    flip = ta_extra.detect_polarity_flip(z, c4h, was_below=(side == "below"))
+                    if flip["flipped"]:
+                        entry["polarity_flip"] = flip["new_role"]
+                poi.append(entry)
         fvg = ta_extra.find_fvg_zones(c4h, price)
         for f in fvg[:6]:
             side = "above" if f["mid"] > price else "below"
             poi.append({
                 "side": side, "role": "сопротивление" if side == "above" else "поддержка",
                 "price": f["mid"], "distance_pct": f["distance_pct"], "touches": 0,
-                "sources": ["fvg " + f["type"]],
+                "sources": ["fvg " + f["type"]], "klvl": False, "klvl_criteria": {},
             })
-        poi.sort(key=lambda p: abs(p["distance_pct"]))
-        return {"ok": True, "poi": poi}
+        # K-LVL зоны первыми (⚡), внутри каждой группы -- по расстоянию от цены
+        poi.sort(key=lambda p: (not p["klvl"], abs(p["distance_pct"])))
+        return {"ok": True, "poi": poi, "classified_by_side": classified_by_side}
     b4 = _safe("Блок 4 (POI)", _poi)
     result["block4_poi"] = b4
 
@@ -150,7 +163,7 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     b6 = _safe("Блок 6 (Ликвидность/ловушки)", _liquidity)
     result["block6_liquidity"] = b6
 
-    # ── Блок 5: чеклист Kira/ICT (X/6) ──
+    # ── Блок 5: чеклист K-LVL/ICT (X/6) ──
     def _checklist():
         items = []
 
@@ -282,22 +295,44 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     }
 
     # ── Блок 11: план сделки ──
+    def _dual_scenario_text():
+        """Двусценарный вывод (ТЗ п.4): ближайший K-LVL уровень + что делать при пробое
+        и что при удержании, со ссылкой на конкретные цены (ключевой хай/лоу из Блока 1).
+        None, если нет ни одной K-LVL зоны -- не из чего строить осмысленный сценарий."""
+        poi_list = b4.get("poi", []) if b4.get("ok") else []
+        klvl_poi = [p for p in poi_list if p.get("klvl")]
+        if not klvl_poi:
+            return None
+        nearest = klvl_poi[0]  # b4 уже отсортировал K-LVL первыми, по расстоянию
+        level = ta_extra.smart_round(nearest["price"])
+        key_high = b1.get("key_high")
+        key_low = b1.get("key_low")
+        if nearest["side"] == "below":  # уровень ниже цены -- работает как поддержка
+            down_target = f"лоу {ta_extra.smart_round(key_low['price'])}" if key_low else "имбаланс-зоны"
+            up_target = f"хая {ta_extra.smart_round(key_high['price'])}" if key_high else "предыдущего хая"
+            return (f"жду реакции от K-LVL {level} (пробой = сценарий вниз до {down_target}, "
+                   f"удержание = продолжение вверх до {up_target})")
+        up_target = f"хая {ta_extra.smart_round(key_high['price'])}" if key_high else "имбаланс-зоны"
+        down_target = f"лоу {ta_extra.smart_round(key_low['price'])}" if key_low else "предыдущего лоу"
+        return (f"жду реакции от K-LVL {level} (пробой = сценарий вверх до {up_target}, "
+               f"удержание = продолжение вниз до {down_target})")
+
     def _trade_plan():
         checklist_score = b5.get("score", 0) if b5.get("ok") else 0
         if not direction:
             return {"ok": True, "has_setup": False,
                     "reason": f"направление не определено ({b1.get('tf_agreement', 'н/д')})",
-                    "wait_for": "ждать согласования 1D-структуры и 4H EMA-стека в одну сторону"}
+                    "wait_for": _dual_scenario_text() or "ждать согласования 1D-структуры и 4H EMA-стека в одну сторону"}
         if checklist_score < CHECKLIST_MIN_FOR_TRADE:
             failed = [name for name, ok in b5.get("items", []) if not ok]
             return {"ok": True, "has_setup": False,
                     "reason": f"чеклист {checklist_score}/6 < {CHECKLIST_MIN_FOR_TRADE}: " + "; ".join(failed[:3]),
-                    "wait_for": "ждать выполнения непройденных пунктов чеклиста (см. Блок 5)"}
+                    "wait_for": _dual_scenario_text() or "ждать выполнения непройденных пунктов чеклиста (см. Блок 5)"}
         trade = b5.get("trade")
         if not trade:
             return {"ok": True, "has_setup": False,
                     "reason": "нет зоны для входа от структуры (find_sr_zones не нашёл валидной зоны)",
-                    "wait_for": "ждать формирования чёткого swing-уровня (2+ касания)"}
+                    "wait_for": _dual_scenario_text() or "ждать формирования чёткого swing-уровня (2+ касания)"}
         if not trade.get("rr_gate_pass"):
             # Жёсткий R:R-гейт: даже если чеклист в сумме >= порога за счёт других
             # пунктов, плохой R:R сам по себе блокирует план — "плохой сигнал хуже
@@ -305,7 +340,20 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
             # TOP_LONG-TOP_SHORT после v101).
             return {"ok": True, "has_setup": False,
                     "reason": f"R:R по структуре {trade['rr_tp1']:.2f} < 1.5 — гейт не пройден",
-                    "wait_for": "ждать более выгодной цены входа или более дальнего TP"}
+                    "wait_for": _dual_scenario_text() or "ждать более выгодной цены входа или более дальнего TP"}
+
+        # K-LVL-гейт (ТЗ п.4): вход только от зоны, прошедшей K-LVL-классификацию (>=2
+        # критерия подтверждения, см. ta_extra.classify_klvl_zones) -- обычная 2-touch
+        # зона без доп. подтверждения недостаточно надёжна для реального входа.
+        entry_side = "below" if direction == "long" else "above"
+        classified_side = b4.get("classified_by_side", {}).get(entry_side, []) if b4.get("ok") else []
+        entry_is_klvl = bool(classified_side and classified_side[0].get("klvl"))
+        if not entry_is_klvl:
+            return {"ok": True, "has_setup": False,
+                    "reason": f"вход {ta_extra.smart_round(trade['entry1'])} не от K-LVL зоны "
+                             f"(меньше 2 критериев подтверждения — см. Блок 4)",
+                    "wait_for": _dual_scenario_text() or "ждать входа именно от K-LVL уровня (см. Блок 4)"}
+
         entry1 = ta_extra.smart_round(trade["entry1"])
         entry2 = ta_extra.smart_round(trade["entry2"])
         entry3 = ta_extra.smart_round(trade["entry3"])
@@ -331,6 +379,7 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
             "position_sizes_per_1000_deposit": sizes,
             "entry_zone_touches": trade["entry_zone"]["touches"],
             "entry_zone_sources": trade["entry_zone"]["sources"],
+            "entry_is_klvl": True,  # гарантировано гейтом выше
         }
     b11 = _safe("Блок 11 (План сделки)", _trade_plan)
     result["block11_trade_plan"] = b11
@@ -529,8 +578,14 @@ def render_full_analysis_card(result: dict) -> str:
     if poi:
         for p in poi:
             arrow = "▲" if p["side"] == "above" else "▼"
-            parts.append(f"  {arrow} `{_fp(p['price'])}` ({_fpct(p['distance_pct'])}) "
-                         f"— {p.get('role','')}, {', '.join(p['sources'])}, {p['touches']} кас.")
+            mark = "⚡ K-LVL " if p.get("klvl") else ""
+            line = (f"  {mark}{arrow} `{_fp(p['price'])}` ({_fpct(p['distance_pct'])}) "
+                   f"— {p.get('role','')}, {', '.join(p['sources'])}, {p['touches']} кас.")
+            if p.get("polarity_flip"):
+                new_role = "сопротивление" if p["polarity_flip"] == "resistance" else "поддержка"
+                old_role = "поддержка" if p["polarity_flip"] == "resistance" else "сопротивление"
+                line += f"\n    🔁 смена роли: {old_role} → {new_role}"
+            parts.append(line)
     else:
         parts.append("  нет чётких зон")
     if b6.get("sweep_line"):
@@ -541,9 +596,9 @@ def render_full_analysis_card(result: dict) -> str:
         parts.append(f"🧲 Equal highs/lows (магниты стопов): {eq_s}")
     parts.append("")
 
-    # 4. Чеклист Kira/ICT
+    # 4. Чеклист K-LVL/ICT
     b5 = result.get("block5_checklist", {})
-    parts.append(f"✅ *Чеклист Kira/ICT: {b5.get('score','?')}/6*")
+    parts.append(f"✅ *Чеклист K-LVL/ICT: {b5.get('score','?')}/6*")
     for name, ok in b5.get("items", []):
         parts.append(f"  {'✅' if ok else '❌'} {name}")
     parts.append("")
