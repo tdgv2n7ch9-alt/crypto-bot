@@ -93,6 +93,7 @@ import io
 import logging
 import os
 import random
+import html
 import requests
 import matplotlib
 matplotlib.use("Agg")
@@ -113,7 +114,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v117"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v118"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -1110,7 +1111,12 @@ def full_analysis(coin: dict) -> dict:
         sl    = smart_round(price * 1.15)
         swing = smart_round(price * 1.08)
 
-    rr = abs(tp3 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
+    # R:R считаем от TP1 (не TP3) -- см. историю бага 3: карточка показывала "R:R 1:1.0"
+    # рядом с TP1 всего +4%/SL -15%, т.к. rr тут был посчитан от TP3 (симметричного SL по
+    # модулю 15%==15%), давая обманчивое впечатление о качестве СИМ ближайшего тейка.
+    # TP1-базис — тот же конвеншен, что и в fa_engine/real_full_analysis (единый смысл
+    # "R:R" по всему боту).
+    rr = abs(tp1 - price) / abs(sl - price) if abs(sl - price) > 0 else 0
 
     ema20_1h  = round(price / (1 + ch1h  / 100 * 0.15), 8)
     ema50_1h  = round(price / (1 + ch1h  / 100 * 0.40), 8)
@@ -1419,14 +1425,20 @@ def generate_signal_chart(symbol: str, a: dict, stats_24h: dict = None) -> io.By
 # 
 #  
 # 
+ATL_PCT_SANITY_LIMIT = 300  # см. ТЗ бага 2: |изм. от ATL| выше этого -- не показываем число,
+                             # честное "н/д" вместо мусорного/нечитаемого множителя
+
 def build_signal_text(symbol: str, a: dict,
                       stats_24h: dict = None,
                       atl: float = 0,
                       extras: dict = None) -> str:
     """
-      .
-    : EMA  (  ), Vol/MCap%,  1H/24H/7D/30D
-    :  , Open Interest,  
+    Карточка сигнала (HTML, не Markdown -- см. историю бага "лейблы исчезают": это была
+    НЕ проблема экранирования/парсинга markdown, а фактически утраченный кириллический
+    текст в самих строковых литералах этого файла (широко распространено по bot.py,
+    видимо старая порча кодировки задолго до этой сессии) -- лейблы здесь восстановлены
+    заново. HTML choosen поверх этого как более устойчивый формат вперёд: экранируем
+    html.escape() каждое динамическое значение, теги <b>/<i>/<code> вместо */_/`.
     """
     is_long = a["is_long"]
     price   = a["price"]
@@ -1436,9 +1448,10 @@ def build_signal_text(symbol: str, a: dict,
     rr     = a["rr"]
     vol    = a["vol"]
     rocket = a.get("rocket", 50)
-    rocket_label = a.get("rocket_label", "")
+    rocket_label = html.escape(str(a.get("rocket_label", "")))
+    sym_e = html.escape(symbol)
 
-    side_emoji = "" if is_long else ""
+    side_emoji = "🟢" if is_long else "🔴"
     side_text  = "LONG" if is_long else "SHORT"
     swing_lbl  = "Swing Low" if is_long else "Swing High"
 
@@ -1453,32 +1466,30 @@ def build_signal_text(symbol: str, a: dict,
                f"${vol/1e6:.1f}M" if vol >= 1e6 else f"${vol/1e3:.0f}K")
 
     filled = int(rocket / 10)
-    bar    = "" * filled + "" * (10 - filled)
+    bar    = "█" * filled + "░" * (10 - filled)
 
-    # EMA  ()
+    # EMA-позиция (выше каких лежит цена)
     ema_pos = []
     if a.get("above_ema200"): ema_pos.append("EMA200")
     if a.get("above_ema50"):  ema_pos.append("EMA50")
     if a.get("above_ema20"):  ema_pos.append("EMA20")
-    if not ema_pos:           ema_pos = ["  EMA "]
+    if not ema_pos:           ema_pos = ["ниже всех EMA"]
     ema_str = " | ".join(ema_pos)
 
-    # RSI 
+    # RSI-иконка
     def rsi_icon(r):
-        if r < 30: return ""
-        if r > 70: return ""
-        return ""
+        if r < 30: return "🟢"
+        if r > 70: return "🔴"
+        return "⚪"
 
-    # SMC     ( BB Squeeze)
+    # SMC-факторы (без служебных BB Squeeze/MACD -- те уже показаны отдельно)
     raw_smc = [f for f in a.get("smc_factors", [])
                if "BB Squeeze" not in f and "MACD" not in f]
     smc_key = raw_smc[:3] if raw_smc else []
 
-    #  
-    macd_str = " " if a.get("macd_bullish") else (" " if a.get("macd_bearish") else "")
-    st_str   = a.get("st_label", "")
+    macd_str = "бычий" if a.get("macd_bullish") else ("медвежий" if a.get("macd_bearish") else "нейтральный")
+    st_str   = html.escape(str(a.get("st_label", "")))
 
-    #     
     rsi_4h   = a["rsi_4h"]
     ch24h    = a["ch24h"]
     overbought = rsi_4h > 75
@@ -1486,52 +1497,50 @@ def build_signal_text(symbol: str, a: dict,
     suspicious = a.get("suspicious", False)
 
     if suspicious:
-        conclusion = "     , "
+        conclusion = "⚠️ Подозрительный объём/капа — повышенный риск манипуляции"
     elif is_long and overbought and not oversold:
-        conclusion = "      "
+        conclusion = "⚠️ Перекуплено — вход рискован, дождись коррекции"
     elif is_long and rocket >= 75 and oversold:
-        conclusion = "  +      !"
+        conclusion = "🚀 Сильный сигнал + перепроданность — хорошая точка входа"
     elif is_long and rocket >= 75:
-        conclusion = "     "
+        conclusion = "🚀 Сильный сигнал на покупку"
     elif is_long and rocket >= 60:
-        conclusion = "     "
+        conclusion = "📈 Умеренно бычий сигнал"
     elif not is_long and rocket >= 70:
-        conclusion = "  -"
+        conclusion = "📉 Сильный сигнал на продажу"
     elif is_long and a.get("smc_smart_accum"):
-        conclusion = " Smart Money     "
+        conclusion = "🧠 Похоже на накопление Smart Money"
     elif is_long and a.get("fund_recovery"):
-        conclusion = "     DCA "
+        conclusion = "♻️ Признаки разворота после падения — рассмотри DCA"
     elif not is_long and ch24h < -10:
-        conclusion = "       "
+        conclusion = "📉 Сильное падение — жди стабилизации"
     else:
-        conclusion = "     "
+        conclusion = "⚪ Нейтральная картина, ждать более чёткого сигнала"
 
     lines = [
-        f" *{symbol}USDT*  {side_emoji} *{side_text}*",
-        f" {now_utc3()}",
+        f"<b>{sym_e}USDT</b>  {side_emoji} <b>{side_text}</b>",
+        f"🕐 {now_utc3()}",
         "",
-        f" *{rocket}/100* {rocket_label}  `{bar}`",
-        f" {ema_str}",
-        f" {conclusion}",
+        f"🚀 <b>{rocket}/100</b> {rocket_label}  <code>{bar}</code>",
+        f"📊 {ema_str}",
+        f"{conclusion}",
         "",
-        f" :    `{fp(price)}`",
-        f" TP1:    `{fp(tp1)}`  ({pct(tp1)})",
-        f" TP2:    `{fp(tp2)}`  ({pct(tp2)})",
-        f" TP3:    `{fp(tp3)}`  ({pct(tp3)})",
-        f" SL:      `{fp(sl)}`  ({sl_pct()})",
-        f" {swing_lbl}:  `{fp(swing)}`",
+        f"💰 Цена: <code>{fp(price)}</code>",
+        f"🎯 TP1: <code>{fp(tp1)}</code>  ({pct(tp1)})",
+        f"🎯 TP2: <code>{fp(tp2)}</code>  ({pct(tp2)})",
+        f"🎯 TP3: <code>{fp(tp3)}</code>  ({pct(tp3)})",
+        f"🛑 SL: <code>{fp(sl)}</code>  ({sl_pct()})",
+        f"📐 {swing_lbl}: <code>{fp(swing)}</code>",
         "",
-        "",
-        f" R:R `1:{rr:.1f}`  |    `{vol_str}`  |  Rank `#{a.get('rank','')}`",
-        f" RSI 4H {rsi_icon(rsi_4h)}`{rsi_4h:.0f}`  |  MACD `{macd_str}`",
-        f" Supertrend: `{st_str}`",
+        f"⚖️ R:R <code>1:{rr:.1f}</code>  |  Объём <code>{vol_str}</code>  |  Rank <code>#{a.get('rank','')}</code>",
+        f"📈 RSI 4H {rsi_icon(rsi_4h)}<code>{rsi_4h:.0f}</code>  |  MACD <code>{macd_str}</code>",
+        f"📡 Supertrend: <code>{st_str}</code>",
     ]
 
-    # SMC 
     if smc_key:
-        lines.append(f" SMC: `{'    '.join(smc_key)}`")
+        smc_str = html.escape(" · ".join(smc_key))
+        lines.append(f"🧩 SMC: <code>{smc_str}</code>")
 
-    # 24H min/max +  
     if stats_24h:
         h24 = stats_24h.get("high", 0)
         l24 = stats_24h.get("low",  0)
@@ -1539,35 +1548,38 @@ def build_signal_text(symbol: str, a: dict,
             best = l24 * 1.005 if is_long else h24 * 0.995
             lines += [
                 "",
-                "",
-                f" 24H:   `{fp(h24)}`    `{fp(l24)}`",
-                f"   : `{fp(best)}`",
+                f"📊 24H: хай <code>{fp(h24)}</code>  лоу <code>{fp(l24)}</code>",
+                f"   лучшая цена входа: <code>{fp(best)}</code>",
             ]
 
-    #  + OI (    )
     if extras:
         fr = extras.get("funding", {})
         oi = extras.get("oi", {})
         if fr.get("ok") or oi.get("ok"):
             lines.append("")
-            lines.append("")
         if fr.get("ok"):
             rate_str = f"{fr['rate']:+.4f}%"
-            lines.append(f" *:* `{rate_str}`  {fr['signal']}")
+            fr_signal = html.escape(str(fr.get("signal", "")))
+            lines.append(f"💸 Funding: <code>{rate_str}</code>  {fr_signal}")
         if oi.get("ok") and oi.get("oi", 0) > 0:
             oi_ch = oi.get("change", 0)
-            oi_str = f"{oi_ch:+.1f}%  24"
-            lines.append(f" *OI:* `{oi_str}`  {oi['signal']}")
+            oi_str = f"{oi_ch:+.1f}% за 24ч"
+            oi_signal = html.escape(str(oi.get("signal", "")))
+            lines.append(f"📊 OI: <code>{oi_str}</code>  {oi_signal}")
 
-    #  
+    # Изменение от ATL -- см. историю бага 2: множитель от исторического минимума
+    # (часто десятилетней давности) даёт огромные, бесполезные для трейдинга проценты;
+    # ATL_PCT_SANITY_LIMIT честно скрывает такие значения вместо мусорного вывода.
     if atl and atl > 0:
         from_atl = (price - atl) / atl * 100
-        lines.append(f"  . : `+{from_atl:.0f}%`  (min `{fp(atl)}`)")
+        if abs(from_atl) > ATL_PCT_SANITY_LIMIT:
+            log.warning(f"build_signal_text {symbol}: изм. от ATL {from_atl:.0f}% "
+                       f"вне разумных пределов (price={price}, atl={atl}) — скрыто, показано н/д")
+            lines.append("📉 Изм. от ATL: н/д (величина вне разумных пределов)")
+        else:
+            lines.append(f"📉 Изм. от ATL: <code>+{from_atl:.0f}%</code>  (мин <code>{fp(atl)}</code>)")
 
-    lines += ["", f"#{symbol}USDT"]
-    return "\n".join(lines)
-
-    lines += ["", f"#{symbol}USDT"]
+    lines += ["", f"#{sym_e}USDT"]
     return "\n".join(lines)
 
 # 
@@ -1950,24 +1962,25 @@ async def check_entry_zones(bot, chat_ids, coins):
             if now_ts - last_alert > 1800:  #     30 
                 alerted_zones[sym] = now_ts
                 side   = "LONG" if is_long else "SHORT"
-                emoji  = "" if is_long else ""
+                emoji  = "🟢" if is_long else "🔴"
                 slug   = coin.get("slug", sym.lower())
-                text   = (f" *   !*\n"
-                          f" {now_utc3()}\n\n"
-                          f"{emoji} *{sym}USDT  {side}*\n"
-                          f" : `{fp(price)}`\n"
-                          f" TP1: `{fp(tp1)}`\n"
-                          f" SL: `{fp(sl)}`\n"
-                          f" R:R: 1:{a['rr']:.1f}\n\n"
-                          f" : 2%  | SL \n\n"
-                          f"#{sym}USDT")
+                sym_e  = html.escape(sym)
+                text   = (f"🎯 <b>Цена вошла в зону входа!</b>\n"
+                          f"🕐 {now_utc3()}\n\n"
+                          f"{emoji} <b>{sym_e}USDT — {side}</b>\n"
+                          f"💰 Цена: <code>{fp(price)}</code>\n"
+                          f"🎯 TP1: <code>{fp(tp1)}</code>\n"
+                          f"🛑 SL: <code>{fp(sl)}</code>\n"
+                          f"⚖️ R:R: 1:{a['rr']:.1f}\n\n"
+                          f"⚠️ Риск: не больше 2% депозита | ставь SL\n\n"
+                          f"#{sym_e}USDT")
                 kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(" TradingView", url=tv_link(sym)),
+                    InlineKeyboardButton("📊 TradingView", url=tv_link(sym)),
                     InlineKeyboardButton("CMC", url=cmc_link(slug)),
                 ]])
                 for cid in chat_ids:
                     try:
-                        await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                        await bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
                     except Exception as e:
                         log.error(f"Zone alert {cid}: {e}")
                 add_to_game(sym, "zone", price)
@@ -2043,16 +2056,15 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
          InlineKeyboardButton("🏠 Меню",            callback_data="show_menu")],
     ])
 
-    #     Supertrend    
-    #       
-    if "Supertrend: " in text or "Supertrend: ``" in text:
+    #     Supertrend
+    #
+    if "Supertrend: <code></code>" in text:
         try:
             st_data = get_supertrend_signal(symbol)
             if st_data.get("label") and st_data["label"] != "":
                 a["st_label"] = st_data["label"]
-                #   
-                text = text.replace("Supertrend: ``", f"Supertrend: `{st_data['label']}`")
-                text = text.replace("Supertrend: ",   f"Supertrend: {st_data['label']}")
+                text = text.replace("Supertrend: <code></code>",
+                                    f"Supertrend: <code>{html.escape(st_data['label'])}</code>")
         except Exception as e:
             log.error(f"ST fetch {symbol}: {e}")
 
@@ -2077,7 +2089,7 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
         try:
             chart.seek(0)
             await bot.send_photo(chat_id=chat_id, photo=chart,
-                                 caption=caption, parse_mode="Markdown",
+                                 caption=caption, parse_mode="HTML",
                                  reply_markup=kb)
             log.info(f"send_photo OK: {symbol}")
             return
@@ -2086,13 +2098,13 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
             try:
                 chart.seek(0)
                 await bot.send_photo(chat_id=chat_id, photo=chart)
-                await bot.send_message(chat_id, text, parse_mode="Markdown",
+                await bot.send_message(chat_id, text, parse_mode="HTML",
                                        reply_markup=kb, disable_web_page_preview=True)
                 return
             except Exception as e2:
                 log.error(f"send_photo split FAILED {symbol}: {e2}")
 
-    await bot.send_message(chat_id, text, parse_mode="Markdown",
+    await bot.send_message(chat_id, text, parse_mode="HTML",
                            reply_markup=kb, disable_web_page_preview=True)
 
 async def send_signals_batch(bot, chat_id, coins):
@@ -4392,11 +4404,11 @@ async def check_supertrend_signals(bot, chat_ids, coins):
                 continue
 
             slug       = coin.get("slug", sym.lower())
-            signal_lbl = " BUY" if new_dir == 1 else " SELL"
-            prev_lbl   = " SELL" if new_dir == 1 else " BUY"
+            sym_e      = html.escape(sym)
+            signal_lbl = "🟢 BUY" if new_dir == 1 else "🔴 SELL"
+            prev_lbl   = "SELL" if new_dir == 1 else "BUY"
             price      = st_data["current_price"]
             pct        = st_data["pct_since_signal"]
-            last_sig   = st_data.get("last_signal", "")
             last_price = st_data.get("last_signal_price")
             last_time  = st_data.get("last_signal_time")
 
@@ -4404,28 +4416,28 @@ async def check_supertrend_signals(bot, chat_ids, coins):
             pct_str  = f"+{pct:.2f}%" if pct >= 0 else f"{pct:.2f}%"
 
             text = (
-                f" *SUPERTREND   !*\n"
-                f" {now_utc3()}\n\n"
-                f"*{sym}USDT*  {prev_lbl}  *{signal_lbl}*\n\n"
-                f"  : `{fp(price)}`\n"
+                f"📡 <b>SUPERTREND — смена направления!</b>\n"
+                f"🕐 {now_utc3()}\n\n"
+                f"<b>{sym_e}USDT</b>  {prev_lbl} → <b>{signal_lbl}</b>\n\n"
+                f"💰 Цена: <code>{fp(price)}</code>\n"
             )
             if last_price:
-                text += f"  : `{fp(last_price)}` ({time_str})\n"
-                text += f"   : `{pct_str}`\n"
+                text += f"📍 Прошлый сигнал: <code>{fp(last_price)}</code> ({time_str})\n"
+                text += f"📊 Изменение с прошлого сигнала: <code>{pct_str}</code>\n"
 
             text += (
                 f"\n"
-                f"{'     ' if new_dir == 1 else '    '}\n\n"
-                f" : 2%  | SL \n\n"
-                f"#{sym}USDT"
+                f"{'Разворот вверх — рассмотри лонг' if new_dir == 1 else 'Разворот вниз — рассмотри шорт'}\n\n"
+                f"⚠️ Риск: не больше 2% депозита | ставь SL\n\n"
+                f"#{sym_e}USDT"
             )
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton(" TradingView", url=tv_link(sym)),
+                InlineKeyboardButton("📊 TradingView", url=tv_link(sym)),
                 InlineKeyboardButton("CMC", url=cmc_link(slug)),
             ]])
             for cid in chat_ids:
                 try:
-                    await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
+                    await bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
                 except Exception as e:
                     log.error(f"ST alert {cid}: {e}")
             add_to_game(sym, "supertrend", price)

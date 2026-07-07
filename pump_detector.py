@@ -30,6 +30,7 @@ Telegram/CoinGecko/GitHub — блокировка на стороне Binance, 
 """
 
 import asyncio
+import html
 import io
 import json
 import statistics
@@ -897,7 +898,7 @@ def _build_chart(symbol: str, watch: dict) -> io.BytesIO:
 
 def _risk_block(entry: float, sl: float) -> str:
     risk_pct = abs(sl - entry) / entry * 100 if entry else 0
-    lines = ["💰 *Риск на депозит:*"]
+    lines = ["💰 <b>Риск на депозит:</b>"]
     for dep_risk in (1, 2, 3):
         if risk_pct > 0:
             size_pct = dep_risk / risk_pct * 100
@@ -934,23 +935,27 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
         coin = ctx.get_coin_by_symbol(sym)
         mcap = (coin.get("quote", {}).get("USDT", {}).get("market_cap", 0) or 0) if coin else 0
         if 0 < mcap < MEMECOIN_MCAP_USD:
-            memecoin_line = "\n⚠️ *МЕМКОИН* — низкая капитализация, повышенный риск манипуляции"
+            memecoin_line = "\n⚠️ <b>МЕМКОИН</b> — низкая капитализация, повышенный риск манипуляции"
     except Exception:
         pass
 
     _, price_age = live_prices.get_live_price(sym)
     price_fresh = live_prices.freshness_label(price_age)
 
+    sym_e = html.escape(sym)
+    stage_e = html.escape(stage_title)
+    kz_name_e = html.escape(str(kz_name))
+
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     lines = [
-        f"⚡ *ПАМП-РАДАР — {stage_title}*",
-        f"*{sym}/USDT*{memecoin_line}",
+        f"⚡ <b>ПАМП-РАДАР — {stage_e}</b>",
+        f"<b>{sym_e}/USDT</b>{memecoin_line}",
         SEP, "",
-        f"📍 Цена: `{_fmt_price(price)}`  _{price_fresh}_  ({pct_move:+.1f}% от детекта)",
+        f"📍 Цена: <code>{_fmt_price(price)}</code>  <i>{html.escape(price_fresh)}</i>  ({pct_move:+.1f}% от детекта)",
         f"📊 Объём: x{watch.get('volume_mult', 0):.1f} от нормы · Z-Score: {watch.get('z_score', 0):.1f}σ",
         f"📈 Funding: {funding:+.4f}%",
-        f"📊 OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин) — {oi_line}",
-        f"⏰ Сессия: {kz_name}",
+        f"📊 OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин) — {html.escape(oi_line)}",
+        f"⏰ Сессия: {kz_name_e}",
         "",
     ]
     lines.extend(extra_lines)
@@ -978,9 +983,9 @@ async def _send_alert(ctx: PumpContext, symbol: str, text: str, watch: dict, sub
     try:
         if chart:
             await ctx.bot.send_photo(ctx.owner_chat_id, photo=chart, caption=text,
-                                      parse_mode="Markdown", reply_markup=kb)
+                                      parse_mode="HTML", reply_markup=kb)
         else:
-            await ctx.bot.send_message(ctx.owner_chat_id, text, parse_mode="Markdown",
+            await ctx.bot.send_message(ctx.owner_chat_id, text, parse_mode="HTML",
                                         reply_markup=kb, disable_web_page_preview=True)
     except Exception as e:
         print(f"Pump Radar: send failed: {e}")
@@ -991,7 +996,7 @@ async def _send_alert(ctx: PumpContext, symbol: str, text: str, watch: dict, sub
         if cid == ctx.owner_chat_id:
             continue
         try:
-            await ctx.bot.send_message(cid, text, parse_mode="Markdown", disable_web_page_preview=True)
+            await ctx.bot.send_message(cid, text, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
             pass
 
@@ -1001,16 +1006,17 @@ async def _notify_subscribers_zone(ctx: PumpContext, symbol: str, watch: dict, e
     subs = _subscriptions.get(sym, set())
     if not subs:
         return
+    sym_e = html.escape(sym)
     text = {
-        "entry": f"🔔 *{sym}* — цена вошла в зону входа `{_fmt_price(watch.get('entry_lo',0))}–{_fmt_price(watch.get('entry_hi',0))}`",
-        "tp1":   f"🔔 *{sym}* — TP1 достигнут, двигай стоп в безубыток",
-        "sl":    f"🔔 *{sym}* — цена у SL-зоны `{_fmt_price(watch.get('sl',0))}`, внимание",
+        "entry": f"🔔 <b>{sym_e}</b> — цена вошла в зону входа <code>{_fmt_price(watch.get('entry_lo',0))}–{_fmt_price(watch.get('entry_hi',0))}</code>",
+        "tp1":   f"🔔 <b>{sym_e}</b> — TP1 достигнут, двигай стоп в безубыток",
+        "sl":    f"🔔 <b>{sym_e}</b> — цена у SL-зоны <code>{_fmt_price(watch.get('sl',0))}</code>, внимание",
     }.get(event)
     if not text:
         return
     for cid in subs:
         try:
-            await ctx.bot.send_message(cid, text, parse_mode="Markdown")
+            await ctx.bot.send_message(cid, text, parse_mode="HTML")
         except Exception:
             pass
 
@@ -1141,7 +1147,7 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict) -> s
 
     if not lines:
         return ""
-    return "📋 *РАЗБОР:*\n" + "\n".join(f"  {l}" for l in lines)
+    return "📋 <b>РАЗБОР:</b>\n" + "\n".join(f"  {html.escape(l)}" for l in lines)
 
 
 async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
@@ -1159,13 +1165,13 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     watch["tp2"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * 1.6 * risk
     rr = abs(watch["tp1"] - close) / abs(close - watch["sl"]) if close != watch["sl"] else 0
     text = await _compose_alert(ctx, symbol, watch, "REVERSAL CONFIRMED 🔻",
-                                 [f"🎯 Зона входа (шорт): `{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}`",
-                                  f"🛑 SL: `{_fmt_price(watch['sl'])}` (пик +{SL_BUFFER_PCT}%)",
-                                  f"🎯 TP1: `{_fmt_price(watch['tp1'])}`  TP2: `{_fmt_price(watch['tp2'])}`",
+                                 [f"🎯 Зона входа (шорт): <code>{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}</code>",
+                                  f"🛑 SL: <code>{_fmt_price(watch['sl'])}</code> (пик +{SL_BUFFER_PCT}%)",
+                                  f"🎯 TP1: <code>{_fmt_price(watch['tp1'])}</code>  TP2: <code>{_fmt_price(watch['tp2'])}</code>",
                                   f"R:R по TP1: 1:{rr:.1f}",
                                   _risk_block(watch["entry_lo"], watch["sl"]),
                                   "",
-                                  "🛡 *Position Protection:* если уже в позиции — частичная фиксация на TP1, "
+                                  "🛡 <b>Position Protection:</b> если уже в позиции — частичная фиксация на TP1, "
                                   "трейлинг-стоп в безубыток после TP1."])
     analysis = await _build_analysis_block(ctx, symbol, watch)
     if analysis:
@@ -1195,13 +1201,13 @@ async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
         rr_line += "  ⚠️ ниже порога 1:1.5 — кнопка добавления недоступна"
 
     text = await _compose_alert(ctx, symbol, watch, "REVERSAL CONFIRMED 🟢",
-                                 [f"🎯 Зона входа (лонг): `{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}`",
-                                  f"🛑 SL: `{_fmt_price(watch['sl'])}` (дно −{DUMP_SL_BUFFER_PCT}%)",
-                                  f"🎯 TP1: `{_fmt_price(watch['tp1'])}`  TP2: `{_fmt_price(watch['tp2'])}`",
+                                 [f"🎯 Зона входа (лонг): <code>{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}</code>",
+                                  f"🛑 SL: <code>{_fmt_price(watch['sl'])}</code> (дно −{DUMP_SL_BUFFER_PCT}%)",
+                                  f"🎯 TP1: <code>{_fmt_price(watch['tp1'])}</code>  TP2: <code>{_fmt_price(watch['tp2'])}</code>",
                                   rr_line,
                                   _risk_block(watch["entry_lo"], watch["sl"]),
                                   "",
-                                  "🛡 *Position Protection:* если уже в позиции — частичная фиксация на TP1, "
+                                  "🛡 <b>Position Protection:</b> если уже в позиции — частичная фиксация на TP1, "
                                   "трейлинг-стоп в безубыток после TP1."])
 
     analysis = await _build_analysis_block(ctx, symbol, watch)

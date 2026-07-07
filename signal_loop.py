@@ -196,24 +196,31 @@ def _stage2_check(symbol, coin):
 
 
 def _format_alert_text(symbol, result, reasons):
+    """HTML (не Markdown) -- см. bot.py:build_signal_text для истории бага 1: та же
+    класса фрагильность (дефолтный legacy Markdown ест текст, если где-то в сообщении
+    несбалансированное кол-во */_/`) актуальна и здесь при живых данных (символ,
+    funding/OI-строки в reasons), даже если сам этот модуль написан заново и без
+    утраченной кириллицы. html.escape() на каждое динамическое значение."""
+    import html
     b11 = result["block11_trade_plan"]
     b12 = result["block12_rocket"]
     b5 = result["block5_checklist"]
     direction = b11["direction"]
     side = "SHORT" if direction == "short" else "LONG"
     emoji = "🔴" if direction == "short" else "🟢"
+    sym_e = html.escape(symbol)
     lines = [
-        f"{emoji} *{side} {symbol} — сетап подтверждён*",
+        f"{emoji} <b>{side} {sym_e} — сетап подтверждён</b>",
         "",
     ]
-    lines += [f"• {r}" for r in reasons[:2]]
+    lines += [f"• {html.escape(r)}" for r in reasons[:2]]
     lines.append(f"• чеклист {b5['score']}/6, Rocket Score {b12['score']}/100")
     lines += [
         "",
-        f"Вход (DCA): `{b11['entry1']}` (50%) / `{b11['entry2']}` (30%) / `{b11['entry3']}` (20%)",
-        f"SL: `{b11['sl']}`",
-        f"TP1 `{b11['tp1']}` (R:R {b11['rr_tp1']})  TP2 `{b11['tp2']}` (R:R {b11['rr_tp2']})  "
-        f"TP3 `{b11['tp3']}` (R:R {b11['rr_tp3']})",
+        f"Вход (DCA): <code>{b11['entry1']}</code> (50%) / <code>{b11['entry2']}</code> (30%) / <code>{b11['entry3']}</code> (20%)",
+        f"SL: <code>{b11['sl']}</code>",
+        f"TP1 <code>{b11['tp1']}</code> (R:R {b11['rr_tp1']})  TP2 <code>{b11['tp2']}</code> (R:R {b11['rr_tp2']})  "
+        f"TP3 <code>{b11['tp3']}</code> (R:R {b11['rr_tp3']})",
     ]
     sizes = b11.get("position_sizes_per_1000_deposit", {})
     if sizes:
@@ -282,11 +289,11 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk):
     ]])
     try:
         if chart:
-            await tg_bot.send_photo(chat_id, photo=chart, caption=text, parse_mode="Markdown", reply_markup=kb)
+            await tg_bot.send_photo(chat_id, photo=chart, caption=text, parse_mode="HTML", reply_markup=kb)
         else:
-            await tg_bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
+            await tg_bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        _log(f"{symbol}: send with markdown failed ({e}), retrying plain")
+        _log(f"{symbol}: send with HTML failed ({e}), retrying plain")
         try:
             await tg_bot.send_message(chat_id, text, reply_markup=kb)
         except Exception as e2:
@@ -361,7 +368,7 @@ def _touches_zone(price, lo, hi):
 
 async def _notify(tg_bot, chat_id, text):
     try:
-        await tg_bot.send_message(chat_id, text, parse_mode="Markdown")
+        await tg_bot.send_message(chat_id, text, parse_mode="HTML")
     except Exception as e:
         _log(f"notify failed: {e}")
 
@@ -395,11 +402,13 @@ async def run_exit_tracker(bot, tg_bot):
     статистику, эта — пошаговое сопровождение открытой сделки, см. докстринг модуля).
     bot: модуль bot.py, tg_bot: telegram.Bot — оба передаются явно APScheduler'ом
     (статичные args=[...], тот же паттерн, что и у run_signal_loop)."""
+    import html
     now = time.time()
     for alert_id, st in list(_active_signals.items()):
         if st["closed"]:
             continue
         symbol, direction, chat_id = st["symbol"], st["direction"], st["chat_id"]
+        sym_e = html.escape(symbol)
         try:
             import live_prices
             price, _age = live_prices.get_live_price(symbol)
@@ -412,7 +421,7 @@ async def run_exit_tracker(bot, tg_bot):
             if _touches_zone(price, st["entry_lo"], st["entry_hi"]):
                 st["entered"] = True
                 st["entered_price"] = price
-                await _notify(tg_bot, chat_id, f"📍 *{symbol}*: вход активен (`{price}`)")
+                await _notify(tg_bot, chat_id, f"📍 <b>{sym_e}</b>: вход активен (<code>{price}</code>)")
             elif now - st["created_ts"] > PRE_ENTRY_EXPIRE_SEC:
                 st["closed"] = True  # тихо -- как PENDING_EXPIRE в signal_journal, без алерта
             continue
@@ -420,31 +429,31 @@ async def run_exit_tracker(bot, tg_bot):
         if _sl_hit(direction, price, st["sl"]):
             st["closed"] = True
             label = "SL в безубытке (0R)" if st["tp1_hit"] else "SL"
-            await _notify(tg_bot, chat_id, f"🛑 *{symbol}*: {label} hit (`{price}`)")
+            await _notify(tg_bot, chat_id, f"🛑 <b>{sym_e}</b>: {label} hit (<code>{price}</code>)")
             continue
 
         if st["tp2_hit"] and _tp_hit(direction, price, st["tp3"]):
             st["closed"] = True
             await _notify(tg_bot, chat_id,
-                          f"🏁 *{symbol}*: TP3 hit (`{price}`) — цель достигнута полностью")
+                          f"🏁 <b>{sym_e}</b>: TP3 hit (<code>{price}</code>) — цель достигнута полностью")
             continue
 
         if st["tp1_hit"] and not st["tp2_hit"] and _tp_hit(direction, price, st["tp2"]):
             st["tp2_hit"] = True
             st["sl"] = st["tp1"]  # фиксируем прибыль -- SL на TP1
-            await _notify(tg_bot, chat_id, f"🎯 *{symbol}*: TP2 hit (`{price}`) — подтяни SL на TP1")
+            await _notify(tg_bot, chat_id, f"🎯 <b>{sym_e}</b>: TP2 hit (<code>{price}</code>) — подтяни SL на TP1")
             continue
 
         if not st["tp1_hit"] and _tp_hit(direction, price, st["tp1"]):
             st["tp1_hit"] = True
             st["sl"] = st["entered_price"]  # в безубыток
-            await _notify(tg_bot, chat_id, f"🎯 *{symbol}*: TP1 hit (`{price}`) — переведи SL в безубыток")
+            await _notify(tg_bot, chat_id, f"🎯 <b>{sym_e}</b>: TP1 hit (<code>{price}</code>) — переведи SL в безубыток")
             continue
 
         if not st["structure_warned"] and _check_structure_break(bot, symbol, direction):
             st["structure_warned"] = True
             await _notify(tg_bot, chat_id,
-                          f"⚠️ *{symbol}*: структура сломалась (свип/CHoCH против позиции) — рассмотри выход")
+                          f"⚠️ <b>{sym_e}</b>: структура сломалась (свип/CHoCH против позиции) — рассмотри выход")
 
 
 def get_active_count():
