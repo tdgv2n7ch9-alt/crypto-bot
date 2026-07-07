@@ -113,7 +113,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v116"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v117"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2022,7 +2022,10 @@ def _build_chart_v3_for_signal(symbol: str, a: dict):
         if not candles or len(candles) < 20:
             return None
         direction = "long" if a.get("is_long") else "short"
-        entry_levels = [a.get("entry1", entry1), a.get("entry2", entry1), a.get("entry3", entry1)]
+        # entry2/3 могут отсутствовать (full_analysis() даёт только один "swing"-уровень,
+        # не настоящую DCA-зону) -- дублировать entry1 на все 3 уровня рисует 3 наложенные
+        # друг на друга подписи "N лимитка" в одной точке; честнее показать один уровень.
+        entry_levels = [lvl for lvl in (a.get("entry1", entry1), a.get("entry2"), a.get("entry3")) if lvl]
         rr = a.get("rr", a.get("rr_tp1"))
         return chart_v3.build_trade_chart(
             symbol, candles, direction, entry_levels=entry_levels, sl=sl,
