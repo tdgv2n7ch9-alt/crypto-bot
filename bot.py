@@ -107,12 +107,13 @@ import signal_journal
 import ta_extra
 import fa_engine
 import signal_loop
+import chart_v3
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v114"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v115"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -511,7 +512,7 @@ def _cg_slug(symbol: str) -> str:
     return _CG_SLUG_MAP.get(sym, sym.lower())
 
 BYBIT_KLINE_URL = "https://api.bybit.com/v5/market/kline"
-_BYBIT_INTERVAL_MAP = {"1h": "60", "1H": "60", "4h": "240", "4H": "240",
+_BYBIT_INTERVAL_MAP = {"1h": "60", "1H": "60", "2h": "120", "2H": "120", "4h": "240", "4H": "240",
                         "1d": "D", "1D": "D", "1w": "W", "1W": "W"}
 _bybit_kline_lock = threading.Lock()
 _bybit_kline_last_call_ts = 0.0
@@ -2004,6 +2005,32 @@ def nav_kb(refresh_data=None):
     row.append(InlineKeyboardButton("🏠 Меню", callback_data="show_menu"))
     return InlineKeyboardMarkup([row])
 
+def _build_chart_v3_for_signal(symbol: str, a: dict):
+    """Chart v3 (chart_v3.py) для ТОП ЛОНГ/ШОРТ/СПОТ и обычных карточек монеты: 2h/~120
+    баров (свинг-сигнал, не памп/дамп), уровни из уже посчитанного a (real_full_analysis()-
+    формат — entry1/2/3, sl, tp1/2/3, rr, is_long). Только если в a реально есть уровни
+    сделки (entry/SL/TP) — см. ТЗ "прикреплять... где есть entry/SL/TP". None при любой
+    проблеме — вызывающая сторона (send_coin) фоллбечится на generate_signal_chart."""
+    sl = a.get("sl")
+    tp1 = a.get("tp1")
+    entry1 = a.get("entry1", a.get("swing"))
+    if not sl or not tp1 or not entry1:
+        return None
+    try:
+        candles = get_binance_ohlc(symbol, "2h", 120)
+        if not candles or len(candles) < 20:
+            return None
+        direction = "long" if a.get("is_long") else "short"
+        entry_levels = [a.get("entry1", entry1), a.get("entry2", entry1), a.get("entry3", entry1)]
+        rr = a.get("rr", a.get("rr_tp1"))
+        return chart_v3.build_trade_chart(
+            symbol, candles, direction, entry_levels=entry_levels, sl=sl,
+            tp1=tp1, tp2=a.get("tp2"), tp3=a.get("tp3"), rr=rr, tf_label="2h")
+    except Exception as e:
+        log.error(f"Chart v3 FAILED {symbol}: {type(e).__name__}: {e}")
+        return None
+
+
 async def send_coin(bot, chat_id, symbol, slug, a, text):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 TradingView",    url=tv_link(symbol)),
@@ -2026,9 +2053,12 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
             log.error(f"ST fetch {symbol}: {e}")
 
     stats_24h = get_binance_24h(symbol)
-    chart = None
+    chart = _build_chart_v3_for_signal(symbol, a)
+    if chart is not None:
+        log.info(f"Chart v3 OK: {symbol} {chart.getbuffer().nbytes} bytes")
     try:
-        chart = generate_signal_chart(symbol, a, stats_24h)
+        if chart is None:
+            chart = generate_signal_chart(symbol, a, stats_24h)
         if chart is not None:
             log.info(f"Chart OK: {symbol} {chart.getbuffer().nbytes} bytes")
         else:
@@ -3789,6 +3819,19 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     "note": "⚡ из Памп-радара (дамп)",
                 })
                 await q.answer("✅ Добавлено в ТОП ЛОНГ" if added else "Уже есть в ТОП ЛОНГ")
+                if added:
+                    try:
+                        loop = asyncio.get_event_loop()
+                        candles_2h = await loop.run_in_executor(None, get_binance_ohlc, sym, "2h", 120)
+                        if candles_2h:
+                            chart = await loop.run_in_executor(
+                                None, chart_v3.build_trade_chart, sym, candles_2h, "long",
+                                [offer["entry"]], offer["sl"], offer["tp1"], offer["tp2"], None, offer["rr"])
+                            if chart:
+                                await ctx.bot.send_photo(q.message.chat_id, photo=chart,
+                                    caption=f"📊 {sym} — ТОП ЛОНГ (промоушен из Памп-радара)")
+                    except Exception as e:
+                        log.error(f"promotion chart_v3 {sym}: {e}")
         except Exception as e:
             await q.answer("Ошибка: "+str(e))
 

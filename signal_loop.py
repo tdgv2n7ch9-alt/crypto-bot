@@ -223,30 +223,32 @@ def _format_alert_text(symbol, result, reasons):
 
 
 def _build_alert_chart(symbol, result):
-    """Chart v2 (pump_detector._build_chart) если у символа уже есть 1m-история (под
-    kline-подпиской радара) -- иначе фоллбек на generate_signal_chart (bot.py, Bybit REST
-    4h-свечи, всегда доступен сразу). Chart v2 не срабатывает "из коробки" для символов
-    вне текущей kline-подписки радара (нет накопленных 1m-баров) — это честный фоллбек,
-    а не баг."""
+    """Chart v3 (chart_v3.py) как основной график для signal_loop-алертов -- это
+    свинг-сигналы (funding/OI/sweep, гейт через fa_engine), а не памп/дамп-разворот, им
+    подходит 2h/~120 баров, а не 5m Chart v2 (тот остаётся для пампов, см. pump_detector.py
+    и его собственный вызов _build_chart в другом месте бота). Фоллбек на
+    generate_signal_chart (bot.py, Bybit REST candles), если Chart v3 почему-то не смог
+    (недостаточно баров и т.п.) — честный фоллбек, а не баг."""
     b11 = result["block11_trade_plan"]
+    b1 = result.get("block1_bias", {})
     direction = b11["direction"]
     price = result["price"]
 
     try:
-        import pump_detector
-        watch = {
-            "kind": "pump" if direction == "long" else "dump",
-            "last_price": price, "pump_time": time.time(),
-            "entry_lo": min(b11["entry1"], b11["entry3"]),
-            "entry_hi": max(b11["entry1"], b11["entry3"]),
-            "tp1": b11["tp1"], "tp2": b11["tp2"], "sl": b11["sl"],
-            "detect_price": price, "volume_mult": 0, "z_score": 0,
-        }
-        chart = pump_detector._build_chart(symbol, watch)
+        import bot
+        import chart_v3
+        candles = bot.get_binance_ohlc(symbol, "2h", 120)
+        key_high = (b1.get("key_high") or {}).get("price")
+        key_low = (b1.get("key_low") or {}).get("price")
+        chart = chart_v3.build_trade_chart(
+            symbol, candles, direction,
+            entry_levels=[b11["entry1"], b11["entry2"], b11["entry3"]],
+            sl=b11["sl"], tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
+            rr=b11["rr_tp1"], key_high=key_high, key_low=key_low, tf_label="2h")
         if chart:
             return chart
     except Exception as e:
-        _log(f"{symbol}: Chart v2 unavailable ({e}), falling back to generate_signal_chart")
+        _log(f"{symbol}: Chart v3 unavailable ({e}), falling back to generate_signal_chart")
 
     try:
         import bot

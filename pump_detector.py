@@ -1039,8 +1039,34 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
                                          [f"✅ Добавлено в ТОП ШОРТ (score {pa.get('pro_score',0)}, R:R 1:{rr:.1f})"])
             await _send_alert(ctx, symbol, text, watch, f"pump_sub_{sym}")
             _finalize_any(symbol, "pump", "PROMOTED")
+            await _send_promotion_chart(ctx, sym, "short", entry, sl, tp1, watch.get("tp2"), rr)
     except Exception as e:
         print(f"Pump Radar: promote check {symbol}: {e}")
+
+
+async def _send_promotion_chart(ctx: PumpContext, sym: str, direction: str,
+                                entry: float, sl: float, tp1: float, tp2, rr: float):
+    """Chart v3 (2h/~120 баров, свинг-стиль) для промоушена в ТОП ЛОНГ/ШОРТ -- отдельно
+    от 5m Chart v2, который остаётся на исходном памп/дамп-алерте (см. chart_v3.py).
+    Не критично для промоушена самого по себе -- ошибка здесь не должна ронять
+    _try_promote_pump/pump_addlong_, поэтому обёрнуто в try/except на уровне вызова."""
+    if not ctx.get_ohlc:
+        return
+    try:
+        import chart_v3
+        loop = asyncio.get_event_loop()
+        candles_2h = await loop.run_in_executor(None, ctx.get_ohlc, sym, "2h", 120)
+        if not candles_2h:
+            return
+        chart = await loop.run_in_executor(
+            None, chart_v3.build_trade_chart, sym, candles_2h, direction,
+            [entry], sl, tp1, tp2, None, round(rr, 2))
+        if chart:
+            side_ru = "ТОП ЛОНГ" if direction == "long" else "ТОП ШОРТ"
+            await ctx.bot.send_photo(ctx.owner_chat_id, photo=chart,
+                                     caption=f"📊 {sym} — {side_ru} (промоушен из Памп-радара)")
+    except Exception as e:
+        print(f"Pump Radar: promotion chart_v3 {sym}: {e}")
 
 
 async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict) -> str:
