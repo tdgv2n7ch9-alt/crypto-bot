@@ -113,7 +113,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v115"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v116"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -1152,9 +1152,10 @@ def full_analysis(coin: dict) -> dict:
     if macd_bullish:    smc_factors.append("MACD Bull")
     if macd_bearish:    smc_factors.append("MACD Bear")
     if suspicious:      smc_factors.append(" Vol ")
-    # Supply/Demand 
-    if in_demand:       smc_factors.append(" Demand Zone")
-    if in_supply:       smc_factors.append(" Supply Zone")
+    # Supply/Demand-зоны здесь недоступны (эта функция не использует real_ta()/TA-данные,
+    # см. докстринг) -- в отличие от real_full_analysis(), где in_demand/in_supply реально
+    # считаются. Раньше здесь были те же строки без определения переменных (NameError на
+    # каждый вызов full_analysis() -- т.е. /coin, /signals, /top, /watchlist были сломаны).
 
     return {
         "label": label, "score": score, "is_long": is_long,
