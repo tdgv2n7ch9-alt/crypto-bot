@@ -117,7 +117,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v129"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v130"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -9672,6 +9672,58 @@ async def _start_pump_detector(app):
 
     await subscribers.startup_sync()
 
+    # Планировщик (в т.ч. send_scheduled/whale_monitor с next_run_time=now(), т.е. первый
+    # тик почти сразу) регистрируется ЗДЕСЬ, а не в main() -- раньше scheduler.start()
+    # вызывался в main() ДО run_polling(), а post_init (эта функция, с await
+    # subscribers.startup_sync()/signal_journal.startup_sync()) выполняется УЖЕ ВНУТРИ
+    # run_polling(). Из-за этого немедленный первый тик send_scheduled/whale_monitor мог
+    # реально выполниться раньше, чем подписчики/журнал успевали загрузиться -- поймано
+    # живьём: send_scheduled увидел 0 подписчиков на процессе возрастом 38 секунд, хотя
+    # подписчик (fallback-владелец) появился мгновением позже. _load_signals() -- по той
+    # же причине сюда же, до первого тика.
+    _load_signals()
+    scheduler = AsyncIOScheduler(timezone=TZ)
+    scheduler.add_job(
+        send_scheduled,
+        "interval",
+        minutes=30,
+        args=[app.bot],
+        next_run_time=datetime.now(TZ)
+    )
+    scheduler.add_job(
+        check_alerts,
+        "interval",
+        minutes=5,
+        args=[app.bot]
+    )
+    scheduler.add_job(
+        whale_monitor,
+        "interval",
+        minutes=15,
+        args=[app.bot],
+        next_run_time=datetime.now(TZ)
+    )
+    # BUY/SELL сигнальный контур (signal_loop.py). Передаём sys.modules[__name__]
+    # (текущий реально исполняющийся модуль, __name__=="__main__" при запуске
+    # `python bot.py") -- а не `import bot" изнутри signal_loop.py, иначе Python
+    # создал бы ВТОРОЙ независимый экземпляр модуля bot (т.к. "bot" ещё не
+    # зарегистрирован в sys.modules при запуске как __main__) со своими копиями
+    # кэшей/rate-limiter'ов, отдельными от того, что используют все остальные
+    # хендлеры -- см. докстринг signal_loop.py.
+    scheduler.add_job(
+        signal_loop.run_signal_loop,
+        "interval",
+        minutes=signal_loop.STAGE1_INTERVAL_MIN,
+        args=[sys.modules[__name__], app.bot, owner_id],
+    )
+    scheduler.add_job(
+        signal_loop.run_exit_tracker,
+        "interval",
+        minutes=signal_loop.EXIT_TRACKER_INTERVAL_MIN,
+        args=[sys.modules[__name__], app.bot],
+    )
+    scheduler.start()
+
 def main():
     # concurrent_updates=True -- иначе PTB диспетчит апдейты СТРОГО последовательно и не
     # начнёт обрабатывать новый (например /start), пока не завершится ТЕКУЩИЙ хендлер
@@ -9715,50 +9767,10 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
 
-    scheduler = AsyncIOScheduler(timezone=TZ)
-    scheduler.add_job(
-        send_scheduled,
-        "interval",
-        minutes=30,
-        args=[app.bot],
-        next_run_time=datetime.now(TZ)
-    )
-    scheduler.add_job(
-        check_alerts,
-        "interval",
-        minutes=5,
-        args=[app.bot]
-    )
-    scheduler.add_job(
-        whale_monitor,
-        "interval",
-        minutes=15,
-        args=[app.bot],
-        next_run_time=datetime.now(TZ)
-    )
-    # BUY/SELL сигнальный контур (signal_loop.py). Передаём sys.modules[__name__]
-    # (текущий реально исполняющийся модуль, __name__=="__main__" при запуске
-    # `python bot.py") -- а не `import bot" изнутри signal_loop.py, иначе Python
-    # создал бы ВТОРОЙ независимый экземпляр модуля bot (т.к. "bot" ещё не
-    # зарегистрирован в sys.modules при запуске как __main__) со своими копиями
-    # кэшей/rate-limiter'ов, отдельными от того, что используют все остальные
-    # хендлеры -- см. докстринг signal_loop.py.
-    owner_id_loop = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
-    scheduler.add_job(
-        signal_loop.run_signal_loop,
-        "interval",
-        minutes=signal_loop.STAGE1_INTERVAL_MIN,
-        args=[sys.modules[__name__], app.bot, owner_id_loop],
-    )
-    scheduler.add_job(
-        signal_loop.run_exit_tracker,
-        "interval",
-        minutes=signal_loop.EXIT_TRACKER_INTERVAL_MIN,
-        args=[sys.modules[__name__], app.bot],
-    )
-    scheduler.start()
+    # Планировщик регистрируется в post_init (_start_pump_detector), ПОСЛЕ
+    # subscribers.startup_sync()/signal_journal.startup_sync() -- см. комментарий там же
+    # про гонку немедленного первого тика (next_run_time=now()) с загрузкой подписчиков.
     log.info(" BEST TRADE v32.0 | Supply/Demand | Real-time signals | UTC+3")
-    _load_signals()
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
