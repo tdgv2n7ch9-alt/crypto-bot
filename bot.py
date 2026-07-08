@@ -105,6 +105,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 import signal_journal
+import subscribers
 import ta_extra
 import fa_engine
 import signal_loop
@@ -116,7 +117,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v128"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v129"         # обновлять при каждом коммите с изменением bot.py
 
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
@@ -2245,20 +2246,9 @@ async def send_signals_batch(bot, chat_id, coins):
 # 
 # HANDLERS
 # 
-user_chat_ids = set()
-
-def load_chat_ids():
-    try:
-        with open("chat_ids.txt") as f:
-            return set(int(l.strip()) for l in f if l.strip())
-    except:
-        return set()
-
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cid = update.effective_chat.id
-    user_chat_ids.add(cid)
-    with open("chat_ids.txt", "a") as f:
-        f.write(f"{cid}\n")
+    await subscribers.subscribe(cid)
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     name = update.effective_user.first_name or "трейдер"
     await update.message.reply_text(
@@ -2280,6 +2270,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"⚠️ Риск: 1–2% депозита · SL обязателен\n\n"
         f"👇 *Выбери раздел:*",
         parse_mode="Markdown", reply_markup=main_kb()
+    )
+
+async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Отписка от автосигналов (send_scheduled) и алертов (check_alerts) -- см. subscribers.py."""
+    cid = update.effective_chat.id
+    await subscribers.unsubscribe(cid)
+    await update.message.reply_text(
+        "🔕 Отписка оформлена. Автосигналы и алерты больше не будут приходить в этот чат.\n"
+        "Чтобы снова подписаться -- пришли /start.",
+        parse_mode="Markdown"
     )
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -4288,6 +4288,12 @@ async def whale_monitor(bot: Bot):
 
 AUTO_SCAN_CAP = 30  # макс. кандидатов на направление в прескрине -- см. докстринг send_scheduled
 
+# Диагностика последнего тика send_scheduled для /radar_status -- без этого "0 сигналов"
+# неотличимо снаружи от "джоб вообще не запускался" (гейты качества строгие, честный
+# 0/0 -- ожидаемый исход, не баг, но это нужно уметь подтвердить, а не гадать).
+_last_auto_scan = {"ts": 0.0, "status": "ещё не запускался", "sent_long": 0, "sent_short": 0,
+                    "candidates_long": 0, "candidates_short": 0}
+
 async def send_scheduled(bot: Bot):
     """Автосигналы каждые 30 минут (см. scheduler.add_job(send_scheduled, interval, minutes=30)).
 
@@ -4314,12 +4320,15 @@ async def send_scheduled(bot: Bot):
     percent_change_90d всегда 0.0, см. историю бага 2), и для "спот-восстановления" нет
     структурной модели entry/SL/TP (в отличие от лонга/шорта) -- нечего чинить по тому же
     принципу, там никогда не было реального сетапа за фиксированными процентами."""
-    chat_ids = load_chat_ids() | user_chat_ids
+    _last_auto_scan["ts"] = time.time()
+    chat_ids = subscribers.active_chat_ids()
     if not chat_ids:
+        _last_auto_scan["status"] = "пропуск: нет подписчиков"
         return
 
     if _any_manual_scan_active():
         log.info("[AUTO] пропуск итерации -- активен ручной скан (top_long/top_short/top_spot/x100)")
+        _last_auto_scan["status"] = "пропуск: активен ручной скан"
         return
 
     log.info(f"[AUTO] автосигналы {now_utc3()}")
@@ -4328,6 +4337,7 @@ async def send_scheduled(bot: Bot):
         coins = get_all_coins()
         if not coins:
             log.error("[AUTO] нет данных по монетам")
+            _last_auto_scan["status"] = "ошибка: нет данных по монетам"
             return
 
         already_sent = set(list(TOP_LONG_SIGNALS.keys()) + list(TOP_SHORT_SIGNALS.keys()))
@@ -4430,9 +4440,14 @@ async def send_scheduled(bot: Bot):
 
         log.info(f"[AUTO] итог: {sent_long} лонг, {sent_short} шорт "
                  f"(из {len(long_candidates)}/{len(short_candidates)} кандидатов прескрина)")
+        _last_auto_scan.update({
+            "status": "ok", "sent_long": sent_long, "sent_short": sent_short,
+            "candidates_long": len(long_candidates), "candidates_short": len(short_candidates),
+        })
 
     except Exception as e:
         log.error(f"[AUTO] ошибка: {e}")
+        _last_auto_scan["status"] = f"ошибка: {e}"
 
 
 supertrend_cache = {}  # {symbol: last_direction}
@@ -6473,7 +6488,7 @@ def get_tokenomics(symbol: str) -> dict:
 
 async def check_alerts(bot: Bot):
     """ 5 : pump/dump + zone + supertrend + watchlist + spot + entry alerts"""
-    chat_ids = load_chat_ids() | user_chat_ids
+    chat_ids = subscribers.active_chat_ids()
     if not chat_ids: return
     try:
         coins = get_all_coins()
@@ -9513,6 +9528,23 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     journal_active, journal_closed = signal_journal.get_status_counts()
     lines.append(f"Journal: {journal_active} активных, {journal_closed} закрытых")
 
+    sub_status = subscribers.status()
+    sub_src_emoji = {"github": "🟢", "fallback": "🟡", "none": "🔴"}.get(sub_status["source"], "⚪")
+    lines.append(f"Подписчики: {sub_status['count']} ({sub_src_emoji} источник: {sub_status['source']})")
+    if sub_status.get("github_error"):
+        lines.append(f"  ⚠️ GitHub: {sub_status['github_error']}")
+
+    if _last_auto_scan["ts"]:
+        ago_min = (time.time() - _last_auto_scan["ts"]) / 60
+        lines.append(
+            f"Автосигналы: последний тик {ago_min:.0f} мин назад -- {_last_auto_scan['status']}"
+            + (f" ({_last_auto_scan['sent_long']} лонг/{_last_auto_scan['sent_short']} шорт "
+               f"из {_last_auto_scan['candidates_long']}/{_last_auto_scan['candidates_short']} кандидатов)"
+               if _last_auto_scan["status"] == "ok" else "")
+        )
+    else:
+        lines.append("Автосигналы: ещё не запускались в этом процессе")
+
     ds = get_data_source_status()
     def _src_line(name, label):
         s = ds.get(name, {})
@@ -9638,6 +9670,8 @@ async def _start_pump_detector(app):
     asyncio.create_task(signal_journal.run_tracker())
     asyncio.create_task(signal_journal.run_github_sync_loop())
 
+    await subscribers.startup_sync()
+
 def main():
     # concurrent_updates=True -- иначе PTB диспетчит апдейты СТРОГО последовательно и не
     # начнёт обрабатывать новый (например /start), пока не завершится ТЕКУЩИЙ хендлер
@@ -9649,6 +9683,7 @@ def main():
            .concurrent_updates(True)
            .build())
     app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("stop",      cmd_stop))
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
     app.add_handler(CommandHandler("journal",   cmd_journal))
