@@ -246,6 +246,47 @@ def active_chat_ids() -> set:
     return {cid for cid, rec in _subscribers.items() if rec.get("subscribed")}
 
 
+GITHUB_BACKUP_DIR = "backups"
+
+
+def _github_put_backup_sync(path: str, payload: dict) -> bool:
+    """PUT датированного снапшота в GitHub (ROADMAP П1.4) -- НОВЫЙ файл на каждую дату,
+    в отличие от data/chat_ids.json (тот перезаписывается). Не требует sha -- это не
+    обновление существующего файла, а создание нового пути. 422 (файл уже существует --
+    повторный бэкап в тот же день) не считается ошибкой."""
+    if not _github_configured():
+        return False
+    if _validate_github_token():
+        return False
+    try:
+        body = {
+            "message": f"backup: {path}",
+            "content": base64.b64encode(
+                json.dumps(payload, ensure_ascii=False, indent=2).encode()
+            ).decode(),
+        }
+        r = requests.put(f"{_github_api_base()}/contents/{path}",
+                          headers=_github_headers(), json=body, timeout=20)
+        if r.status_code == 422:
+            return True
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"Subscribers: backup PUT failed ({e})")
+        return False
+
+
+async def backup_snapshot(date_str: str) -> bool:
+    """Дневной версионированный бэкап подписчиков в backups/<date>/chat_ids.json.
+    Отдельно от data/chat_ids.json (тот -- рабочая копия, эта -- архив на дату)."""
+    if not _github_configured():
+        return False
+    loop = asyncio.get_event_loop()
+    payload = {"subscribers": {str(k): v for k, v in _subscribers.items()}}
+    path = f"{GITHUB_BACKUP_DIR}/{date_str}/chat_ids.json"
+    return await loop.run_in_executor(None, _github_put_backup_sync, path, payload)
+
+
 def status() -> dict:
     """Для /radar_status: количество активных подписчиков + источник загрузки при старте
     (github/fallback) + последняя ошибка GitHub, если была."""

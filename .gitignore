@@ -3,3 +3,8 @@ chat_ids.txt
 signal_journal.json
 __pycache__/
 *.pyc
+.DS_Store
+
+# Библиотека знаний SMC (~60ГБ PDF/видео) -- НИКОГДА не коммитить в этот репозиторий.
+Trading/
+knowledge/

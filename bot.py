@@ -309,6 +309,95 @@ def get_data_source_status() -> dict:
     return _DATA_SOURCE_STATUS
 
 
+# --- Health / heartbeat (ROADMAP П1) -------------------------------------------------
+# /radar_status покрывает только памп-радар. Ничего не следило за тем, что остальные
+# фоновые задачи (send_scheduled/check_alerts/whale_monitor/signal_loop/exit_tracker)
+# реально ТИКАЮТ, а не просто "не упали" -- зависший (не упавший) event loop тут был бы
+# не виден никак, кроме тишины в чате. Heartbeat не меняет поведение самих задач --
+# только оборачивает их для APScheduler, отмечая факт успешного/неуспешного завершения.
+_PROCESS_START_TS = time.time()
+_job_heartbeats = {}          # name -> {"ts": float, "ok": bool, "detail": str}
+_job_expected_interval_sec = {}   # name -> ожидаемый интервал тика, сек (для /health и watchdog)
+_job_alerted_stale = set()    # чтобы watchdog не спамил на каждый тик, пока джоба не восстановится
+
+
+def _mark_heartbeat(name: str, ok: bool = True, detail: str = ""):
+    _job_heartbeats[name] = {"ts": time.time(), "ok": ok, "detail": detail}
+    if ok:
+        _job_alerted_stale.discard(name)
+
+
+def _heartbeat_wrapper(name: str, fn):
+    """Оборачивает планируемую фоновую задачу heartbeat-отметкой после каждого вызова
+    (успех либо исключение) -- саму задачу и её решения не трогает, просто наблюдает."""
+    async def _wrapped(*args, **kwargs):
+        try:
+            result = await fn(*args, **kwargs)
+            _mark_heartbeat(name, ok=True)
+            return result
+        except Exception as e:
+            _mark_heartbeat(name, ok=False, detail=str(e)[:200])
+            raise
+    _wrapped.__name__ = f"heartbeat_{name}"
+    return _wrapped
+
+
+async def run_watchdog(bot: Bot):
+    """Каждые WATCHDOG_INTERVAL_MIN проверяет heartbeat всех зарегистрированных фоновых
+    задач. Если задача не отмечалась дольше 2x своего ожидаемого интервала -- шлёт
+    владельцу ОДИН алерт на инцидент (не спамит), сбрасывается автоматически при
+    следующем успешном heartbeat (см. _mark_heartbeat)."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    now = time.time()
+    for name, expected in _job_expected_interval_sec.items():
+        if not expected:
+            continue
+        hb = _job_heartbeats.get(name)
+        age = (now - hb["ts"]) if hb else (now - _PROCESS_START_TS)
+        if age > expected * 2 and name not in _job_alerted_stale:
+            _job_alerted_stale.add(name)
+            try:
+                await bot.send_message(
+                    owner_id,
+                    f"⚠️ Watchdog: фоновая задача «{name}» не отмечалась {age/60:.0f} мин "
+                    f"(ожидается раз в {expected/60:.0f} мин). Похоже, зависла или падает "
+                    f"молча -- проверь /health.",
+                )
+            except Exception:
+                pass
+
+
+async def run_daily_backup(bot: Bot):
+    """Раз в сутки -- версионированный снапшот подписчиков и журнала в GitHub
+    (backups/<date>/...), отдельно от рабочих data/chat_ids.json и journal/signals.json,
+    которые last-write-wins перезаписываются (ROADMAP П1.4 -- у рабочих файлов нет
+    истории снапшотов, эта задача её создаёт). Не бросает исключений наружу и не трогает
+    рабочие файлы -- только читает текущее состояние и пишет по новому датированному пути."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    date_str = datetime.now(TZ).strftime("%Y-%m-%d")
+    sub_ok = False
+    journal_ok = False
+    try:
+        sub_ok = await subscribers.backup_snapshot(date_str)
+    except Exception as e:
+        print(f"run_daily_backup: subscribers snapshot failed: {e}")
+    try:
+        journal_ok = await signal_journal.backup_snapshot(date_str)
+    except Exception as e:
+        print(f"run_daily_backup: journal snapshot failed: {e}")
+    if not (sub_ok and journal_ok):
+        try:
+            await bot.send_message(
+                owner_id,
+                f"⚠️ Дневной бэкап {date_str}: подписчики {'ок' if sub_ok else 'ОШИБКА'}, "
+                f"журнал {'ок' if journal_ok else 'ОШИБКА'} -- проверь GITHUB_TOKEN/доступность.",
+            )
+        except Exception:
+            pass
+
+
 def _fetch_coingecko_markets(pages: int = 3, per_page: int = 250) -> list:
     """Первичный источник get_all_coins(): CoinGecko /coins/markets -- ранг/mcap/объём/
     цена/% изменения без месячной квоты CMC (freemium, наш общий rate-limit из _cg_get).
@@ -9561,6 +9650,57 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
+async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only общий health-check процесса (в отличие от /radar_status -- тот покрывает
+    только памп-радар). Аптайм + heartbeat всех фоновых задач + источники данных +
+    подписчики/журнал. Честно показывает "ещё не тикала" вместо придуманного статуса."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+
+    uptime = int(time.time() - _PROCESS_START_TS)
+    h, rem = divmod(uptime, 3600)
+    m, s = divmod(rem, 60)
+    lines = [
+        f"*BEST TRADE {BOT_VERSION} — /health*",
+        "",
+        f"Аптайм процесса: {h}ч {m}м {s}с",
+        "",
+        "*Фоновые задачи (heartbeat):*",
+    ]
+    now = time.time()
+    for name, expected in _job_expected_interval_sec.items():
+        hb = _job_heartbeats.get(name)
+        if hb is None:
+            lines.append(f"⚪ {name}: ещё не тикала в этом процессе")
+            continue
+        age = now - hb["ts"]
+        stale = bool(expected) and age > expected * 2
+        emoji = "🔴" if not hb["ok"] else ("🟡" if stale else "🟢")
+        detail = f" — {hb['detail']}" if hb.get("detail") else ""
+        lines.append(f"{emoji} {name}: последний тик {age/60:.0f} мин назад{detail}")
+
+    lines += ["", "*Источники данных:*"]
+    ds = get_data_source_status()
+    for name, label in [("coingecko_markets", "CoinGecko"), ("cmc", "CMC")]:
+        s = ds.get(name, {})
+        if s.get("ok") is None:
+            lines.append(f"⚪ {label}: не проверялся в этом запуске")
+        elif s.get("ok"):
+            lines.append(f"🟢 {label}: ok")
+        else:
+            lines.append(f"🔴 {label}: {s.get('last_error') or '—'}")
+
+    sub_status = subscribers.status()
+    lines += ["", f"Подписчики: {sub_status['count']} (источник: {sub_status['source']})"]
+    journal_active, journal_closed = signal_journal.get_status_counts()
+    lines.append(f"Journal: {journal_active} активных, {journal_closed} закрытых")
+    lines.append("\nПодробности памп-радара: /radar_status")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only сводка Signal Journal: 24ч/7д/всё время — entered %, win rate, средний R,
     разбивка по источникам."""
@@ -9642,6 +9782,40 @@ async def cmd_journal_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def _startup_integrity_check(bot: Bot, owner_id: int):
+    """ROADMAP П1.3 -- одно сообщение владельцу при старте вместо разрозненных: что реально
+    проверено (подписчики/журнал загружены, CoinGecko отвечает), а не выдуманное "всё ок".
+    Не бросает исключений наружу -- сбой самой проверки не должен мешать боту стартовать."""
+    lines = [f"🚀 *BEST TRADE {BOT_VERSION} запущен*", ""]
+    try:
+        sub_status = subscribers.status()
+        src_emoji = {"github": "🟢", "fallback": "🟡", "none": "🔴"}.get(sub_status["source"], "⚪")
+        lines.append(f"{src_emoji} Подписчики: {sub_status['count']} (источник: {sub_status['source']})")
+        if sub_status.get("github_error"):
+            lines.append(f"  ⚠️ {sub_status['github_error']}")
+    except Exception as e:
+        lines.append(f"🔴 Подписчики: проверка упала ({str(e)[:150]})")
+
+    try:
+        j_active, j_closed = signal_journal.get_status_counts()
+        lines.append(f"🟢 Journal: {j_active} активных, {j_closed} закрытых")
+    except Exception as e:
+        lines.append(f"🔴 Journal: проверка упала ({str(e)[:150]})")
+
+    try:
+        loop = asyncio.get_event_loop()
+        test = await loop.run_in_executor(None, _fetch_coingecko_markets, 1, 5)
+        lines.append(f"🟢 CoinGecko: ok ({len(test)} монет получено)" if test
+                      else "🔴 CoinGecko: пустой ответ")
+    except Exception as e:
+        lines.append(f"🔴 CoinGecko: {str(e)[:150]}")
+
+    try:
+        await bot.send_message(owner_id, "\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        print(f"_startup_integrity_check: не удалось отправить сообщение владельцу: {e}")
+
+
 async def _start_pump_detector(app):
     """post_init hook — запускает pump_detector (kline-слой) и грубый Bybit tickers-детект
     (полное покрытие рынка) в том же event loop, что и бот."""
@@ -9683,21 +9857,30 @@ async def _start_pump_detector(app):
     # же причине сюда же, до первого тика.
     _load_signals()
     scheduler = AsyncIOScheduler(timezone=TZ)
+
+    # Heartbeat-обёртки (ROADMAP П1) -- регистрируем в планировщике heartbeat_* вместо
+    # голых функций, сами задачи и их решения не меняются (см. _heartbeat_wrapper).
+    _job_expected_interval_sec["send_scheduled"] = 30 * 60
+    _job_expected_interval_sec["check_alerts"] = 5 * 60
+    _job_expected_interval_sec["whale_monitor"] = 15 * 60
+    _job_expected_interval_sec["signal_loop"] = signal_loop.STAGE1_INTERVAL_MIN * 60
+    _job_expected_interval_sec["exit_tracker"] = signal_loop.EXIT_TRACKER_INTERVAL_MIN * 60
+
     scheduler.add_job(
-        send_scheduled,
+        _heartbeat_wrapper("send_scheduled", send_scheduled),
         "interval",
         minutes=30,
         args=[app.bot],
         next_run_time=datetime.now(TZ)
     )
     scheduler.add_job(
-        check_alerts,
+        _heartbeat_wrapper("check_alerts", check_alerts),
         "interval",
         minutes=5,
         args=[app.bot]
     )
     scheduler.add_job(
-        whale_monitor,
+        _heartbeat_wrapper("whale_monitor", whale_monitor),
         "interval",
         minutes=15,
         args=[app.bot],
@@ -9711,18 +9894,39 @@ async def _start_pump_detector(app):
     # кэшей/rate-limiter'ов, отдельными от того, что используют все остальные
     # хендлеры -- см. докстринг signal_loop.py.
     scheduler.add_job(
-        signal_loop.run_signal_loop,
+        _heartbeat_wrapper("signal_loop", signal_loop.run_signal_loop),
         "interval",
         minutes=signal_loop.STAGE1_INTERVAL_MIN,
         args=[sys.modules[__name__], app.bot, owner_id],
     )
     scheduler.add_job(
-        signal_loop.run_exit_tracker,
+        _heartbeat_wrapper("exit_tracker", signal_loop.run_exit_tracker),
         "interval",
         minutes=signal_loop.EXIT_TRACKER_INTERVAL_MIN,
         args=[sys.modules[__name__], app.bot],
     )
+    # Watchdog (ROADMAP П1.2) -- следит за heartbeat выше, шлёт владельцу алерт, если
+    # какая-то из задач замолчала дольше 2x своего интервала.
+    scheduler.add_job(
+        run_watchdog,
+        "interval",
+        minutes=10,
+        args=[app.bot],
+    )
+    # Дневной версионированный бэкап БД (ROADMAP П1.4) -- в 03:00 по TZ бота, вне часов
+    # активности рынка/владельца, не конфликтует по времени с часовым GitHub sync журнала.
+    scheduler.add_job(
+        run_daily_backup,
+        "cron",
+        hour=3, minute=0,
+        args=[app.bot],
+    )
     scheduler.start()
+
+    # Стартовый integrity-check (ROADMAP П1.3) -- ОДНО консолидированное сообщение
+    # владельцу вместо разрозненных, только то, что реально проверено в этом запуске
+    # (не подставляет "ок" туда, где проверка не делалась -- см. Протокол правды).
+    await _startup_integrity_check(app.bot, owner_id)
 
 def main():
     # concurrent_updates=True -- иначе PTB диспетчит апдейты СТРОГО последовательно и не
@@ -9738,6 +9942,7 @@ def main():
     app.add_handler(CommandHandler("stop",      cmd_stop))
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
+    app.add_handler(CommandHandler("health",       cmd_health))
     app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
