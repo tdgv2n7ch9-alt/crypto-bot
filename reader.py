@@ -28,7 +28,9 @@ API_ID        = int(os.getenv("TG_API_ID", "0"))
 API_HASH      = os.getenv("TG_API_HASH", "")
 BOT_TOKEN     = os.getenv("BOT_TOKEN", "")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
-SESSION       = "best_trade_reader"
+# Абсолютный путь, привязанный к расположению скрипта — под launchd cwd не гарантирован,
+# относительный SESSION приводил к sqlite3.OperationalError: unable to open database file.
+SESSION       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_trade_reader")
 
 SOURCE_CHANNELS = [
     "https://t.me/+nubqP8HBLLg5Yzhi",   # PIXEL
