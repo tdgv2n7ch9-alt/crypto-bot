@@ -190,7 +190,12 @@ def _stage2_check(symbol, coin):
         return None
     if not result.get("ok"):
         return None
-    if not result.get("block11_trade_plan", {}).get("has_setup"):
+    b11 = result.get("block11_trade_plan", {})
+    if not b11.get("has_setup"):
+        try:
+            signal_journal.log_rejected("signal_loop", symbol, b11.get("reason", "неизвестно"))
+        except Exception as e:
+            _log(f"{symbol}: log_rejected failed {e}")
         return None
     return result
 

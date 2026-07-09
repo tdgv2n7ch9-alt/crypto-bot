@@ -9751,6 +9751,64 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only (ROADMAP П2): сигналов за неделю, win-rate по источникам и режимам,
+    сравнение с предыдущей неделей ("деградация vs прошлый период" -- показываем ЧИСЛА
+    и дельту, не подставляем оценочное слово "деградация"/"улучшение" без явного порога,
+    см. Протокол правды п.6 -- решение, что считать деградацией, за владельцем)."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+
+    WEEK = 7 * 24 * 3600
+    now = time.time()
+    this_week = signal_journal.get_journal_summary(WEEK, end_ts=now)
+    prev_week = signal_journal.get_journal_summary(WEEK, end_ts=now - WEEK)
+
+    lines = ["*/stats — неделя*", ""]
+    lines.append(f"Сигналов за 7д: {this_week['total']} (прошлые 7д: {prev_week['total']})")
+
+    def _wr(s):
+        return f"{s['win_rate']}%" if s["win_rate"] is not None else "—"
+
+    wr_this, wr_prev = this_week["win_rate"], prev_week["win_rate"]
+    if wr_this is not None and wr_prev is not None:
+        delta = round(wr_this - wr_prev, 1)
+        arrow = "📈" if delta > 0 else ("📉" if delta < 0 else "➡️")
+        lines.append(f"Win rate: {_wr(this_week)} (прошлая неделя: {_wr(prev_week)}, {arrow} {delta:+.1f}п.п.)")
+    else:
+        lines.append(f"Win rate: {_wr(this_week)} (прошлая неделя: {_wr(prev_week)})")
+
+    avg_r_this = f"{this_week['avg_r']:+.2f}" if this_week["avg_r"] is not None else "—"
+    avg_r_prev = f"{prev_week['avg_r']:+.2f}" if prev_week["avg_r"] is not None else "—"
+    lines.append(f"Средний факт. R: {avg_r_this} (прошлая неделя: {avg_r_prev})")
+
+    if this_week["by_source"]:
+        lines.append("\n*По источникам (7д):*")
+        for src, agg in sorted(this_week["by_source"].items()):
+            wr = f"{agg['win_rate']}%" if agg["win_rate"] is not None else "—"
+            lines.append(f"  {src}: {agg['total']} сигналов, win rate {wr}")
+    else:
+        lines.append("\nПо источникам: нет сигналов за 7д")
+
+    if this_week["by_regime"]:
+        lines.append("\n*По рыночному режиму (7д, закрытые с исходом):*")
+        for reg, agg in sorted(this_week["by_regime"].items()):
+            wr = f"{agg['win_rate']}%" if agg["win_rate"] is not None else "—"
+            lines.append(f"  {reg}: {agg['total']} сигналов, win rate {wr}")
+    else:
+        lines.append("\nПо режиму: нет закрытых сигналов за 7д")
+
+    rejected = signal_journal.get_rejected_summary(WEEK)
+    if rejected["total"]:
+        rej_str = ", ".join(f"{k}: {v}" for k, v in sorted(rejected["by_source"].items()))
+        lines.append(f"\nОтклонено гейтами за 7д: {rejected['total']} ({rej_str})")
+
+    lines.append("\nПодробнее по всем окнам (24ч/7д/всё время): /journal")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def cmd_journal_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only: форсирует немедленный коммит Signal Journal в GitHub (в обход
     5-минутного рейт-лимита) -- для проверки персистентности или перед плановым
@@ -9945,6 +10003,7 @@ def main():
     app.add_handler(CommandHandler("health",       cmd_health))
     app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))
+    app.add_handler(CommandHandler("stats",     cmd_stats))
     app.add_handler(CommandHandler("spot",      cmd_top_spot))
     app.add_handler(CommandHandler("long",      cmd_top_long))
     app.add_handler(CommandHandler("short",     cmd_top_short))

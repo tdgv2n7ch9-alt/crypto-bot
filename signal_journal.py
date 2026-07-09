@@ -239,9 +239,17 @@ async def _commit_to_github(force: bool = False):
 async def run_github_sync_loop():
     """Фоновый цикл: раз в час форсирует коммит в GitHub (если есть несохранённые
     изменения) -- подстраховка на случай, если событийные коммиты (при закрытии сигнала)
-    были пропущены (краш, рейт-лимит и т.п.)."""
+    были пропущены (краш, рейт-лимит и т.п.). Заодно -- ротация старых закрытых записей
+    (см. _rotate_old_records, ROADMAP П2) в том же часовом такте, дешёвая операция при
+    текущем объёме журнала."""
     while True:
         await asyncio.sleep(GITHUB_SYNC_INTERVAL_SEC)
+        try:
+            n = _rotate_old_records()
+            if n:
+                print(f"Signal Journal: заархивировано {n} старых закрытых записей")
+        except Exception as e:
+            print(f"Signal Journal: rotation failed: {e}")
         try:
             await _commit_to_github(force=True)
         except Exception as e:
@@ -268,6 +276,7 @@ def init(bot, owner_chat_id):
     _bot = bot
     _owner_chat_id = owner_chat_id
     _load()
+    _load_rejected()
 
 
 def _load():
@@ -285,13 +294,86 @@ def _load():
         _next_id = 1
 
 
-def _save():
+def _atomic_write_json(path: str, obj) -> bool:
+    """Запись во временный файл в той же директории + os.replace (атомарно на POSIX) --
+    крах процесса посреди записи не может оставить битый/обрезанный JSON (ROADMAP П2,
+    AUDIT.md §3 п.2 -- раньше был обычный open(...,'w'), незащищённый от этого)."""
+    tmp_path = f"{path}.tmp{os.getpid()}"
     try:
-        with open(JOURNAL_FILE, "w") as f:
-            json.dump({"schema_version": SCHEMA_VERSION, "next_id": _next_id,
-                       "records": _journal}, f)
+        with open(tmp_path, "w") as f:
+            json.dump(obj, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+        return True
     except Exception as e:
-        print(f"Signal Journal: save failed ({e})")
+        print(f"Signal Journal: atomic write to {path} failed ({e})")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        return False
+
+
+def _save():
+    _atomic_write_json(JOURNAL_FILE, {"schema_version": SCHEMA_VERSION, "next_id": _next_id,
+                                       "records": _journal})
+
+
+# --- Ротация (ROADMAP П2 -- журнал раньше рос бесконечно, AUDIT.md §3 п.3) ------------
+ARCHIVE_AFTER_DAYS = 180
+ARCHIVE_FILE_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "signal_journal_archive_{year}.json")
+
+
+def _rotate_old_records() -> int:
+    """Переносит ЗАКРЫТЫЕ (terminal-статус) записи старше ARCHIVE_AFTER_DAYS в локальные
+    архивные файлы по годам -- ничего не удаляется безвозвратно, просто уходит из горячего
+    _journal/signal_journal.json, чтобы тот не рос бесконечно. Открытые (PENDING/ENTERED)
+    записи не трогаются независимо от возраста. Возвращает количество перенесённых записей.
+
+    Компромисс: get_journal_summary(window_sec=None) ("всё время") после ротации считает
+    только по неархивированным записям -- при текущем объёме (сотни записей/месяцы) порог
+    в 180 дней не наступит ещё долго, так что заметного расхождения пока не будет; если
+    понадобится честная all-time статистика ПОСЛЕ ротации -- архивы читаемы отдельно
+    (см. ARCHIVE_FILE_TEMPLATE), просто не подмешаны в горячий агрегат по умолчанию."""
+    global _dirty
+    cutoff = time.time() - ARCHIVE_AFTER_DAYS * 86400
+    to_archive = {rid: r for rid, r in _journal.items()
+                  if r["status"] in TERMINAL_STATUSES and r.get("ts", 0) < cutoff}
+    if not to_archive:
+        return 0
+
+    by_year = {}
+    for rid, r in to_archive.items():
+        year = datetime.fromtimestamp(r["ts"], TZ).year
+        by_year.setdefault(year, {})[rid] = r
+
+    archived_count = 0
+    for year, recs in by_year.items():
+        path = ARCHIVE_FILE_TEMPLATE.format(year=year)
+        existing = {}
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    existing = {int(k): v for k, v in json.load(f).get("records", {}).items()}
+            except Exception as e:
+                print(f"Signal Journal: archive read {path} failed ({e}), не архивирую год {year}")
+                continue
+        existing.update(recs)
+        ok = _atomic_write_json(path, {"schema_version": SCHEMA_VERSION, "records": existing})
+        if not ok:
+            print(f"Signal Journal: archive write {path} failed, не архивирую год {year}")
+            continue
+        for rid in recs:
+            del _journal[rid]
+            archived_count += 1
+
+    if archived_count:
+        _dirty = True
+        _save()
+    return archived_count
 
 
 def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
@@ -502,6 +584,71 @@ async def backup_snapshot(date_str: str) -> bool:
     return await loop.run_in_executor(None, _github_put_backup_sync, path, payload)
 
 
+# --- Лог отклонённых кандидатов (ROADMAP П2) -------------------------------------------
+# Раньше журнал содержал только ОТПРАВЛЕННЫЕ сигналы -- невозможно было понять, сколько
+# кандидатов дошло до проверки и почему отсеялось (AUDIT.md §3 п.5). Только наблюдение,
+# вызывается ПОСЛЕ уже принятого решения не сигналить -- не влияет на генерацию сигналов.
+MAX_REJECTED_LOG = 1000
+REJECTED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rejected_candidates.json")
+_rejected = []   # list[dict], старые первые, капается на MAX_REJECTED_LOG
+
+
+def _load_rejected():
+    global _rejected
+    if not os.path.exists(REJECTED_FILE):
+        return
+    try:
+        with open(REJECTED_FILE) as f:
+            _rejected = json.load(f).get("records", [])
+    except Exception as e:
+        print(f"Signal Journal: rejected-log load failed ({e})")
+        _rejected = []
+
+
+def log_rejected(source: str, symbol: str, reason: str, direction: str = None):
+    """Кандидат дошёл до содержательной проверки (fa_engine/чеклист/R:R-гейт) и не прошёл.
+    reason -- берётся из уже посчитанного fa_engine (block11_trade_plan['reason']), здесь
+    только записывается, не вычисляется заново. Только локальный файл, без GitHub-синка
+    (вспомогательные данные для будущего анализа ложноотрицательных, не критичны для
+    выживания при редеплое так, как сам журнал сигналов) -- см. PROGRESS.md за решение."""
+    global _rejected
+    _rejected.append({
+        "ts": time.time(), "timestamp": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "source": source, "symbol": symbol, "direction": direction, "reason": reason,
+    })
+    if len(_rejected) > MAX_REJECTED_LOG:
+        _rejected = _rejected[-MAX_REJECTED_LOG:]
+    _atomic_write_json(REJECTED_FILE, {"records": _rejected})
+
+
+def get_rejected_summary(window_sec=None) -> dict:
+    """Для будущего анализа/дополнения /stats -- количество отклонений и разбивка по
+    source за окно. Полные reason-тексты остаются в REJECTED_FILE для ручного разбора."""
+    now = time.time()
+    recs = _rejected
+    if window_sec is not None:
+        recs = [r for r in recs if now - r["ts"] <= window_sec]
+    by_source = {}
+    for r in recs:
+        by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+    return {"total": len(recs), "by_source": by_source}
+
+
+def _regime_label(rec: dict) -> str:
+    """Грубая метка рыночного режима из уже сохранённого снимка ema_stack (ta_extra.
+    ema_context() на момент сигнала) -- ROADMAP П2: данные для этого уже собирались
+    (docstring log_signal раньше прямо говорил "для будущего статистического анализа"),
+    здесь этот анализ впервые считается. Предпочитаем 4h (медленнее/надёжнее для режима),
+    фоллбэк на 1h, "неизвестно" если снимка нет вообще (старые записи до этого поля)."""
+    stack_map = {"бычий": "uptrend", "медвежий": "downtrend", "смешанный": "range"}
+    ema_stack = rec.get("ema_stack") or {}
+    for tf in ("tf_4h", "tf_1h"):
+        tf_ctx = ema_stack.get(tf)
+        if tf_ctx and tf_ctx.get("stack") in stack_map:
+            return stack_map[tf_ctx["stack"]]
+    return "неизвестно"
+
+
 def get_status_counts():
     """Для /radar_status: (активных, закрытых)."""
     active = sum(1 for r in _journal.values() if r["status"] not in TERMINAL_STATUSES)
@@ -509,10 +656,16 @@ def get_status_counts():
     return active, closed
 
 
-def get_journal_summary(window_sec=None) -> dict:
-    """Сводка для /journal. window_sec=None -- за всё время."""
-    now = time.time()
+def get_journal_summary(window_sec=None, end_ts=None) -> dict:
+    """Сводка для /journal и /stats. window_sec=None -- за всё время (среди
+    неархивированных, см. _rotate_old_records). end_ts=None -- окно до текущего момента;
+    иначе окно (end_ts - window_sec, end_ts] -- нужно для сравнения "эта неделя vs
+    прошлая" в /stats (ROADMAP П2), без него можно было сравнить только "N дней" каждый
+    раз от now(), а не два непересекающихся периода."""
+    now = end_ts if end_ts is not None else time.time()
     recs = list(_journal.values())
+    if end_ts is not None:
+        recs = [r for r in recs if r["ts"] <= end_ts]
     if window_sec is not None:
         recs = [r for r in recs if now - r["ts"] <= window_sec]
 
@@ -536,6 +689,9 @@ def get_journal_summary(window_sec=None) -> dict:
             agg["losses"] += 1
         elif r.get("outcome") in ("TP1_HIT", "TP2_HIT", "TP3_HIT"):
             agg["wins"] += 1
+    for agg in by_source.values():
+        closed_n = agg["wins"] + agg["losses"]
+        agg["win_rate"] = round(agg["wins"] / closed_n * 100, 1) if closed_n else None
 
     by_grade = {}
     for r in closed_with_outcome:
@@ -549,11 +705,26 @@ def get_journal_summary(window_sec=None) -> dict:
     for agg in by_grade.values():
         agg["win_rate"] = round(agg["wins"] / agg["total"] * 100, 1) if agg["total"] else None
 
+    # Разбивка по рыночному режиму (ROADMAP П2) -- из уже сохранённого ema_stack, см.
+    # _regime_label. Считаем только среди закрытых-с-исходом, как by_grade (EXPIRED без
+    # входа не несёт направленного результата, шумит статистику).
+    by_regime = {}
+    for r in closed_with_outcome:
+        reg = _regime_label(r)
+        agg = by_regime.setdefault(reg, {"total": 0, "wins": 0, "losses": 0})
+        agg["total"] += 1
+        if r["outcome"] == "SL_HIT":
+            agg["losses"] += 1
+        else:
+            agg["wins"] += 1
+    for agg in by_regime.values():
+        agg["win_rate"] = round(agg["wins"] / agg["total"] * 100, 1) if agg["total"] else None
+
     return {
         "total": total, "entered_count": len(entered), "entered_pct": entered_pct,
         "win_rate": win_rate, "avg_r": avg_r,
         "wins": len(wins), "losses": len(losses),
-        "by_source": by_source, "by_grade": by_grade,
+        "by_source": by_source, "by_grade": by_grade, "by_regime": by_regime,
     }
 
 
