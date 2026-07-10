@@ -18,3 +18,9 @@ knowledge/_transcribe_progress.log
 knowledge/_transcribe_queue.json
 knowledge/_ocr/
 knowledge/_ocr_batch.log
+
+# Исторический бэктест (ночная сессия #3) -- сырые свечи (~сотни МБ), не в git.
+# Код (download_history.py, engine.py) версионируется, кэш данных -- нет.
+backtest/data/
+backtest/_progress.log
+backtest/_download_stdout.log
