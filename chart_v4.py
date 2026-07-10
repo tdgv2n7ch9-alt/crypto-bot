@@ -308,13 +308,30 @@ def build_trade_chart_v4(symbol: str, candles: list, direction: str,
     # --- Текущая цена ---
     ax.axhline(price, color=GRAY, linestyle="--", linewidth=1, alpha=0.7, zorder=4)
 
-    # --- Стрелка ожидаемого сценария: от последней свечи к ближайшей целевой зоне ---
-    # long -- вверх к TP1 (supply/цель по вердикту), short -- вниз к TP1 (demand/цель).
-    # TP1 обязателен для построения графика (см. проверку entry_levels/sl выше в
-    # chart_v3-совместимой сигнатуре), поэтому это всегда самая близкая содержательная
-    # цель по направлению сделки -- отдельный аргумент сценария не нужен.
+    # --- Стрелка ожидаемого сценария: "манипуляция в зону -> разворот к TP" ---
+    # Два сегмента, не один прямой отрезок к цели: сперва цена ДОХОДИТ до дальнего края
+    # входной DCA-зоны (entry_levels[-1] -- "3 лимитка", самый глубокий транш, т.е. и есть
+    # ожидаемая глубина манипуляции/свипа перед разворотом), затем разворачивается к TP1.
+    # Если цена уже внутри/за зоной -- всё равно рисуем оба сегмента: первый может быть
+    # короткий, это нормально, сценарий читается как "доход до зоны -> разворот", а не
+    # только "куда идти в целом".
     arrow_target = tp1 if tp1 is not None else (key_high if is_long else key_low)
-    if arrow_target is not None:
+    manipulation_target = entry_levels[-1] if entry_levels and entry_levels[-1] is not None else entry_ref
+    if arrow_target is not None and manipulation_target is not None:
+        leg1_x = n - 1 + extension * 0.22
+        leg2_x = n - 1 + extension * 0.55
+        # Сегмент 1 (манипуляция в зону) -- пунктир, тусклее
+        ax.annotate("", xy=(leg1_x, manipulation_target), xytext=(n - 1, price),
+                   arrowprops=dict(arrowstyle="-|>", color=GRAY, alpha=0.45,
+                                    linewidth=1.2, linestyle=(0, (4, 3)), shrinkA=0, shrinkB=0),
+                   zorder=6)
+        # Сегмент 2 (разворот к TP) -- пунктир, ярче, цвет по направлению сделки
+        reversal_color = GREEN if is_long else RED
+        ax.annotate("", xy=(leg2_x, arrow_target), xytext=(leg1_x, manipulation_target),
+                   arrowprops=dict(arrowstyle="-|>", color=reversal_color, alpha=0.6,
+                                    linewidth=1.4, linestyle=(0, (4, 3)), shrinkA=0, shrinkB=0),
+                   zorder=6)
+    elif arrow_target is not None:
         arrow_x = n - 1 + extension * 0.55
         ax.annotate("", xy=(arrow_x, arrow_target), xytext=(n - 1, price),
                    arrowprops=dict(arrowstyle="-|>", color=GRAY, alpha=0.55,

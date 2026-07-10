@@ -8241,6 +8241,12 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
         ]
         if a.get("levels_source"):
             lines.append(f"`Источник уровней: {a['levels_source']}`")
+        # POI-зона входа с TF-метками -- раньше эта информация (какие ТФ и сколько
+        # касаний подтвердили зону, есть ли K-LVL) была только в /coin через narrative.py,
+        # хотя sl_source уже содержит готовую строку (например "S/R зона (1h, 4h, 3
+        # касан.)") -- просто не выводилась в обычную сигнальную карточку (баг №5, п.6).
+        if a.get("sl_source") and "S/R зона" in a["sl_source"]:
+            lines.append(f"`POI входа: {a['sl_source']}`")
 
     lines += [
         "",
