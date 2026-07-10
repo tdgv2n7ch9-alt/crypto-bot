@@ -7,4 +7,13 @@ __pycache__/
 
 # Библиотека знаний SMC (~60ГБ PDF/видео) -- НИКОГДА не коммитить в этот репозиторий.
 Trading/
-knowledge/
+# knowledge/ -- сырые/тяжёлые данные остаются вне git, но курируемые .md-документы
+# (KNOWLEDGE_INDEX.md, INVENTORY.md, KNOWLEDGE_GAPS.md, METHODOLOGY_CORE.md,
+# SMC_COVERAGE.md) -- реальная документация проекта, версионируем их отдельно ниже.
+knowledge/transcripts/
+knowledge/channel_archive/
+knowledge/_transcribe_worker.log
+knowledge/_transcribe_progress.log
+knowledge/_transcribe_queue.json
+knowledge/_ocr/
+knowledge/_ocr_batch.log
