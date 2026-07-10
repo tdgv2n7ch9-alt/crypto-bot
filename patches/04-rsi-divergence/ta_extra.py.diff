@@ -1,0 +1,60 @@
+diff --git a/ta_extra.py b/ta_extra.py
+index 5f055e5..1028807 100644
+--- a/ta_extra.py
++++ b/ta_extra.py
+@@ -897,3 +897,55 @@ def detect_polarity_flip(zone: dict, candles_4h: list, was_below: bool) -> dict:
+         # была сопротивлением (above price) -- пробой ВВЕРХ (закрытия выше zone hi) рвёт роль
+         broken = all(c > zone["hi"] for c in last_closes)
+         return {"flipped": broken, "new_role": "support" if broken else None}
++
++
++def detect_price_indicator_divergence(candles: list, period: int = 14) -> dict:
++    """ПАТЧ (ночная сессия, НЕ подключена ни к одному вызывающему коду -- аддитивная
++    функция, см. knowledge/MISMATCH_REPORT.md п.10 / patches/04-rsi-divergence/README.md).
++
++    Классическая/скрытая дивергенция цена-vs-RSI (knowledge/METHODOLOGY_CORE.md §10,
++    источник: Урок 4. Дивергенция, TDP, TTS.mp4 [136s-367s]) -- КОНТРАРИАНСКАЯ трактовка
++    источника, не наивная "дивергенция = сигнал входа":
++      - Классическая (цена HH + RSI LH сверху, или цена LL + RSI HL снизу) -- источник
++        трактует как признак ВОЗМОЖНОЙ коррекции ПРОТИВ HTF-bias, не сигнал входа по
++        тренду дивергенции (это то, что делают "массы", по словам источника).
++      - Скрытая (цена LH + RSI HH сверху = медвежья; цена HL + RSI LL снизу = бычья) --
++        источник трактует как подтверждение ПРОДОЛЖЕНИЯ HTF-тренда.
++      - Бычья скрытая (цена HL + RSI LL) выведена по симметрии с явно описанной медвежьей
++        скрытой в источнике -- НЕ процитирована дословно, честно помечаю как вывод по
++        аналогии, не прямую цитату.
++
++    RSI считается в момент каждого свинга через уже существующий rsi() (срез closes до
++    индекса свинга) -- переиспользует чистую функцию, не дублирует формулу.
++
++    Возвращает {"bearish_classical", "bearish_hidden", "bullish_classical",
++    "bullish_hidden": bool, "detail": [...]} -- сравнивает 2 последних свинг-хая (медвежьи
++    варианты) и 2 последних свинг-лоя (бычьи варианты) по swing_points()."""
++    highs, lows = swing_points(candles)
++    closes = [c["close"] for c in candles]
++    result = {"bearish_classical": False, "bearish_hidden": False,
++              "bullish_classical": False, "bullish_hidden": False, "detail": []}
++
++    if len(highs) >= 2:
++        (i1, p1), (i2, p2) = highs[-2], highs[-1]
++        r1 = rsi(closes[:i1 + 1], period)
++        r2 = rsi(closes[:i2 + 1], period)
++        if p2 > p1 and r2 < r1:
++            result["bearish_classical"] = True
++            result["detail"].append({"type": "bearish_classical", "price": (p1, p2), "rsi": (r1, r2)})
++        elif p2 < p1 and r2 > r1:
++            result["bearish_hidden"] = True
++            result["detail"].append({"type": "bearish_hidden", "price": (p1, p2), "rsi": (r1, r2)})
++
++    if len(lows) >= 2:
++        (i1, p1), (i2, p2) = lows[-2], lows[-1]
++        r1 = rsi(closes[:i1 + 1], period)
++        r2 = rsi(closes[:i2 + 1], period)
++        if p2 < p1 and r2 > r1:
++            result["bullish_classical"] = True
++            result["detail"].append({"type": "bullish_classical", "price": (p1, p2), "rsi": (r1, r2)})
++        elif p2 > p1 and r2 < r1:
++            result["bullish_hidden"] = True
++            result["detail"].append({"type": "bullish_hidden", "price": (p1, p2), "rsi": (r1, r2)})
++
++    return result

@@ -1,0 +1,53 @@
+diff --git a/ta_extra.py b/ta_extra.py
+index 5f055e5..005babd 100644
+--- a/ta_extra.py
++++ b/ta_extra.py
+@@ -897,3 +897,48 @@ def detect_polarity_flip(zone: dict, candles_4h: list, was_below: bool) -> dict:
+         # была сопротивлением (above price) -- пробой ВВЕРХ (закрытия выше zone hi) рвёт роль
+         broken = all(c > zone["hi"] for c in last_closes)
+         return {"flipped": broken, "new_role": "support" if broken else None}
++
++
++BPR_MAX_BAR_GAP = 5   # макс. расстояние между формированием двух противоположных FVG,
++                       # чтобы считать их "друг за другом" (BPR-пара), не случайным совпадением
++
++
++def detect_bpr_zones(candles: list) -> list:
++    """ПАТЧ (ночная сессия, НЕ подключена ни к одному вызывающему коду -- аддитивная
++    функция, см. knowledge/MISMATCH_REPORT.md п.3 / patches/05-bpr/README.md).
++
++    BPR (Balanced Price Range, knowledge/METHODOLOGY_CORE.md §4, источник BPR.mp4
++    [0s-170s]) -- область пересечения ДВУХ ПРОТИВОПОЛОЖНЫХ имбалансов (FVG),
++    формирующихся друг за другом при смене направления. Уже отдельно есть
++    find_fvg_zones() (используется в fa_engine block4 для отображения POI), но она не
++    хранит индекс формирования каждого FVG -- здесь он нужен, чтобы находить ПАРЫ
++    соседних по времени противоположных FVG, поэтому BPR делает свой независимый скан
++    той же 3-свечной формации (не дублирует логику find_fvg_zones для другой цели,
++    просто не может её переиспользовать без индекса).
++
++    Возвращает список {"lo","hi","mid","bull_fvg_idx","bear_fvg_idx","formed_idx"} --
++    только реальные пересечения (lo < hi), отсортированные по свежести (formed_idx по
++    убыванию, самые свежие -- первыми)."""
++    n = len(candles)
++    bull_fvgs, bear_fvgs = [], []
++    for i in range(1, n - 1):
++        prev_c, next_c = candles[i - 1], candles[i + 1]
++        if prev_c["high"] < next_c["low"]:
++            bull_fvgs.append((i, prev_c["high"], next_c["low"]))
++        if next_c["high"] < prev_c["low"]:
++            bear_fvgs.append((i, next_c["high"], prev_c["low"]))
++
++    zones = []
++    for bi, blo, bhi in bull_fvgs:
++        for si, slo, shi in bear_fvgs:
++            if abs(si - bi) > BPR_MAX_BAR_GAP:
++                continue
++            lo, hi = max(blo, slo), min(bhi, shi)
++            if lo < hi:
++                zones.append({
++                    "lo": lo, "hi": hi, "mid": (lo + hi) / 2,
++                    "bull_fvg_idx": bi, "bear_fvg_idx": si,
++                    "formed_idx": max(bi, si),
++                })
++    zones.sort(key=lambda z: z["formed_idx"], reverse=True)
++    return zones

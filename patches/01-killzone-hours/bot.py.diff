@@ -1,0 +1,90 @@
+diff --git a/bot.py b/bot.py
+index b85fc59..e12d715 100644
+--- a/bot.py
++++ b/bot.py
+@@ -6397,31 +6397,38 @@ def format_position_size(ps: dict, is_long: bool = True) -> str:
+ 
+ def get_killzone_status() -> dict:
+     """
+-    ICT Killzones       .
+-      UTC+3 (Istanbul).
+-
+-    Asia Session:    01:0004:00 UTC+3  ( ,   sweep)
+-    London Open:     10:0012:00 UTC+3  (   )
+-    London Close:    18:0019:00 UTC+3  (  )
+-    NY Open:         16:0018:00 UTC+3  (   )
+-    NY Close:        23:0000:00 UTC+3  (   )
++    ICT Killzones -- часы сессий по UTC+3 (тот же TZ, что и бот).
++
++    ПАТЧ (ночная сессия, не вмержен без "да" владельца): часы Лондона/Нью-Йорка
++    приведены в соответствие с knowledge/METHODOLOGY_CORE.md §8 (источник --
++    Урок 5. Время и киллзоны.mp4 [1662s-1902s]), расхождение было до 2 часов
++    для NY. Попутно восстановлены названия/описания зон -- Cyrillic-текст был
++    стёрт ещё в древнем коммите 62080d6 ("v45 restore v43"), логика не
++    страдала, только подписи были не видны (см. patches/README.md).
++
++    Asia Session:   до 08:00 UTC+3 (низкая волатильность, обычно рендж/хай-лоу дня)
++    London Open:    09:00-12:00 UTC+3 (наибольшие объёмы дня)
++    NY Open:        14:00-16:00 UTC+3 (иногда расширяется до 17:00)
++    После 17:00 источник рекомендует не искать новые позиции -- зоны
++    "London Close"/"NY Close" в источнике не встречались, оставлены как есть
++    (не в скоупе этого патча -- не подтверждены и не опровергнуты).
+     """
+     now = datetime.now(TZ)
+     h   = now.hour
+     m   = now.minute
+-    hm  = h * 60 + m  #   
++    hm  = h * 60 + m  # минуты с начала суток
+ 
+     zones = [
+-        {"name": " Asia Session",   "start": 1*60,  "end": 4*60,  "quality": "B",
+-         "desc": "Sweep ,  "},
+-        {"name": " London Open",   "start": 10*60, "end": 12*60, "quality": "A+",
+-         "desc": "     "},
+-        {"name": " NY Open",       "start": 16*60, "end": 18*60, "quality": "A",
+-         "desc": "   ,  "},
+-        {"name": " London Close",   "start": 18*60, "end": 19*60, "quality": "B",
+-         "desc": "    "},
+-        {"name": " NY Close",       "start": 23*60, "end": 24*60, "quality": "C",
+-         "desc": "  , "},
++        {"name": "🌏 Азиатская сессия", "start": 0*60,  "end": 8*60,  "quality": "B",
++         "desc": "Низкая волатильность, часто рендж или хай/лоу дня"},
++        {"name": "🇬🇧 Лондон Open",     "start": 9*60,  "end": 12*60, "quality": "A+",
++         "desc": "Наибольшие объёмы дня, ищем хай/лоу дня"},
++        {"name": "🇺🇸 NY Open",         "start": 14*60, "end": 16*60, "quality": "A",
++         "desc": "Продолжение дневного диапазона, часто коррекция после Лондона"},
++        {"name": "🇬🇧 Лондон Close",    "start": 18*60, "end": 19*60, "quality": "B",
++         "desc": "Не подтверждено источником, оставлено как в старой версии"},
++        {"name": "🇺🇸 NY Close",        "start": 23*60, "end": 24*60, "quality": "C",
++         "desc": "Не подтверждено источником, оставлено как в старой версии"},
+     ]
+ 
+     active = None
+@@ -6432,7 +6439,7 @@ def get_killzone_status() -> dict:
+             active["remaining_min"] = remaining
+             break
+ 
+-    #  
++    # Следующая зона по времени
+     next_zone = None
+     future = [(z, z["start"] - hm if z["start"] > hm else z["start"] + 24*60 - hm)
+               for z in zones]
+@@ -6441,14 +6448,14 @@ def get_killzone_status() -> dict:
+         next_zone = future[0][0].copy()
+         next_zone["in_min"] = future[0][1]
+ 
+-    #   
++    # Хорошее ли сейчас время для входа
+     if active:
+         is_good = active["quality"] in ("A+", "A")
+     else:
+         is_good = False
+-        # Dead zone   
+-        active = {"name": " Dead Zone", "quality": "D",
+-                  "desc": "    ", "remaining_min": 0}
++        # Dead zone -- вне активных killzone
++        active = {"name": "⚪ Dead Zone", "quality": "D",
++                  "desc": "Вне активных killzone", "remaining_min": 0}
+ 
+     return {
+         "active":    active,
