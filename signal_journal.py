@@ -759,6 +759,63 @@ def get_journal_summary(window_sec=None, end_ts=None) -> dict:
     }
 
 
+def get_extended_analytics(window_sec=None, end_ts=None, min_symbol_trades: int = 2) -> dict:
+    """Расширение /journal (ROADMAP П2, доп. пункт из очереди): win-rate по монетам, по
+    времени суток (час отправки сигнала, TZ бота), max losing streak (самая длинная серия
+    подряд идущих SL_HIT в хронологическом порядке). Только чтение уже собранных полей --
+    ничего нового не фетчится. min_symbol_trades отсекает монеты с 1 сделкой из
+    `by_symbol` (иначе список — в основном "100%/0% из 1" шум, не сигнал)."""
+    now = end_ts if end_ts is not None else time.time()
+    recs = list(_journal.values())
+    if end_ts is not None:
+        recs = [r for r in recs if r["ts"] <= end_ts]
+    if window_sec is not None:
+        recs = [r for r in recs if now - r["ts"] <= window_sec]
+    closed = [r for r in recs if r.get("outcome") in OUTCOME_STATUSES]
+
+    by_symbol = {}
+    for r in closed:
+        sym = r.get("symbol", "?")
+        agg = by_symbol.setdefault(sym, {"total": 0, "wins": 0, "losses": 0})
+        agg["total"] += 1
+        if r["outcome"] == "SL_HIT":
+            agg["losses"] += 1
+        else:
+            agg["wins"] += 1
+    for agg in by_symbol.values():
+        agg["win_rate"] = round(agg["wins"] / agg["total"] * 100, 1) if agg["total"] else None
+    by_symbol = {k: v for k, v in by_symbol.items() if v["total"] >= min_symbol_trades}
+
+    by_hour = {}
+    for r in closed:
+        try:
+            hour = datetime.fromtimestamp(r["ts"], TZ).hour
+        except Exception:
+            continue
+        agg = by_hour.setdefault(hour, {"total": 0, "wins": 0, "losses": 0})
+        agg["total"] += 1
+        if r["outcome"] == "SL_HIT":
+            agg["losses"] += 1
+        else:
+            agg["wins"] += 1
+    for agg in by_hour.values():
+        agg["win_rate"] = round(agg["wins"] / agg["total"] * 100, 1) if agg["total"] else None
+
+    # Max losing streak -- хронологический порядок по времени закрытия (outcome_ts), не по
+    # id/ts сигнала: серия убытков определяется тем, КОГДА они реально случились подряд.
+    closed_sorted = sorted(closed, key=lambda r: r.get("outcome_ts") or r["ts"])
+    max_streak = 0
+    cur_streak = 0
+    for r in closed_sorted:
+        if r["outcome"] == "SL_HIT":
+            cur_streak += 1
+            max_streak = max(max_streak, cur_streak)
+        else:
+            cur_streak = 0
+
+    return {"by_symbol": by_symbol, "by_hour": by_hour, "max_losing_streak": max_streak}
+
+
 def get_stats_for_source(source: str) -> dict:
     """Для строки в карточке сигнала: '📒 Journal: N закрытых сигналов этого типа,
     win rate X%'. closed -- количество ЗАКРЫТЫХ С ИСХОДОМ (не EXPIRED) записей этого

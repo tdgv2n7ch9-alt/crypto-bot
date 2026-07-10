@@ -9860,13 +9860,34 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         sl_line = f"*Сигнальный контур (signal_loop):* {sl_active} активных, закрытых пока нет"
 
-    text = "\n\n".join([
+    # Расширенная аналитика (ROADMAP П2, доп. пункт очереди) -- по монетам/времени суток/
+    # losing streak, за всё время (короткие окна дают слишком мало данных на монету/час).
+    ext = signal_journal.get_extended_analytics(None)
+    ext_lines = ["*Доп. аналитика (всё время):*"]
+    if ext["max_losing_streak"]:
+        ext_lines.append(f"  Max losing streak: {ext['max_losing_streak']} подряд")
+    top_symbols = sorted(ext["by_symbol"].items(), key=lambda kv: -kv[1]["total"])[:5]
+    if top_symbols:
+        sym_str = ", ".join(f"{sym}: {v['win_rate']}% ({v['total']})" for sym, v in top_symbols)
+        ext_lines.append(f"  По монетам (топ-5 по числу сделок): {sym_str}")
+    if ext["by_hour"]:
+        best_hour = max(ext["by_hour"].items(), key=lambda kv: (kv[1]["win_rate"] or 0, kv[1]["total"]))
+        worst_hour = min(ext["by_hour"].items(), key=lambda kv: (kv[1]["win_rate"] if kv[1]["win_rate"] is not None else 101, -kv[1]["total"]))
+        ext_lines.append(f"  Час (TZ бота), лучший: {best_hour[0]}:00 — {best_hour[1]['win_rate']}% "
+                          f"({best_hour[1]['total']}), худший: {worst_hour[0]}:00 — "
+                          f"{worst_hour[1]['win_rate']}% ({worst_hour[1]['total']})")
+    ext_block = "\n".join(ext_lines) if len(ext_lines) > 1 else None
+
+    text_parts = [
         "*Signal Journal — статистика*",
         _fmt_window(24 * 3600, "24ч"),
         _fmt_window(7 * 24 * 3600, "7д"),
         _fmt_window(None, "Всё время"),
         sl_line,
-    ])
+    ]
+    if ext_block:
+        text_parts.append(ext_block)
+    text = "\n\n".join(text_parts)
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
