@@ -298,13 +298,17 @@ _ALL_COINS_CACHE_TTL = 600   # 10 мин (см. ТЗ) -- было 1800с, но �
 # нормально, не баг.
 _DATA_SOURCE_STATUS = {
     "coingecko_markets": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
+    "coingecko_global": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
     "cmc": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
-    "cmc_quotes": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
     "cmc_global_metrics": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
     "yahoo_finance": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
 }
 _SOURCE_ALERT_THRESHOLD = 3   # подряд неудач источника -> алерт владельцу (run_watchdog)
 _source_alerted = set()       # источники, по которым уже отправлен алерт (дедуп, как _job_alerted_stale)
+# ROADMAP: CMC перестал быть критическим источником (решение владельца, 2026-07-10) --
+# отказы этих источников НЕ считаются деградацией сервиса (CoinGecko первичный везде,
+# CMC опциональный фоллбек), run_watchdog их не алертит, /health красит жёлтым, не красным.
+_OPTIONAL_SOURCES = {"cmc", "cmc_global_metrics"}
 
 
 def _record_source_result(name: str, ok: bool, error: str = None):
@@ -372,6 +376,10 @@ def _data_quality_flags() -> list:
     now = time.time()
     flags = []
     for name, status in _DATA_SOURCE_STATUS.items():
+        if name in _OPTIONAL_SOURCES:
+            # ROADMAP 2026-07-10 (решение владельца): CMC опционален, его отказ не
+            # означает деградацию сигнальных данных (CoinGecko первичный везде).
+            continue
         last_ts = status.get("last_ts") or 0
         age = now - last_ts if last_ts else None
         if status.get("ok") is False:
@@ -490,8 +498,12 @@ async def run_watchdog(bot: Bot):
 
     # Источники данных (ROADMAP П3) -- N отказов подряд -> алерт (см. _record_source_result).
     # Ретраи внутри самих фетчеров не спасают от "ключ невалиден"/"квота исчерпана" --
-    # тут нужен человек, не код.
+    # тут нужен человек, не код. CMC-источники исключены (_OPTIONAL_SOURCES) -- решение
+    # владельца 2026-07-10: CMC больше не критический источник, его отказ не должен
+    # будить владельца, пока CoinGecko жив.
     for name, status in _DATA_SOURCE_STATUS.items():
+        if name in _OPTIONAL_SOURCES:
+            continue
         if status.get("consecutive_failures", 0) >= _SOURCE_ALERT_THRESHOLD and name not in _source_alerted:
             _source_alerted.add(name)
             try:
@@ -688,15 +700,35 @@ def get_top500():
 _global_metrics_cache = {"ts": 0, "data": {}}
 
 def get_global_metrics() -> dict:
-    """BTC.D/ETH.D/total_mcap — единый источник (CMC) с общим кэшем на 60с,
-    чтобы /market, Тренд и Институционал не расходились между собой."""
+    """BTC.D/ETH.D/total_mcap — CoinGecko /global первичный источник, общий кэш на 60с
+    (чтобы /market, Тренд и Институционал не расходились между собой). CMC — опциональный
+    фоллбек, только если CoinGecko недоступен; отказ CMC сам по себе НЕ деградация
+    (run_watchdog его не алертит, /health показывает жёлтым "отключён (опционально)").
+    ROADMAP: CMC перестал быть критическим источником, 2026-07-10 (решение владельца)."""
     import time as _t
     if _t.time() - _global_metrics_cache["ts"] < 60 and _global_metrics_cache["data"]:
         return _global_metrics_cache["data"]
+    try:
+        data = _cg_get("https://api.coingecko.com/api/v3/global", timeout=15)
+        d = data.get("data", {})
+        result = {
+            "total_mcap":      d.get("total_market_cap", {}).get("usd", 0) or 0,
+            "btc_dominance":   d.get("market_cap_percentage", {}).get("btc", 0) or 0,
+            "eth_dominance":   d.get("market_cap_percentage", {}).get("eth", 0) or 0,
+            "mcap_change_24h": d.get("market_cap_change_percentage_24h_usd", 0) or 0,
+        }
+        _global_metrics_cache["ts"] = _t.time()
+        _global_metrics_cache["data"] = result
+        _record_source_result("coingecko_global", True)
+        return result
+    except Exception as e:
+        _record_source_result("coingecko_global", False, f"{type(e).__name__}: {e}")
+        log.error(f"Global metrics CoinGecko error: {type(e).__name__}: {e}")
+
+    # --- CMC фоллбек, вызывается только если CoinGecko выше упал ---
     key_issue = _validate_cmc_key()
     if key_issue:
         _record_source_result("cmc_global_metrics", False, key_issue)
-        log.error(f"Global metrics: {key_issue}")
         return _global_metrics_cache["data"]
     try:
         url     = "https://pro-api.coinmarketcap.com/v1/global-metrics/quotes/latest"
@@ -705,7 +737,6 @@ def get_global_metrics() -> dict:
         if r.status_code != 200:
             err = f"HTTP {r.status_code}: {r.text[:100]}"
             _record_source_result("cmc_global_metrics", False, err)
-            log.error(f"Global metrics HTTP {r.status_code}: {r.text[:300]}")
             return _global_metrics_cache["data"]
         d = r.json().get("data", {})
         q = d.get("quote", {}).get("USD", {})
@@ -721,42 +752,26 @@ def get_global_metrics() -> dict:
         return result
     except Exception as e:
         _record_source_result("cmc_global_metrics", False, f"{type(e).__name__}: {e}")
-        log.error(f"Global metrics error: {type(e).__name__}: {e}", exc_info=True)
         return _global_metrics_cache["data"]
 
 def get_btc_eth_price() -> dict:
-    key_issue = _validate_cmc_key()
-    if key_issue:
-        _record_source_result("cmc_quotes", False, key_issue)
-        log.error(f"BTC/ETH price: {key_issue}")
-        return {}
-    try:
-        url     = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
-        headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
-        params  = {"symbol": "BTC,ETH", "convert": "USD"}
-        r = _cmc_get(url, headers, params=params, timeout=10)
-        if r.status_code != 200:
-            err = f"HTTP {r.status_code}: {r.text[:100]}"
-            _record_source_result("cmc_quotes", False, err)
-            log.error(f"BTC/ETH price HTTP {r.status_code}: {r.text[:300]}")
-            return {}
-        data   = r.json().get("data", {})
-        result = {}
-        for sym in ["BTC", "ETH"]:
-            if sym in data:
-                item = data[sym]
-                q    = (item[0] if isinstance(item, list) else item)["quote"]["USD"]
-                result[sym] = {
-                    "price": q.get("price", 0),
-                    "ch1h":  q.get("percent_change_1h", 0),
-                    "ch24h": q.get("percent_change_24h", 0),
-                }
-        _record_source_result("cmc_quotes", True)
-        return result
-    except Exception as e:
-        _record_source_result("cmc_quotes", False, f"{type(e).__name__}: {e}")
-        log.error(f"BTC/ETH price error: {type(e).__name__}: {e}", exc_info=True)
-        return {}
+    """BTC/ETH цена+%1ч/24ч — срез из get_all_coins() (CoinGecko первичный источник,
+    CMC — опциональный фоллбек уже внутри неё, см. её докстринг). Раньше был отдельным
+    прямым CMC-запросом; теперь ноль дополнительных вызовов -- данные уже в общем кэше.
+    ROADMAP: CMC перестал быть критическим источником, 2026-07-10 (решение владельца)."""
+    coins = get_all_coins()
+    result = {}
+    for sym in ("BTC", "ETH"):
+        c = next((x for x in coins if x["symbol"] == sym), None)
+        if not c:
+            continue
+        q = c.get("quote", {}).get("USDT", {})
+        result[sym] = {
+            "price": q.get("price", 0) or 0,
+            "ch1h":  q.get("percent_change_1h", 0) or 0,
+            "ch24h": q.get("percent_change_24h", 0) or 0,
+        }
+    return result
 
 def _snap_cg_days(days: int) -> str:
     """CoinGecko /ohlc (free tier) принимает только days из {1,7,14,30,90,180,365} — иначе HTTP 400"""
@@ -2535,19 +2550,19 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         import datetime, math
         import requests as _r
+        coins = get_all_coins()
         prices = get_btc_eth_price()
         gm = get_global_metrics()
-        coins = get_all_coins()
-        if not prices or not coins:
-            failures = []
-            if not prices:
-                st = _DATA_SOURCE_STATUS.get("cmc_quotes", {})
-                failures.append(f"CMC quotes/latest (цены BTC/ETH): {st.get('last_error') or 'нет данных'}")
-            if not coins:
-                st_cg = _DATA_SOURCE_STATUS.get("coingecko_markets", {})
-                st_cmc = _DATA_SOURCE_STATUS.get("cmc", {})
-                failures.append(f"CoinGecko /coins/markets: {st_cg.get('last_error') or 'нет данных'}")
-                failures.append(f"CMC /listings/latest (фоллбек): {st_cmc.get('last_error') or 'нет данных'}")
+        # ROADMAP: CoinGecko первичный источник для coins/prices (CMC — опциональный
+        # фоллбек внутри get_all_coins()), поэтому реальный failure теперь означает, что
+        # ОБА источника недоступны, а не просто "CMC-ключ мёртв" — 2026-07-10.
+        if not coins:
+            st_cg = _DATA_SOURCE_STATUS.get("coingecko_markets", {})
+            st_cmc = _DATA_SOURCE_STATUS.get("cmc", {})
+            failures = [
+                f"CoinGecko /coins/markets: {st_cg.get('last_error') or 'нет данных'}",
+                f"CMC /listings/latest (фоллбек): {st_cmc.get('last_error') or 'нет данных'}",
+            ]
             text = "❌ Обзор рынка недоступен — упавшие источники:\n" + "\n".join(f"• {f}" for f in failures)
             await msg.edit_text(text)
             return
@@ -3417,55 +3432,36 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "trend_analysis":
         await q.edit_message_text("\U0001f4ca Загружаю рыночные данные...", parse_mode="Markdown")
         try:
-            import requests as _r, os
+            import requests as _r
 
-            cmc_key = os.environ.get("CMC_API_KEY", "")
+            # ROADMAP (решение владельца, 2026-07-10): CMC перестал быть критическим
+            # источником -- эта карточка теперь читает BTC/ETH/SOL/топ-альты из
+            # get_all_coins() (CoinGecko первичный, CMC опциональный фоллбек внутри неё),
+            # вместо отдельных прямых CMC-запросов. Раньше карточка падала в "Данные
+            # временно недоступны" при мёртвом CMC-ключе, даже если CoinGecko был жив --
+            # реальной деградации не было, просто ненужная зависимость от CMC.
+            coins = get_all_coins()
 
-            # --- Получаем данные через CMC (работает на Railway) ---
-            def get_cmc_quote(symbol_str):
-                if not cmc_key:
-                    return {}
-                try:
-                    r = _r.get(
-                        "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
-                        headers={"X-CMC_PRO_API_KEY": cmc_key},
-                        params={"symbol": symbol_str, "convert": "USDT"},
-                        timeout=10
-                    )
-                    data_c = r.json().get("data", {})
-                    item = data_c.get(symbol_str, {})
-                    if isinstance(item, list): item = item[0]
-                    return item.get("quote", {}).get("USDT", {})
-                except:
-                    return {}
-
-            btc_q = get_cmc_quote("BTC")
-            eth_q = get_cmc_quote("ETH")
-            sol_q = get_cmc_quote("SOL")
-
-            # ROADMAP П3 (degraded_data) -- BTC/ETH недоступны = карточка вводит в
-            # заблуждение (показывала бы $0.0000/0% как будто реальную цену), а не
-            # рисуем нули. Честное сообщение вместо этого, без изменения торговой логики
-            # (эта карточка -- только /market "Рыночный тренд", не сигналы).
-            if not btc_q or not eth_q:
-                missing = []
-                if not cmc_key:
-                    missing.append("CMC (ключ не задан)")
-                else:
-                    if not btc_q: missing.append("CMC (BTC)")
-                    if not eth_q: missing.append("CMC (ETH)")
+            if not coins:
                 nav_degraded = InlineKeyboardMarkup([
                     [InlineKeyboardButton("\U0001f504 Повторить", callback_data="trend_analysis"),
                      InlineKeyboardButton("\U0001f3e0 Меню",      callback_data="show_menu")],
                 ])
+                st_cg = _DATA_SOURCE_STATUS.get("coingecko_markets", {})
                 await q.edit_message_text(
                     "⚠️ *Данные временно недоступны*\n\n"
-                    f"Источник(и): {', '.join(missing)}\n"
-                    "Карточка рыночного тренда не строится без цены BTC/ETH -- "
+                    f"CoinGecko: {st_cg.get('last_error') or 'нет данных'}\n"
+                    "Карточка рыночного тренда не строится без списка монет -- "
                     "показывать вместо неё нули было бы неверно.",
                     parse_mode="Markdown", reply_markup=nav_degraded
                 )
                 return
+
+            def _q(sym):
+                c = next((x for x in coins if x["symbol"] == sym), None)
+                return c.get("quote", {}).get("USDT", {}) if c else {}
+
+            btc_q, eth_q, sol_q = _q("BTC"), _q("ETH"), _q("SOL")
 
             btc_p   = btc_q.get("price", 0) or 0
             btc_ch  = btc_q.get("percent_change_24h", 0) or 0
@@ -3498,35 +3494,21 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-            # --- Топ альты из CMC ---
+            # --- Топ альты — из уже загруженного coins (CoinGecko), топ-100 по капе ---
             bull_count = 0
-            alts_lines = []
             gainers = []
             losers  = []
-            if cmc_key:
-                try:
-                    r2 = _r.get(
-                        "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
-                        headers={"X-CMC_PRO_API_KEY": cmc_key},
-                        params={"limit": 100, "convert": "USDT"},
-                        timeout=12
-                    )
-                    coins_list = r2.json().get("data", [])
-                    stables = {"USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDP","FRAX","LUSD","GUSD","USDD","PYUSD"}
-                    alt_coins_full = [c for c in coins_list if c["symbol"] not in stables]
-                    for c in alt_coins_full:
-                        ch  = c["quote"]["USDT"].get("percent_change_24h", 0) or 0
-                        ch7 = c["quote"]["USDT"].get("percent_change_7d", 0) or 0
-                        p   = c["quote"]["USDT"].get("price", 0) or 0
-                        s   = c["symbol"]
-                        if ch > 0: bull_count += 1
-                        gainers.append((s, p, ch, ch7))
-                        losers.append((s, p, ch, ch7))
-                    bull_pct = round(bull_count / max(len(alt_coins_full), 1) * 100)
-                except:
-                    bull_pct = 50
-            else:
-                bull_pct = 50
+            alt_coins_full = [c for c in coins[:100] if c["symbol"] not in STABLECOINS]
+            for c in alt_coins_full:
+                q_c = c.get("quote", {}).get("USDT", {})
+                ch  = q_c.get("percent_change_24h", 0) or 0
+                ch7 = q_c.get("percent_change_7d", 0) or 0
+                p   = q_c.get("price", 0) or 0
+                s   = c["symbol"]
+                if ch > 0: bull_count += 1
+                gainers.append((s, p, ch, ch7))
+                losers.append((s, p, ch, ch7))
+            bull_pct = round(bull_count / max(len(alt_coins_full), 1) * 100)
 
             gainers.sort(key=lambda x: x[2], reverse=True)
             gainers = gainers[:10]
@@ -4231,23 +4213,23 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.answer("Ошибка: "+str(e))
 
 def _get_funding_rates():
-    """Получаем funding rates через CMC/CoinGecko (Binance заблокирован на Railway)"""
+    """Приближение funding через 24ч % изменение цены (не настоящий фьючерсный funding --
+    так было и раньше, формула не менялась). Источник цены/изменения -- get_all_coins()
+    (CoinGecko первичный, CMC фоллбек внутри неё же). Раньше делал 10 отдельных прямых
+    CMC-запросов по одному на символ -- теперь ноль дополнительных вызовов, данные уже
+    в общем кэше get_all_coins(). ROADMAP: CMC перестал быть критическим, 2026-07-10."""
     try:
-        import requests as _r
         from live_prices import resolve_price
         symbols = ["BTC","ETH","SOL","BNB","XRP","ADA","DOGE","AVAX","LINK","DOT"]
+        coins = get_all_coins()
+        by_sym = {c["symbol"]: c for c in coins}
         result = []
         for sym in symbols:
+            c = by_sym.get(sym)
+            if not c:
+                continue
             try:
-                r = _r.get(
-                    "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
-                    headers={"X-CMC_PRO_API_KEY": CMC_API_KEY},
-                    params={"symbol": sym, "convert": "USDT"},
-                    timeout=5
-                )
-                d = r.json().get("data", {}).get(sym, {})
-                if isinstance(d, list): d = d[0]
-                q = d.get("quote", {}).get("USDT", {})
+                q = c.get("quote", {}).get("USDT", {})
                 cg_price = q.get("price", 0) or 0
                 ch24 = q.get("percent_change_24h", 0) or 0
                 if cg_price > 0:
@@ -4259,7 +4241,7 @@ def _get_funding_rates():
                         "price_fresh": price_fresh,
                         "ch24h": ch24,
                         "ch7d": q.get("percent_change_7d", 0) or 0,
-                        "rank": d.get("cmc_rank"),
+                        "rank": c.get("cmc_rank"),
                         "vol": q.get("volume_24h", 0) or 0,
                     })
             except:
@@ -8405,18 +8387,14 @@ async def _cmd_x100_scanner_body(update, ctx):
         pass
     try:
         def _scan_x100_sync():
-            """Вся тяжёлая синхронная работа (CMC-фетч + до 15 * 2 OHLC-запросов) --
+            """Вся тяжёлая синхронная работа (CoinGecko-фетч + до 15 * 2 OHLC-запросов) --
             выполняется в run_in_executor, чтобы не морозить event loop бота (см.
-            _scan_busy). Внутри нет ни одного await -- безопасно для потока."""
-            import requests as _r, os as _os
-            cmc_key = _os.environ.get("CMC_API_KEY", "")
-            r = _r.get(
-                "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
-                headers={"X-CMC_PRO_API_KEY": cmc_key},
-                params={"limit": 500, "convert": "USDT"},
-                timeout=15
-            )
-            all_coins = r.json().get("data", [])
+            _scan_busy). Внутри нет ни одного await -- безопасно для потока.
+            ROADMAP: раньше делал собственный прямой CMC-запрос в обход get_all_coins() --
+            если ключ был мёртв, x100 тихо возвращал пустой список без объяснения.
+            Теперь единый источник (CoinGecko первичный, CMC фоллбек только внутри
+            get_all_coins(), см. её докстринг) -- 2026-07-10."""
+            all_coins = get_all_coins()
             stables = {"USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDP","FRAX","LUSD","GUSD","USDD","PYUSD","WBTC","WETH","CBBTC"}
             candidates = []
             for c in all_coins:
@@ -9858,14 +9836,18 @@ async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     lines += ["", "*Источники данных:*"]
     ds = get_data_source_status()
-    for name, label in [("coingecko_markets", "CoinGecko"), ("cmc", "CMC listings"),
-                         ("cmc_quotes", "CMC quotes"), ("cmc_global_metrics", "CMC global"),
+    for name, label in [("coingecko_markets", "CoinGecko markets"), ("coingecko_global", "CoinGecko global"),
+                         ("cmc", "CMC listings (опц. фоллбек)"), ("cmc_global_metrics", "CMC global (опц. фоллбек)"),
                          ("yahoo_finance", "Yahoo (DXY/S&P/Gold/VIX)")]:
         s = ds.get(name, {})
+        # ROADMAP 2026-07-10 (решение владельца): CMC-источники опциональны -- их отказ
+        # НЕ деградация, если CoinGecko жив, поэтому жёлтый, не красный.
         if s.get("ok") is None:
             lines.append(f"⚪ {label}: не проверялся в этом запуске")
         elif s.get("ok"):
             lines.append(f"🟢 {label}: ok")
+        elif name in _OPTIONAL_SOURCES:
+            lines.append(f"🟡 {label}: отключён (опционально) — {s.get('last_error') or '—'}")
         else:
             fails = s.get("consecutive_failures", 0)
             fails_str = f" ({fails} подряд)" if fails > 1 else ""
