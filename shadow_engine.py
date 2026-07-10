@@ -303,3 +303,68 @@ async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_i
     except Exception as e:
         print(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
     return True
+
+
+def _build_pump_reversal_record(symbol: str, watch: dict, funding, oi_usd, oi_change_pct,
+                                 promoted_live) -> dict:
+    """Ночная сессия #2, Блок 4: кандидат SHORT после подтверждённого разворота пампа
+    (памп -> откат >= REVERSAL_DRAWDOWN_PCT% от пика с объёмом >= REVERSAL_VOL_MULT --
+    см. pump_detector.py, эта проверка УЖЕ существует в живом коде, здесь только
+    измерительное логирование поверх неё). Вызывается ПОСЛЕ уже существующего live-пути
+    (алерт владельцу уже отправлен, `_try_promote_pump` уже отработал) -- не влияет ни
+    на что боевое, чисто накопление данных для последующей оценки."""
+    peak = watch.get("peak_price")
+    last = watch.get("last_price")
+    retrace_pct = round((peak - last) / peak * 100, 2) if peak else None
+    return {
+        "ts": time.time(),
+        "type": "pump_reversal_shadow",
+        "symbol": symbol,
+        "direction": "short",
+        "peak_price": peak,
+        "last_price": last,
+        "retrace_pct": retrace_pct,
+        "volume_mult": watch.get("volume_mult"),
+        "z_score": watch.get("z_score"),
+        "funding_pct": funding,
+        "oi_usd": oi_usd,
+        "oi_change_pct": oi_change_pct,
+        "entry": watch.get("entry_lo"),
+        "sl": watch.get("sl"),
+        "tp1": watch.get("tp1"),
+        "tp2": watch.get("tp2"),
+        "promoted_live": promoted_live,
+    }
+
+
+def log_pump_reversal_shadow(symbol: str, watch: dict, funding, oi_usd, oi_change_pct,
+                              promoted_live) -> bool:
+    """Синхронная версия -- см. _build_pump_reversal_record. Локальная запись только."""
+    try:
+        record = _build_pump_reversal_record(symbol, watch, funding, oi_usd, oi_change_pct,
+                                              promoted_live)
+        return _write_local(record)
+    except Exception as e:
+        print(f"shadow_engine.log_pump_reversal_shadow failed for {symbol}: {e}")
+        return False
+
+
+async def log_pump_reversal_shadow_async(symbol: str, watch: dict, funding, oi_usd,
+                                          oi_change_pct, promoted_live) -> bool:
+    """Боевой путь -- вызывается из pump_detector._confirm_pump_reversal(). Локальная
+    запись + best-effort пуш в GitHub, тот же паттерн, что и log_shadow_async()."""
+    try:
+        record = _build_pump_reversal_record(symbol, watch, funding, oi_usd, oi_change_pct,
+                                              promoted_live)
+    except Exception as e:
+        print(f"shadow_engine.log_pump_reversal_shadow_async: build failed for {symbol}: {e}")
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        print(f"shadow_engine: GitHub sync failed for pump_reversal ({symbol}): {e}")
+    return True

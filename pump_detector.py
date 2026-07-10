@@ -45,6 +45,7 @@ import requests
 import websockets
 
 import live_prices
+import shadow_engine
 import ta_extra
 
 # ── Конфигурация: fine-grained (kline) слой, как в v1 ────────────
@@ -1240,6 +1241,22 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
         text = text + "\n\n" + analysis
     await _send_alert(ctx, symbol, text, watch, f"pump_sub_{symbol.upper().replace('USDT','')}")
     await _try_promote_pump(ctx, symbol, watch)
+
+    # Ночная сессия #2, Блок 4: измерительное логирование в journal/shadow_signals.json
+    # (peak/retrace%/объём/funding/OI) -- ПОСЛЕ уже существующего live-пути выше (алерт
+    # отправлен, промоушен уже решён), не влияет ни на что боевое. promoted_live
+    # фиксирует фактический исход существующего гейта (pro_score>=60 + R:R>=2.0), чтобы
+    # позже сравнить promoted vs НЕ promoted кандидатов на одинаковых входных данных.
+    try:
+        sym = symbol.upper().replace("USDT", "")
+        funding = ctx.get_funding_pct(sym)
+        oi_now = ctx.get_oi_usd(sym)
+        oi_chg = ctx.get_oi_change(sym)
+        promoted_live = watch.get("stage") == "PROMOTED"
+        await shadow_engine.log_pump_reversal_shadow_async(
+            symbol, watch, funding, oi_now, oi_chg, promoted_live)
+    except Exception as e:
+        print(f"Pump Radar: shadow-логирование reversal не удалось (не влияет на боевой алерт): {e}")
 
 
 async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
