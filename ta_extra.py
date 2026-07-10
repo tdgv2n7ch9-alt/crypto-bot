@@ -897,3 +897,167 @@ def detect_polarity_flip(zone: dict, candles_4h: list, was_below: bool) -> dict:
         # была сопротивлением (above price) -- пробой ВВЕРХ (закрытия выше zone hi) рвёт роль
         broken = all(c > zone["hi"] for c in last_closes)
         return {"flipped": broken, "new_role": "support" if broken else None}
+
+
+def classify_breaker_or_mitigation(candles: list, direction: str) -> dict:
+    """ПАТЧ (ночная сессия #2, Блок 1 -- теневой контур, см. SHADOW_MODE.md /
+    knowledge/MISMATCH_REPORT.md п.5 / patches/03-breaker-mitigation/README.md).
+    Аддитивная функция, ни один live вызывающий код её не использует -- подключена
+    только к shadow_engine.py.
+
+    Различает Breaker vs Mitigation Block по методике (knowledge/METHODOLOGY_CORE.md §3,
+    подтверждено 2 независимыми источниками курса -- методичка + видео):
+      - Breaker: на экстремуме последнего свинга, ОТ которого сформирован новый
+        структурный HH/LL, ликвидность СНИМАЕТСЯ (импульс пробивает уровень навылет
+        перед разворотом структуры).
+      - Mitigation Block: ликвидность НЕ снимается с этого экстремума -- вместо этого
+        формируется более высокий лоу (для лонга)/более низкий хай (для шорта), и уже
+        ПОСЛЕ этого ломается структура.
+
+    direction: "long" -- ищем последний swing low перед структурным движением вверх
+    (бычий breaker/MB); "short" -- зеркально, swing high перед движением вниз.
+
+    Реализация: кандидат на breaker/MB -- ВТОРОЙ С КОНЦА фрактальный свинг (не самый
+    последний). Причина: по определению фрактала последний свинг-лоу уже ниже всех
+    баров в пределах FRACTAL_SIDE_BARS справа от него -- если бы что-то позже пробило его
+    ещё ниже И ТОЖЕ было фракталом, оно само стало бы последним свингом. Поэтому "свип
+    последнего перед-структурным-движением свинга" физически проверяется на
+    ВТОРОМ С КОНЦА свинге, а роль "снявшей ликвидность" свечи играет либо более свежий
+    фрактальный свинг, либо просто любая свеча в сегменте до структурного хая/лоу.
+
+    Возвращает {"type": "breaker"|"mitigation"|None, "zone": {"lo","hi"}|None,
+    "swing_idx": int|None} -- None при недостатке свинг-данных, не выдумывает результат."""
+    highs, lows = swing_points(candles)
+    none_result = {"type": None, "zone": None, "swing_idx": None}
+
+    if direction == "long":
+        if len(lows) < 2 or len(highs) < 1:
+            return none_result
+        cand_idx, cand_price = lows[-2]
+        highs_after = [(i, p) for i, p in highs if i > cand_idx]
+        if not highs_after:
+            return none_result
+        struct_high_idx, _ = highs_after[0]
+        segment = candles[cand_idx + 1:struct_high_idx + 1]
+        swept = any(c["low"] < cand_price for c in segment)
+        candle = candles[cand_idx]
+        zone = {"lo": candle["low"], "hi": max(candle["open"], candle["close"])}
+        return {"type": "breaker" if swept else "mitigation", "zone": zone,
+                "swing_idx": cand_idx}
+
+    if direction == "short":
+        if len(highs) < 2 or len(lows) < 1:
+            return none_result
+        cand_idx, cand_price = highs[-2]
+        lows_after = [(i, p) for i, p in lows if i > cand_idx]
+        if not lows_after:
+            return none_result
+        struct_low_idx, _ = lows_after[0]
+        segment = candles[cand_idx + 1:struct_low_idx + 1]
+        swept = any(c["high"] > cand_price for c in segment)
+        candle = candles[cand_idx]
+        zone = {"lo": min(candle["open"], candle["close"]), "hi": candle["high"]}
+        return {"type": "breaker" if swept else "mitigation", "zone": zone,
+                "swing_idx": cand_idx}
+
+    return none_result
+
+
+def detect_price_indicator_divergence(candles: list, period: int = 14) -> dict:
+    """ПАТЧ (ночная сессия #2, Блок 1 -- теневой контур, см. SHADOW_MODE.md /
+    knowledge/MISMATCH_REPORT.md п.10 / patches/04-rsi-divergence/README.md).
+    Аддитивная функция, ни один live вызывающий код её не использует -- подключена
+    только к shadow_engine.py.
+
+    Классическая/скрытая дивергенция цена-vs-RSI (knowledge/METHODOLOGY_CORE.md §10,
+    источник: Урок 4. Дивергенция, TDP, TTS.mp4 [136s-367s]) -- КОНТРАРИАНСКАЯ трактовка
+    источника, не наивная "дивергенция = сигнал входа":
+      - Классическая (цена HH + RSI LH сверху, или цена LL + RSI HL снизу) -- источник
+        трактует как признак ВОЗМОЖНОЙ коррекции ПРОТИВ HTF-bias, не сигнал входа по
+        тренду дивергенции (это то, что делают "массы", по словам источника).
+      - Скрытая (цена LH + RSI HH сверху = медвежья; цена HL + RSI LL снизу = бычья) --
+        источник трактует как подтверждение ПРОДОЛЖЕНИЯ HTF-тренда.
+      - Бычья скрытая (цена HL + RSI LL) выведена по симметрии с явно описанной медвежьей
+        скрытой в источнике -- НЕ процитирована дословно, честно помечаю как вывод по
+        аналогии, не прямую цитату.
+
+    RSI считается в момент каждого свинга через уже существующий rsi() (срез closes до
+    индекса свинга) -- переиспользует чистую функцию, не дублирует формулу.
+
+    Возвращает {"bearish_classical", "bearish_hidden", "bullish_classical",
+    "bullish_hidden": bool, "detail": [...]} -- сравнивает 2 последних свинг-хая (медвежьи
+    варианты) и 2 последних свинг-лоя (бычьи варианты) по swing_points()."""
+    highs, lows = swing_points(candles)
+    closes = [c["close"] for c in candles]
+    result = {"bearish_classical": False, "bearish_hidden": False,
+              "bullish_classical": False, "bullish_hidden": False, "detail": []}
+
+    if len(highs) >= 2:
+        (i1, p1), (i2, p2) = highs[-2], highs[-1]
+        r1 = rsi(closes[:i1 + 1], period)
+        r2 = rsi(closes[:i2 + 1], period)
+        if p2 > p1 and r2 < r1:
+            result["bearish_classical"] = True
+            result["detail"].append({"type": "bearish_classical", "price": (p1, p2), "rsi": (r1, r2)})
+        elif p2 < p1 and r2 > r1:
+            result["bearish_hidden"] = True
+            result["detail"].append({"type": "bearish_hidden", "price": (p1, p2), "rsi": (r1, r2)})
+
+    if len(lows) >= 2:
+        (i1, p1), (i2, p2) = lows[-2], lows[-1]
+        r1 = rsi(closes[:i1 + 1], period)
+        r2 = rsi(closes[:i2 + 1], period)
+        if p2 < p1 and r2 > r1:
+            result["bullish_classical"] = True
+            result["detail"].append({"type": "bullish_classical", "price": (p1, p2), "rsi": (r1, r2)})
+        elif p2 > p1 and r2 < r1:
+            result["bullish_hidden"] = True
+            result["detail"].append({"type": "bullish_hidden", "price": (p1, p2), "rsi": (r1, r2)})
+
+    return result
+
+
+BPR_MAX_BAR_GAP = 5   # макс. расстояние между формированием двух противоположных FVG,
+                       # чтобы считать их "друг за другом" (BPR-пара), не случайным совпадением
+
+
+def detect_bpr_zones(candles: list) -> list:
+    """ПАТЧ (ночная сессия #2, Блок 1 -- теневой контур, см. SHADOW_MODE.md /
+    knowledge/MISMATCH_REPORT.md п.3 / patches/05-bpr/README.md). Аддитивная функция,
+    ни один live вызывающий код её не использует -- подключена только к shadow_engine.py.
+
+    BPR (Balanced Price Range, knowledge/METHODOLOGY_CORE.md §4, источник BPR.mp4
+    [0s-170s]) -- область пересечения ДВУХ ПРОТИВОПОЛОЖНЫХ имбалансов (FVG),
+    формирующихся друг за другом при смене направления. Уже отдельно есть
+    find_fvg_zones() (используется в fa_engine block4 для отображения POI), но она не
+    хранит индекс формирования каждого FVG -- здесь он нужен, чтобы находить ПАРЫ
+    соседних по времени противоположных FVG, поэтому BPR делает свой независимый скан
+    той же 3-свечной формации (не дублирует логику find_fvg_zones для другой цели,
+    просто не может её переиспользовать без индекса).
+
+    Возвращает список {"lo","hi","mid","bull_fvg_idx","bear_fvg_idx","formed_idx"} --
+    только реальные пересечения (lo < hi), отсортированные по свежести (formed_idx по
+    убыванию, самые свежие -- первыми)."""
+    n = len(candles)
+    bull_fvgs, bear_fvgs = [], []
+    for i in range(1, n - 1):
+        prev_c, next_c = candles[i - 1], candles[i + 1]
+        if prev_c["high"] < next_c["low"]:
+            bull_fvgs.append((i, prev_c["high"], next_c["low"]))
+        if next_c["high"] < prev_c["low"]:
+            bear_fvgs.append((i, next_c["high"], prev_c["low"]))
+
+    zones = []
+    for bi, blo, bhi in bull_fvgs:
+        for si, slo, shi in bear_fvgs:
+            if abs(si - bi) > BPR_MAX_BAR_GAP:
+                continue
+            lo, hi = max(blo, slo), min(bhi, shi)
+            if lo < hi:
+                zones.append({
+                    "lo": lo, "hi": hi, "mid": (lo + hi) / 2,
+                    "bull_fvg_idx": bi, "bear_fvg_idx": si,
+                    "formed_idx": max(bi, si),
+                })
+    zones.sort(key=lambda z: z["formed_idx"], reverse=True)
+    return zones

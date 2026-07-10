@@ -6459,6 +6459,64 @@ def get_killzone_status() -> dict:
     }
 
 
+def get_killzone_status_shadow() -> dict:
+    """ПАТЧ 01 (ночная сессия #2, Блок 1 -- теневой контур, см. SHADOW_MODE.md /
+    patches/01-killzone-hours/README.md) -- та же логика, что и get_killzone_status(),
+    но с часами по knowledge/METHODOLOGY_CORE.md §8 (источник: Урок 5. Время и
+    киллзоны.mp4 [1662s-1902s]): Asia до 08:00, London 09:00-12:00, NY 14:00-16:00
+    (было 10:00-12:00/16:00-18:00 в live-версии -- расхождение до 2ч для NY).
+    London Close/NY Close не подтверждены источником -- оставлены как в live.
+    НЕ заменяет и не вызывается вместо get_killzone_status() -- используется только
+    shadow_engine.py для теневого сравнения, live-поведение бота не меняет ни на бит."""
+    now = datetime.now(TZ)
+    h   = now.hour
+    m   = now.minute
+    hm  = h * 60 + m
+
+    zones = [
+        {"name": "🌏 Азиатская сессия", "start": 0*60,  "end": 8*60,  "quality": "B",
+         "desc": "Низкая волатильность, часто рендж или хай/лоу дня"},
+        {"name": "🇬🇧 Лондон Open",     "start": 9*60,  "end": 12*60, "quality": "A+",
+         "desc": "Наибольшие объёмы дня, ищем хай/лоу дня"},
+        {"name": "🇺🇸 NY Open",         "start": 14*60, "end": 16*60, "quality": "A",
+         "desc": "Продолжение дневного диапазона, часто коррекция после Лондона"},
+        {"name": "🇬🇧 Лондон Close",    "start": 18*60, "end": 19*60, "quality": "B",
+         "desc": "Не подтверждено источником, оставлено как в live-версии"},
+        {"name": "🇺🇸 NY Close",        "start": 23*60, "end": 24*60, "quality": "C",
+         "desc": "Не подтверждено источником, оставлено как в live-версии"},
+    ]
+
+    active = None
+    for z in zones:
+        if z["start"] <= hm < z["end"]:
+            active = z
+            active["remaining_min"] = z["end"] - hm
+            break
+
+    next_zone = None
+    future = [(z, z["start"] - hm if z["start"] > hm else z["start"] + 24*60 - hm)
+              for z in zones]
+    future.sort(key=lambda x: x[1])
+    if future:
+        next_zone = future[0][0].copy()
+        next_zone["in_min"] = future[0][1]
+
+    if active:
+        is_good = active["quality"] in ("A+", "A")
+    else:
+        is_good = False
+        active = {"name": "⚪ Dead Zone", "quality": "D",
+                  "desc": "Вне активных killzone", "remaining_min": 0}
+
+    return {
+        "active":    active,
+        "next":      next_zone,
+        "is_good":   is_good,
+        "hour":      h,
+        "all_zones": zones,
+    }
+
+
 def killzone_label() -> str:
     """Текущая ICT-сессия одной строкой, для строк вида '⏰ {label}'"""
     kz = get_killzone_status()

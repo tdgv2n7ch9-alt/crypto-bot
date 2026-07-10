@@ -40,6 +40,7 @@ import pytz
 import ta_extra
 import signal_journal
 import fa_engine
+import shadow_engine
 
 # ── Пороги (калибруемые константы) ──────────────────────────────────────────
 STAGE1_INTERVAL_MIN = 15
@@ -338,6 +339,17 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk, bot_m
         )
     except Exception as e:
         _log(f"{symbol}: journal log failed: {e}")
+
+    # Теневой контур 5 патчей (ночная сессия #2, Блок 1, см. SHADOW_MODE.md) -- считается
+    # ПОСЛЕ того, как боевой сигнал уже отправлен и залогирован выше. Пишет только в
+    # journal/shadow_signals.json, никогда не влияет на то, что уже ушло владельцу.
+    # Двойной try/except (тут + внутри shadow_engine.log_shadow) -- падение теневого
+    # расчёта не может сломать боевой сигнал ни при каких обстоятельствах.
+    if bot_module is not None:
+        try:
+            await shadow_engine.log_shadow_async(symbol, result, bot_module, live_journal_id=journal_id)
+        except Exception as e:
+            _log(f"{symbol}: shadow_engine failed (не влияет на боевой сигнал): {e}")
 
     alert_id = _next_alert_id
     _next_alert_id += 1
