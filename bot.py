@@ -356,6 +356,29 @@ def _validate_cmc_key() -> str:
                 f"не обязательно сам ключ невалиден")
 
 
+DATA_QUALITY_MAX_AGE_SEC = 15 * 60   # ROADMAP П3: источник считается устаревшим через N мин
+
+
+def _data_quality_flags() -> list:
+    """Валидатор входных данных перед сигналом (ROADMAP П3, доп. пункт очереди): смотрит на
+    уже собранный _DATA_SOURCE_STATUS (CoinGecko/CMC/Yahoo=DXY) -- источник помечается
+    "деградировавшим", если последняя проверка была неуспешной (ok=False) ИЛИ данных не
+    было дольше DATA_QUALITY_MAX_AGE_SEC. НЕ блокирует сигнал -- вызывающий код передаёт
+    результат в signal_journal.log_signal(degraded_data=...) как метку для последующего
+    анализа "влияет ли деградация качества данных на win rate", решение о самом сигнале
+    этой функцией не принимается и не меняется."""
+    now = time.time()
+    flags = []
+    for name, status in _DATA_SOURCE_STATUS.items():
+        last_ts = status.get("last_ts") or 0
+        age = now - last_ts if last_ts else None
+        if status.get("ok") is False:
+            flags.append(name)
+        elif age is None or age > DATA_QUALITY_MAX_AGE_SEC:
+            flags.append(f"{name}_stale")
+    return flags
+
+
 def _fetch_yahoo_chart(ticker: str, range_str: str = "5d", timeout: int = 6):
     """ROADMAP П3 -- общий фетчер для query2.finance.yahoo.com/.../chart/<ticker>
     (DXY/S&P500/Gold/VIX в /market и get_macro_data ходили за одним и тем же паттерном
@@ -4616,7 +4639,8 @@ async def send_scheduled(bot: Bot):
                     tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"], rr=a["rr"],
                     rocket_score=a.get("rocket"), ema_stack=a.get("ema_ctx"),
                     sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                    levels_source=a.get("levels_source"), grade=grade)
+                    levels_source=a.get("levels_source"), grade=grade,
+                    degraded_data=_data_quality_flags())
             except Exception as e:
                 log.error(f"[JOURNAL] {'TOP_LONG_AUTO' if is_long else 'TOP_SHORT_AUTO'} {sym}: {e}")
             already_sent.add(sym)
@@ -8479,7 +8503,8 @@ async def _cmd_x100_scanner_body(update, ctx):
                                                            rocket_score=c["score"],
                                                            ema_stack=ema_ctx_x100,
                                                            sweep=sweep_4h_x100 or sweep_1h_x100,
-                                                           levels_source="structure")
+                                                           levels_source="structure",
+                                                           degraded_data=_data_quality_flags())
                             except Exception as e:
                                 log.error(f"[JOURNAL] X100 {c['sym']}: {e}")
                             pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
@@ -8929,7 +8954,8 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                            tp1=_spot_sell_target, rocket_score=spot_rocket,
                                            ema_stack=a.get("ema_ctx"),
                                            sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                                           levels_source="ath_recovery", grade=grade_spot)
+                                           levels_source="ath_recovery", grade=grade_spot,
+                                           degraded_data=_data_quality_flags())
             except Exception as e:
                 log.error(f"[JOURNAL] TOP_SPOT {sym}: {e}")
 
@@ -9133,7 +9159,8 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                                rr=a["rr"], rocket_score=a.get("rocket"),
                                                ema_stack=a.get("ema_ctx"),
                                                sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                                               levels_source=a.get("levels_source"), grade=a.get("_grade"))
+                                               levels_source=a.get("levels_source"), grade=a.get("_grade"),
+                                               degraded_data=_data_quality_flags())
                 except Exception as e:
                     log.error(f"[JOURNAL] TOP_LONG {sym}: {e}")
                 await asyncio.sleep(1.5)
@@ -9411,7 +9438,8 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                                rr=a["rr"], rocket_score=a.get("rocket"),
                                                ema_stack=a.get("ema_ctx"),
                                                sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                                               levels_source=a.get("levels_source"), grade=a.get("_grade"))
+                                               levels_source=a.get("levels_source"), grade=a.get("_grade"),
+                                               degraded_data=_data_quality_flags())
                 except Exception as e:
                     log.error(f"[JOURNAL] TOP_SHORT {sym}: {e}")
                 await asyncio.sleep(1.5)
@@ -9655,7 +9683,7 @@ def add_top_short_signal(sym: str, entry: dict):
         signal_journal.log_signal("PUMP_RADAR", sym, "short", price,
                                    entry_lo=price, entry_hi=price, sl=entry.get("sl"),
                                    tp1=entry.get("tp1"), tp2=entry.get("tp2"),
-                                   rr=entry.get("rr"))
+                                   rr=entry.get("rr"), degraded_data=_data_quality_flags())
     except Exception as e:
         log.error(f"[JOURNAL] PUMP_RADAR short {sym}: {e}")
     return True
@@ -9674,7 +9702,7 @@ def add_top_long_signal(sym: str, entry: dict):
         signal_journal.log_signal("PUMP_RADAR", sym, "long", price,
                                    entry_lo=price, entry_hi=price, sl=entry.get("sl"),
                                    tp1=entry.get("tp1"), tp2=entry.get("tp2"),
-                                   rr=entry.get("rr"))
+                                   rr=entry.get("rr"), degraded_data=_data_quality_flags())
     except Exception as e:
         log.error(f"[JOURNAL] PUMP_RADAR long {sym}: {e}")
     return True
@@ -9841,6 +9869,8 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             awr = f"{s['avg_win_r']:+.2f}" if s.get("avg_win_r") is not None else "—"
             alr = f"{s['avg_loss_r']:+.2f}" if s.get("avg_loss_r") is not None else "—"
             lines.append(f"  Expectancy: {s['expectancy_r']:+.2f}R (avg win {awr} / avg loss {alr})")
+        if s.get("degraded_count"):
+            lines.append(f"  ⚠️ С деградировавшими данными: {s['degraded_count']} ({s['degraded_pct']}%)")
         if s["by_source"]:
             src_str = ", ".join(f"{k}: {v['total']}" for k, v in sorted(s["by_source"].items()))
             lines.append(f"  По источникам: {src_str}")

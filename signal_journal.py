@@ -380,7 +380,8 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
                entry_lo: float, entry_hi: float, sl: float,
                tp1: float = None, tp2: float = None, tp3: float = None,
                rr: float = None, rocket_score=None,
-               ema_stack=None, sweep=None, levels_source=None, grade=None) -> int:
+               ema_stack=None, sweep=None, levels_source=None, grade=None,
+               degraded_data=None) -> int:
     """Логирует новый сигнал, статус PENDING. direction: "long"/"short". Для скалярного
     входа (не зоны) передать одно и то же значение в entry_lo и entry_hi. Только
     наблюдение — вызывается ПОСЛЕ уже принятого решения сгенерировать сигнал, не влияет
@@ -396,7 +397,13 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
     с a_stub) -- позволяет позже сравнить win rate между источниками уровней.
 
     grade: "A+"/"A"/"B"/"C" (или None) -- грейд карточки на момент сигнала (см.
-    bot._signal_grade), для разбивки win rate по грейдам в /journal."""
+    bot._signal_grade), для разбивки win rate по грейдам в /journal.
+
+    degraded_data: None (не проверялось этим вызывающим) либо список строк -- имена
+    источников данных, которые были недоступны/устарели на момент сигнала (напр.
+    ["cmc", "yahoo_finance"], см. bot._data_quality_flags(), ROADMAP П3). НЕ блокирует
+    сигнал -- только помечает для последующего анализа, влияет ли деградация качества
+    данных на win rate (сравнить по этому полю в /journal, аналогично by_source)."""
     global _next_id, _dirty
     rec_id = _next_id
     _next_id += 1
@@ -411,6 +418,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
         "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "rr": rr, "rocket_score": rocket_score,
         "ema_stack": ema_stack, "sweep": sweep, "levels_source": levels_source, "grade": grade,
+        "degraded_data": degraded_data or None,
         "price_at_signal": price_at_signal,
         "status": "PENDING",
         "entered_ts": None, "entered_price": None,
@@ -750,11 +758,18 @@ def get_journal_summary(window_sec=None, end_ts=None) -> dict:
     for agg in by_regime.values():
         agg["win_rate"] = round(agg["wins"] / agg["total"] * 100, 1) if agg["total"] else None
 
+    # Качество данных (ROADMAP П3, доп. пункт очереди) -- доля сигналов в окне, у которых
+    # bot._data_quality_flags() на момент отправки был непустым (см. log_signal
+    # degraded_data). Только для наблюдения -- НЕ влияет на генерацию сигналов.
+    degraded_count = sum(1 for r in recs if r.get("degraded_data"))
+    degraded_pct = round(degraded_count / total * 100, 1) if total else None
+
     return {
         "total": total, "entered_count": len(entered), "entered_pct": entered_pct,
         "win_rate": win_rate, "avg_r": avg_r,
         "avg_win_r": avg_win_r, "avg_loss_r": avg_loss_r, "expectancy_r": expectancy_r,
         "wins": len(wins), "losses": len(losses),
+        "degraded_count": degraded_count, "degraded_pct": degraded_pct,
         "by_source": by_source, "by_grade": by_grade, "by_regime": by_regime,
     }
 

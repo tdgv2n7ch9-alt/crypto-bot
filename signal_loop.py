@@ -286,7 +286,7 @@ def _build_alert_chart(symbol, result):
         return None
 
 
-async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk):
+async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk, bot_module=None):
     global _next_alert_id
     b11 = result["block11_trade_plan"]
     direction = b11["direction"]
@@ -321,6 +321,12 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk):
     e_lo, e_hi = ((b11["entry3"], b11["entry1"]) if direction == "long"
                  else (b11["entry1"], b11["entry3"]))
     journal_id = None
+    degraded_data = None
+    if bot_module is not None:
+        try:
+            degraded_data = bot_module._data_quality_flags()
+        except Exception:
+            degraded_data = None
     try:
         journal_id = signal_journal.log_signal(
             "signal_loop", symbol, direction, result["price"],
@@ -328,7 +334,7 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk):
             tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
             rr=b11["rr_tp1"], rocket_score=result["block12_rocket"]["score"],
             ema_stack=result.get("ema_ctx"), sweep=result.get("sweep_4h") or result.get("sweep_1h"),
-            levels_source="structure", grade=None,
+            levels_source="structure", grade=None, degraded_data=degraded_data,
         )
     except Exception as e:
         _log(f"{symbol}: journal log failed: {e}")
@@ -367,7 +373,7 @@ async def run_signal_loop(bot, tg_bot, owner_chat_id):
         if not result:
             _log(f"{symbol}: candidate ({'; '.join(cand['reasons'])}) failed stage2 -- no alert (silent)")
             continue
-        await _send_alert(tg_bot, owner_chat_id, symbol, result, cand["reasons"], cand["meme_risk"])
+        await _send_alert(tg_bot, owner_chat_id, symbol, result, cand["reasons"], cand["meme_risk"], bot_module=bot)
         _register_alert_sent()
 
 
