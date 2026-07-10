@@ -114,7 +114,7 @@ import chart_v4
 import narrative
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
-CMC_API_KEY = os.getenv("CMC_API_KEY", "7c581d74b60d4c40879edc0431b5e53a")
+CMC_API_KEY = os.getenv("CMC_API_KEY")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
 BOT_VERSION = "v130"         # обновлять при каждом коммите с изменением bot.py
@@ -346,6 +346,8 @@ def _validate_cmc_key() -> str:
     401 "invalid API key" и в этом случае -- неотличимо на вид от реально плохого ключа,
     но чинится по-разному (перевставить значение vs ротация ключа), стоит проверить
     первым (ROADMAP П3 -- см. PROGRESS.md, интермиттентные 401 из памяти проекта)."""
+    if not CMC_API_KEY:
+        return "CMC_API_KEY не задан (переменная окружения пуста/отсутствует)"
     try:
         CMC_API_KEY.encode("ascii")
         return ""
