@@ -680,6 +680,21 @@ def get_journal_summary(window_sec=None, end_ts=None) -> dict:
     r_values = [r["actual_r"] for r in closed_with_outcome if r.get("actual_r") is not None]
     avg_r = round(sum(r_values) / len(r_values), 2) if r_values else None
 
+    # Expectancy (ROADMAP П2, "Предложение дня" 2026-07-10 из INSIGHTS.md, проверенная
+    # формула -- pnlledger.com/expectancy-r-multiples-the-plain-english-guide):
+    # E[R] = p*AvgWinR + (1-p)*AvgLossR. Математически равна avg_r выше при тех же данных
+    # (это тот же средний R, просто выведенный через win/loss составляющие) -- ценность не
+    # в новом числе, а в отдельно видимых avg_win_r/avg_loss_r, которых раньше не было.
+    win_r_values = [r["actual_r"] for r in wins if r.get("actual_r") is not None]
+    loss_r_values = [r["actual_r"] for r in losses if r.get("actual_r") is not None]
+    avg_win_r = round(sum(win_r_values) / len(win_r_values), 2) if win_r_values else None
+    avg_loss_r = round(sum(loss_r_values) / len(loss_r_values), 2) if loss_r_values else None
+    if closed_with_outcome and avg_win_r is not None and avg_loss_r is not None:
+        p = len(wins) / len(closed_with_outcome)
+        expectancy_r = round(p * avg_win_r + (1 - p) * avg_loss_r, 2)
+    else:
+        expectancy_r = None
+
     by_source = {}
     for r in recs:
         s = r["source"]
@@ -723,6 +738,7 @@ def get_journal_summary(window_sec=None, end_ts=None) -> dict:
     return {
         "total": total, "entered_count": len(entered), "entered_pct": entered_pct,
         "win_rate": win_rate, "avg_r": avg_r,
+        "avg_win_r": avg_win_r, "avg_loss_r": avg_loss_r, "expectancy_r": expectancy_r,
         "wins": len(wins), "losses": len(losses),
         "by_source": by_source, "by_grade": by_grade, "by_regime": by_regime,
     }

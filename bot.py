@@ -9837,6 +9837,10 @@ async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append("  Win rate: — (нет закрытых)")
         avg_r_str = f"{s['avg_r']:+.2f}" if s["avg_r"] is not None else "—"
         lines.append(f"  Средний факт. R: {avg_r_str}")
+        if s.get("expectancy_r") is not None:
+            awr = f"{s['avg_win_r']:+.2f}" if s.get("avg_win_r") is not None else "—"
+            alr = f"{s['avg_loss_r']:+.2f}" if s.get("avg_loss_r") is not None else "—"
+            lines.append(f"  Expectancy: {s['expectancy_r']:+.2f}R (avg win {awr} / avg loss {alr})")
         if s["by_source"]:
             src_str = ", ".join(f"{k}: {v['total']}" for k, v in sorted(s["by_source"].items()))
             lines.append(f"  По источникам: {src_str}")
@@ -9898,6 +9902,11 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     avg_r_this = f"{this_week['avg_r']:+.2f}" if this_week["avg_r"] is not None else "—"
     avg_r_prev = f"{prev_week['avg_r']:+.2f}" if prev_week["avg_r"] is not None else "—"
     lines.append(f"Средний факт. R: {avg_r_this} (прошлая неделя: {avg_r_prev})")
+
+    if this_week.get("expectancy_r") is not None:
+        awr = f"{this_week['avg_win_r']:+.2f}" if this_week.get("avg_win_r") is not None else "—"
+        alr = f"{this_week['avg_loss_r']:+.2f}" if this_week.get("avg_loss_r") is not None else "—"
+        lines.append(f"Expectancy: {this_week['expectancy_r']:+.2f}R (avg win {awr} / avg loss {alr})")
 
     if this_week["by_source"]:
         lines.append("\n*По источникам (7д):*")
