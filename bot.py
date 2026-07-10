@@ -3438,6 +3438,30 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             eth_q = get_cmc_quote("ETH")
             sol_q = get_cmc_quote("SOL")
 
+            # ROADMAP П3 (degraded_data) -- BTC/ETH недоступны = карточка вводит в
+            # заблуждение (показывала бы $0.0000/0% как будто реальную цену), а не
+            # рисуем нули. Честное сообщение вместо этого, без изменения торговой логики
+            # (эта карточка -- только /market "Рыночный тренд", не сигналы).
+            if not btc_q or not eth_q:
+                missing = []
+                if not cmc_key:
+                    missing.append("CMC (ключ не задан)")
+                else:
+                    if not btc_q: missing.append("CMC (BTC)")
+                    if not eth_q: missing.append("CMC (ETH)")
+                nav_degraded = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\U0001f504 Повторить", callback_data="trend_analysis"),
+                     InlineKeyboardButton("\U0001f3e0 Меню",      callback_data="show_menu")],
+                ])
+                await q.edit_message_text(
+                    "⚠️ *Данные временно недоступны*\n\n"
+                    f"Источник(и): {', '.join(missing)}\n"
+                    "Карточка рыночного тренда не строится без цены BTC/ETH -- "
+                    "показывать вместо неё нули было бы неверно.",
+                    parse_mode="Markdown", reply_markup=nav_degraded
+                )
+                return
+
             btc_p   = btc_q.get("price", 0) or 0
             btc_ch  = btc_q.get("percent_change_24h", 0) or 0
             btc_7d  = btc_q.get("percent_change_7d", 0) or 0
