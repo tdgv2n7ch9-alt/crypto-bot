@@ -1,19 +1,27 @@
 """backtest/run_historical.py -- запускает engine.run_backtest() по всем скачанным
 символам, сохраняет сырые сделки в backtest/data/_historical_trades.json (не в git,
-см. .gitignore) для последующего анализа/отчёта. Ночная сессия #3, Блок A.3."""
+см. .gitignore) для последующего анализа/отчёта. Ночная сессия #3, Блок A.3.
+
+Использование: `python3 -m backtest.run_historical [symbols_file] [out_file]`
+(оба аргумента опциональны, по умолчанию -- исходные 100 символов/_historical_trades.json,
+см. Блок H -- прогон на 200 символах использует отдельные файлы, не перезаписывает
+Блок A)."""
 import json
 import os
+import sys
 import time
 
 import backtest.engine as eng
 
 DATA_DIR = eng.DATA_DIR
-OUT_FILE = os.path.join(DATA_DIR, "_historical_trades.json")
 PROGRESS_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_progress.log")
 
 
 def main():
-    with open(os.path.join(DATA_DIR, "_symbols.json")) as f:
+    symbols_file = sys.argv[1] if len(sys.argv) > 1 else os.path.join(DATA_DIR, "_symbols.json")
+    out_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(DATA_DIR, "_historical_trades.json")
+
+    with open(symbols_file) as f:
         symbols = json.load(f)
 
     t0 = time.time()
@@ -22,7 +30,7 @@ def main():
 
     result = eng.run_backtest(symbols, progress_log=PROGRESS_LOG)
 
-    with open(OUT_FILE, "w") as f:
+    with open(out_file, "w") as f:
         json.dump(result, f)
 
     elapsed = time.time() - t0
