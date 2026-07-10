@@ -7,6 +7,7 @@ BEST TRADE — Telethon Reader v5
 """
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -32,19 +33,28 @@ OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
 # относительный SESSION приводил к sqlite3.OperationalError: unable to open database file.
 SESSION       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_trade_reader")
 
+# mode="signal" -- боевое поведение без изменений (format_signal -> send_telegram).
+# mode="monitor" -- ТОЛЬКО архив (knowledge/channel_archive/), в сигнальный пайплайн и
+# владельцу НЕ уходит. Оба режима архивируются одинаково -- единый формат записи, чтобы
+# потом можно было посчитать win-rate по источникам/сделать NLP-анализ по всем каналам
+# сразу, не только по боевым.
 SOURCE_CHANNELS = [
-    "https://t.me/+nubqP8HBLLg5Yzhi",   # PIXEL
-    "https://t.me/+3pkjT8Jz4xZjMWRi",
-    "https://t.me/+qY_uk_VZOMs3YmJi",
-    "https://t.me/+nNG-ocI2mVpkMGFi",
-    "https://t.me/+aM6NhefyLNc4NjQy",
-    "https://t.me/zagovor_likvid",
-    "https://t.me/+C318IK2q-jUwZDQy",
-    "https://t.me/+3Wy10C_fCzw4ODI6",
-    "https://t.me/+IwEnq8xPGtpiNTUy",
-    "https://t.me/+4IJ_K5gagNRjMzky",
-    "https://t.me/+8lwrSPGYY0VhOTMy",
+    {"link": "https://t.me/+nubqP8HBLLg5Yzhi", "mode": "signal"},   # PIXEL
+    {"link": "https://t.me/+3pkjT8Jz4xZjMWRi", "mode": "signal"},
+    {"link": "https://t.me/+qY_uk_VZOMs3YmJi", "mode": "signal"},
+    {"link": "https://t.me/+nNG-ocI2mVpkMGFi", "mode": "signal"},
+    {"link": "https://t.me/+aM6NhefyLNc4NjQy", "mode": "signal"},
+    {"link": "https://t.me/zagovor_likvid", "mode": "signal"},
+    {"link": "https://t.me/+C318IK2q-jUwZDQy", "mode": "signal"},
+    {"link": "https://t.me/+3Wy10C_fCzw4ODI6", "mode": "signal"},
+    {"link": "https://t.me/+IwEnq8xPGtpiNTUy", "mode": "signal"},
+    {"link": "https://t.me/+4IJ_K5gagNRjMzky", "mode": "signal"},
+    {"link": "https://t.me/+8lwrSPGYY0VhOTMy", "mode": "signal"},
+    {"link": -1001462186786, "mode": "monitor"},   # Королев о Крипте | ТТ
+    {"link": -1001700967192, "mode": "monitor"},   # Теория Вероятностей | ТТ
 ]
+
+ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge", "channel_archive")
 
 STABLECOINS = {"USDT","USDC","BUSD","DAI","FDUSD"}
 
@@ -292,6 +302,36 @@ def format_signal(text: str, channel: str) -> str:
     return "\n".join(lines)
 
 # ═══════════════════════════════════════════
+# АРХИВ КАНАЛОВ (все режимы, signal и monitor)
+# ═══════════════════════════════════════════
+
+def _channel_slug(name: str) -> str:
+    slug = re.sub(r"[^\w\- а-яА-ЯёЁ]", "_", name).strip().replace(" ", "_")
+    return slug[:60] or "unknown"
+
+def archive_message(channel_id: int, channel_name: str, mode: str, text: str, has_media: bool):
+    """Единый формат записи для signal и monitor каналов -- один .jsonl на канал в месяц
+    (ротация по месяцу в имени файла, не растёт бесконечно один файл). Не бросает
+    исключений наружу -- сбой архивации не должен ронять сигнальный пайплайн."""
+    try:
+        os.makedirs(ARCHIVE_DIR, exist_ok=True)
+        now_utc = datetime.now(timezone.utc)
+        fname = f"{_channel_slug(channel_name)}_{now_utc.strftime('%Y-%m')}.jsonl"
+        path = os.path.join(ARCHIVE_DIR, fname)
+        record = {
+            "ts_utc": now_utc.isoformat(),
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+            "mode": mode,
+            "text": text,
+            "has_media": has_media,
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.error(f"archive_message: {channel_name}: {e}")
+
+# ═══════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════
 
@@ -321,24 +361,29 @@ async def main():
     log.info("✅ Telethon авторизован")
 
     channel_names = {}
+    channel_modes = {}
     channel_ids   = []
 
-    for link in SOURCE_CHANNELS:
+    for item in SOURCE_CHANNELS:
+        link, mode = item["link"], item["mode"]
         try:
             entity = await client.get_entity(link)
-            name   = getattr(entity, "title", link.split("/")[-1])
+            name   = getattr(entity, "title", None) or (str(link).split("/")[-1] if isinstance(link, str) else str(link))
             channel_names[entity.id] = name
+            channel_modes[entity.id] = mode
             channel_ids.append(entity.id)
-            log.info(f"✅ Подключён: {name}")
+            log.info(f"✅ Подключён ({mode}): {name}")
         except Exception as e:
             log.error(f"❌ {link}: {e}")
 
-    log.info(f"📡 Мониторю {len(channel_ids)} каналов + Lookonchain...")
+    n_signal = sum(1 for m in channel_modes.values() if m == "signal")
+    n_monitor = sum(1 for m in channel_modes.values() if m == "monitor")
+    log.info(f"📡 Мониторю {len(channel_ids)} каналов ({n_signal} signal, {n_monitor} monitor) + Lookonchain...")
 
     # Уведомление о старте
     send_telegram(
         f"✅ *BEST TRADE Reader v5 запущен*\n\n"
-        f"📡 Telegram каналов: *{len(channel_ids)}*\n"
+        f"📡 Telegram каналов: *{len(channel_ids)}* ({n_signal} боевых, {n_monitor} monitor-only)\n"
         f"🔍 On-chain: *Lookonchain* (каждые 10 мин)\n"
         f"🕐 {datetime.now(TZ).strftime('%d.%m.%Y %H:%M UTC+3')}"
     )
@@ -347,10 +392,19 @@ async def main():
     async def handler(event: events.NewMessage.Event):
         msg: Message = event.message
         text = msg.text or ""
+        ch_name = channel_names.get(event.chat_id, f"Канал {event.chat_id}")
+        mode = channel_modes.get(event.chat_id, "signal")
+
+        # Архив -- ОБА режима, каждое сообщение (даже медиа без текста), единый формат.
+        archive_message(event.chat_id, ch_name, mode, text, bool(msg.media))
+
+        if mode == "monitor":
+            log.info(f"🗄 [monitor] {ch_name}: {text[:60]}")
+            return  # в сигнальный пайплайн и владельцу НЕ уходит
+
         if len(text) < 15:
             return
 
-        ch_name = channel_names.get(event.chat_id, f"Канал {event.chat_id}")
         formatted = format_signal(text, ch_name)
         send_telegram(formatted)
         log.info(f"📥 {ch_name}: {text[:60]}")
