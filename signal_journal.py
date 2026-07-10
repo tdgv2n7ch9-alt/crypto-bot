@@ -649,11 +649,26 @@ def _regime_label(rec: dict) -> str:
     return "неизвестно"
 
 
+def regime_label(rec: dict) -> str:
+    """Публичный алиас _regime_label -- для backtest/ и другого внешнего кода (ROADMAP П4),
+    не полагаться на приватное имя из другого модуля."""
+    return _regime_label(rec)
+
+
 def get_status_counts():
     """Для /radar_status: (активных, закрытых)."""
     active = sum(1 for r in _journal.values() if r["status"] not in TERMINAL_STATUSES)
     closed = sum(1 for r in _journal.values() if r["status"] in TERMINAL_STATUSES)
     return active, closed
+
+
+def get_closed_records() -> list:
+    """Публичный read-only доступ к закрытым-с-исходом записям (ROADMAP П4, backtest/) --
+    копии словарей, не ссылки на внутреннее состояние `_journal`. Только чтение, не
+    предназначено для записи обратно -- бэктест-модуль не должен трогать `_journal` напрямую
+    (инкапсуляция, не полагаться на приватное имя из другого модуля)."""
+    return [dict(r) for r in _journal.values() if r.get("outcome") in OUTCOME_STATUSES
+            and r.get("actual_r") is not None]
 
 
 def get_journal_summary(window_sec=None, end_ts=None) -> dict:
