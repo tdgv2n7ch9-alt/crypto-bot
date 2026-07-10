@@ -1414,15 +1414,20 @@ def full_analysis(coin: dict) -> dict:
     elif score >= -1: label = " "
     else:             label = " "
 
+    # Ярлыки ниже -- НЕ структурная SMC-детекция (не BOS/OB/FVG/Sweep по свечам), а
+    # пороги % изменения цены/объёма (см. вычисление smc_* выше в этой функции).
+    # Названия отражают это честно (SMC_COVERAGE.md §3) -- реальная структурная
+    # детекция живёт в ta_extra.py/pro_analysis(), сюда не переносилась (изменение
+    # отображения, не формул/порогов).
     smc_factors = []
-    if smc_bos_bull:    smc_factors.append("BOS ")
-    if smc_bos_bear:    smc_factors.append("BOS ")
-    if smc_ob_accum:    smc_factors.append("OB ")
-    if smc_liq_sweep:   smc_factors.append("Liq Sweep")
-    if smc_smart_accum: smc_factors.append("Smart Accum ")
-    if smc_smart_dist:  smc_factors.append("Smart Dist ")
-    if smc_fvg_bull:    smc_factors.append("FVG ")
-    if smc_fvg_bear:    smc_factors.append("FVG ")
+    if smc_bos_bull:    smc_factors.append("Имп. 7д↑/30д↓")
+    if smc_bos_bear:    smc_factors.append("Имп. 7д↓/30д↑")
+    if smc_ob_accum:    smc_factors.append("Штиль объёма")
+    if smc_liq_sweep:   smc_factors.append("Резкий имп. 1ч")
+    if smc_smart_accum: smc_factors.append("Откат в аптренде")
+    if smc_smart_dist:  smc_factors.append("Сильный имп. 24ч")
+    if smc_fvg_bull:    smc_factors.append("Имп. 1ч+24ч ↑")
+    if smc_fvg_bear:    smc_factors.append("Имп. 1ч+24ч ↓")
     if tf_aligned_bull: smc_factors.append("TF Align Bull")
     if tf_aligned_bear: smc_factors.append("TF Align Bear")
     if fund_recovery:   smc_factors.append("Recovery ")
@@ -7821,15 +7826,20 @@ def real_full_analysis(coin: dict) -> dict:
     elif rocket >= 40: rocket_label = " "
     else:              rocket_label = " "
 
+    # Ярлыки ниже -- НЕ структурная SMC-детекция (не BOS/OB/FVG/Sweep по свечам), а
+    # пороги % изменения цены/объёма (см. вычисление smc_* выше в этой функции).
+    # Названия отражают это честно (SMC_COVERAGE.md §3) -- реальная структурная
+    # детекция живёт в ta_extra.py/pro_analysis(), сюда не переносилась (изменение
+    # отображения, не формул/порогов).
     smc_factors = []
-    if smc_bos_bull:     smc_factors.append("BOS ")
-    if smc_bos_bear:     smc_factors.append("BOS ")
-    if smc_ob_accum:     smc_factors.append("OB ")
-    if smc_liq_sweep:    smc_factors.append("Liq Sweep")
-    if smc_smart_accum:  smc_factors.append("Smart Accum ")
-    if smc_smart_dist:   smc_factors.append("Smart Dist ")
-    if smc_fvg_bull:     smc_factors.append("FVG ")
-    if smc_fvg_bear:     smc_factors.append("FVG ")
+    if smc_bos_bull:     smc_factors.append("Имп. 7д↑/30д↓")
+    if smc_bos_bear:     smc_factors.append("Имп. 7д↓/30д↑")
+    if smc_ob_accum:     smc_factors.append("Штиль объёма")
+    if smc_liq_sweep:    smc_factors.append("Резкий имп. 1ч")
+    if smc_smart_accum:  smc_factors.append("Откат в аптренде")
+    if smc_smart_dist:   smc_factors.append("Сильный имп. 24ч")
+    if smc_fvg_bull:     smc_factors.append("Имп. 1ч+24ч ↑")
+    if smc_fvg_bear:     smc_factors.append("Имп. 1ч+24ч ↓")
     if tf_aligned_bull:  smc_factors.append("TF Align Bull")
     if tf_aligned_bear:  smc_factors.append("TF Align Bear")
     if fund_recovery:    smc_factors.append("Recovery ")
