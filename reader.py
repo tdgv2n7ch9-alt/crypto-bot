@@ -219,24 +219,108 @@ def check_lookonchain():
 # ═══════════════════════════════════════════
 # TELEGRAM
 # ═══════════════════════════════════════════
+# Ночная сессия #2, Блок 3 ("Фаза А"): ретраи + дедуп. Честно: в текущей архитектуре
+# reader.py (проверено -- AUDIT.md §"Между процессами", DOCUMENTATION.md §5) НЕТ
+# файлового моста -- send_telegram() уже отправляет напрямую через Bot API, отдельный
+# от bot.py процесс на Mac mini (не Railway). "Файловый мост /tmp" из формулировки
+# задачи не найден в коде -- не выдумываю то, чего нет, здесь усиливается
+# УЖЕ существующий прямой Bot API путь: ретраи с уважением Telegram 429/retry_after,
+# персистентный дедуп по (channel_id, message_id), тестовый режим с явной пометкой.
+# reader.py архитектурно НЕ имеет доступа к списку подписчиков (нет импорта
+# subscribers.py, нет цикла по chat_id кроме OWNER_CHAT_ID) -- живая рассылка
+# подписчикам физически невозможна из этого файла, не только "выключена флагом".
 
-def send_telegram(text: str):
-    """Отправляет сообщение через бота"""
+READER_TEST_MODE = os.getenv("READER_TEST_MODE", "1") not in ("0", "false", "False", "")
+SEND_MAX_RETRIES = int(os.getenv("READER_SEND_MAX_RETRIES", "3"))
+SEND_RETRY_BACKOFF_SEC = float(os.getenv("READER_SEND_RETRY_BACKOFF_SEC", "2"))
+
+
+def send_telegram(text: str) -> bool:
+    """Отправляет сообщение владельцу через Bot API с ретраями. Уважает Telegram 429
+    (retry_after из ответа), ретраит 5xx и сетевые исключения с линейным backoff,
+    НЕ ретраит прочие 4xx (клиентская ошибка -- повтор не поможет). Возвращает
+    True/False (раньше ничего не возвращала -- вызывающий код это поле не использовал,
+    аддитивное изменение сигнатуры, все текущие вызовы `send_telegram(x)` совместимы)."""
     if not BOT_TOKEN or not OWNER_CHAT_ID:
         log.error("BOT_TOKEN или OWNER_CHAT_ID не заданы")
-        return
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    for attempt in range(1, SEND_MAX_RETRIES + 1):
+        try:
+            r = requests.post(url, json={
+                "chat_id": OWNER_CHAT_ID,
+                "text": text,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True,
+            }, timeout=10)
+            if r.status_code == 200:
+                return True
+            if r.status_code == 429:
+                try:
+                    retry_after = r.json().get("parameters", {}).get("retry_after", SEND_RETRY_BACKOFF_SEC)
+                except Exception:
+                    retry_after = SEND_RETRY_BACKOFF_SEC
+                log.warning(f"Telegram 429, жду {retry_after}s (попытка {attempt}/{SEND_MAX_RETRIES})")
+                time.sleep(retry_after)
+                continue
+            if 500 <= r.status_code < 600:
+                log.warning(f"Telegram {r.status_code}, ретрай (попытка {attempt}/{SEND_MAX_RETRIES})")
+                time.sleep(SEND_RETRY_BACKOFF_SEC * attempt)
+                continue
+            log.error(f"Telegram error {r.status_code}: {r.text[:200]}")
+            return False
+        except Exception as e:
+            log.error(f"send_telegram попытка {attempt}/{SEND_MAX_RETRIES}: {e}")
+            time.sleep(SEND_RETRY_BACKOFF_SEC * attempt)
+    log.error(f"send_telegram: все {SEND_MAX_RETRIES} попыток исчерпаны, сообщение потеряно")
+    return False
+
+
+# --- Дедупликация сигналов канала (переживает рестарт launchd, в отличие от
+# _seen_posts у Lookonchain, который только in-memory) ---------------------------
+from collections import deque
+
+DEDUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reader_dedup_seen.json")
+DEDUP_MAX_KEEP = 2000
+
+_seen_order = deque(maxlen=DEDUP_MAX_KEEP)
+_seen_set: set = set()
+
+
+def _load_dedup():
+    global _seen_order, _seen_set
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        r = requests.post(url, json={
-            "chat_id": OWNER_CHAT_ID,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True,
-        }, timeout=10)
-        if r.status_code != 200:
-            log.error(f"Telegram error: {r.text[:100]}")
+        if os.path.exists(DEDUP_FILE):
+            with open(DEDUP_FILE) as f:
+                items = [tuple(x) for x in json.load(f)]
+            _seen_order = deque(items, maxlen=DEDUP_MAX_KEEP)
+            _seen_set = set(items)
+            log.info(f"Дедуп: загружено {len(_seen_set)} ранее виденных сообщений")
     except Exception as e:
-        log.error(f"send_telegram: {e}")
+        log.error(f"_load_dedup: {e}")
+
+
+def _save_dedup():
+    try:
+        with open(DEDUP_FILE, "w") as f:
+            json.dump(list(_seen_order), f)
+    except Exception as e:
+        log.error(f"_save_dedup: {e}")
+
+
+def _mark_seen(key) -> bool:
+    """True, если сообщение УЖЕ было обработано (дубликат, пропустить). Иначе
+    регистрирует ключ и возвращает False. Ограниченный размер (deque maxlen) --
+    вытесняет самые старые ключи, не растёт бесконечно."""
+    if key in _seen_set:
+        return True
+    if len(_seen_order) == _seen_order.maxlen:
+        old = _seen_order.popleft()
+        _seen_set.discard(old)
+    _seen_order.append(key)
+    _seen_set.add(key)
+    _save_dedup()
+    return False
 
 # ═══════════════════════════════════════════
 # ПАРСИНГ СИГНАЛОВ
@@ -299,7 +383,10 @@ def format_signal(text: str, channel: str) -> str:
     # Оригинальный текст (первые 300 символов)
     lines.append(f"_{text[:300]}_")
 
-    return "\n".join(lines)
+    formatted = "\n".join(lines)
+    if READER_TEST_MODE:
+        formatted = "🧪 *[READER TEST]*\n" + formatted
+    return formatted
 
 # ═══════════════════════════════════════════
 # АРХИВ КАНАЛОВ (все режимы, signal и monitor)
@@ -345,6 +432,8 @@ async def main():
     if not OWNER_CHAT_ID:
         log.error("❌ OWNER_CHAT_ID не задан!")
         return
+
+    _load_dedup()
 
     # Запускаем Lookonchain мониторинг в фоновом потоке
     onchain_thread = threading.Thread(
@@ -405,9 +494,18 @@ async def main():
         if len(text) < 15:
             return
 
+        # Дедуп по (канал, message_id) -- переживает рестарт launchd, см. _mark_seen().
+        # Помечаем ДО отправки: повторная доставка того же апдейта Telethon-ом при
+        # реконнекте не должна создавать повторную попытку отправки; надёжность самой
+        # отправки обеспечивают ретраи внутри send_telegram(), не повторный вызов извне.
+        dedup_key = (event.chat_id, msg.id)
+        if _mark_seen(dedup_key):
+            log.info(f"🔁 [dedup] {ch_name}: message_id={msg.id} уже обработан, пропуск")
+            return
+
         formatted = format_signal(text, ch_name)
-        send_telegram(formatted)
-        log.info(f"📥 {ch_name}: {text[:60]}")
+        ok = send_telegram(formatted)
+        log.info(f"📥 {ch_name}: {text[:60]} (sent={ok})")
 
     await client.run_until_disconnected()
 
