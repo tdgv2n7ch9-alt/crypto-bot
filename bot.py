@@ -116,6 +116,7 @@ import whale_radar
 import level_watch
 import daily_metrics
 import morning_metrics
+import onchain_metrics
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -3717,12 +3718,15 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("🏠 Меню",     callback_data="show_menu")],
         ])
         try:
+            # Фаза C каркас (М5, «Пакетный ритм» пакет 2) -- теперь реальный код
+            # честно проверяет источник (onchain_metrics.py), а не хардкод-строка.
+            # Пока источник не настроен (см. докстринг модуля -- Glassnode не имеет
+            # бесплатного API-тира, найдено при подготовке этого пакета), сообщение
+            # по смыслу то же, что было -- просто дальше готово принять реальные
+            # SOPR/MVRV/NVT/Puell/LTH-STH после решения владельца по источнику.
+            body = onchain_metrics.format_onchain_card_text("BTC")
             await q.edit_message_text(
-                "🔗 *On-Chain*\n\n"
-                "🚧 Раздел в разработке — реального источника данных "
-                "(ETF netflow, whale-трекинг) пока нет, показывать заглушку "
-                "вместо цифр не будем.\n\n"
-                f"🕐 {now_utc3()}",
+                f"🔗 *On-Chain*\n\n{body}\n\n🕐 {now_utc3()}",
                 parse_mode="Markdown", reply_markup=nav
             )
         except Exception as e:
