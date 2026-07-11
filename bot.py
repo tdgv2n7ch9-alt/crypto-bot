@@ -113,6 +113,7 @@ import chart_v3
 import chart_v4
 import narrative
 import whale_radar
+import level_watch
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -535,6 +536,24 @@ async def _whale_radar_task(bot: Bot, owner_id: int):
                                            log_fn=_make_whale_log_fn(bot, owner_id))
     except Exception as e:
         print(f"Whale Radar: фоновая задача упала ({type(e).__name__}: {e})")
+
+
+async def _level_watch_task(bot: Bot, owner_id: int):
+    """Level Watch (дневная разметка владельца, journal/watch_zones.json) -- тот же
+    паттерн: один asyncio.create_task на весь процесс. startup_sync() сначала --
+    подтягивает GitHub-версию поверх той, что была закоммичена этим самым деплоем
+    (владелец мог обновить зоны через /zones_set ПОСЛЕ последнего git push)."""
+    async def _send(oid, text):
+        await bot.send_message(oid, text)
+
+    try:
+        await level_watch.startup_sync()
+    except Exception as e:
+        print(f"Level Watch: startup_sync упал ({type(e).__name__}: {e})")
+    try:
+        await level_watch.run_level_watch(_send, owner_id)
+    except Exception as e:
+        print(f"Level Watch: фоновая задача упала ({type(e).__name__}: {e})")
 
 
 def _mark_heartbeat(name: str, ok: bool = True, detail: str = ""):
@@ -8018,7 +8037,11 @@ TOP_LONG_SIGNALS:  dict = {}
 TOP_SHORT_SIGNALS: dict = {}
 TOP_SHORT_SIGNALS["BTC"] = {"time": None, "entry": 61700, "buy_zone_lo": 61500, "buy_zone_hi": 61930, "sl": 62200, "sell_target": 58073, "status": "watching", "tp1": 59200, "tp2": 58073, "note": "Шорт $61500-61930. SL $62200. Условие: цена ниже $61930"}
 TOP_SHORT_SIGNALS["SOL"] = {"time": None, "entry": 74.50, "buy_zone_lo": 73.50, "buy_zone_hi": 74.92, "sl": 75.50, "sell_target": 62.00, "status": "watching", "tp1": 68.00, "tp2": 65.00, "tp3": 62.00, "note": "Шорт $73.5-74.92. SL $75.50. Хай $74.92 не пробивать"}
-TOP_SHORT_SIGNALS["ETH"] = {"time": None, "entry": 1610, "buy_zone_lo": 1600, "buy_zone_hi": 1620, "sl": 1645, "sell_target": 1504, "status": "watching", "tp1": 1537, "tp2": 1504, "note": "4H имбаланс $1569-1620. Условие: пробой $1565. SL $1645"}
+# 2026-07-11: "status" ниже вытеснена дневной разметкой владельца (level_watch.py,
+# journal/watch_zones.json) -- запись НЕ удалена (append-only/история, владелец,
+# задача "ETH level-watch"). "watching" нигде не проверяется как условие в коде
+# (grep подтвердил), безопасно заменить значение. BTC/SOL/CAKE/AAVE не тронуты.
+TOP_SHORT_SIGNALS["ETH"] = {"time": None, "entry": 1610, "buy_zone_lo": 1600, "buy_zone_hi": 1620, "sl": 1645, "sell_target": 1504, "status": "superseded_2026-07-11", "tp1": 1537, "tp2": 1504, "note": "4H имбаланс $1569-1620. Условие: пробой $1565. SL $1645"}
 
 TOP_SPOT_SIGNALS:  dict = {}
 TOP_SPOT_SIGNALS["CAKE"] = {"time": None, "entry": 1.1829, "buy_zone_lo": 1.1533, "buy_zone_hi": 1.1829, "sl": 1.12, "sell_target": 1.45, "status": "watching", "tp1": 1.30, "tp2": 1.40, "tp3": 1.45, "note": "DCA: 50%@1.1829 / 30%@1.168 / 20%@1.1533. SL $1.12"}
@@ -10003,6 +10026,78 @@ async def cmd_whales(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: /zones -- активные зоны дневной разметки (level_watch.py,
+    journal/watch_zones.json) + дата/источник разметки. Только показ данных -- не
+    влияет ни на какой боевой сигнал/гейт."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    config = level_watch.load_watch_zones()
+    updated = config.get("updated") or "нет данных"
+    source = config.get("source") or "нет данных"
+    lines = [f"📋 *Активные зоны* — {source}, разметка от {updated}", ""]
+    any_zones = False
+    for symbol, zones in config.items():
+        if symbol in ("updated", "source") or not isinstance(zones, list):
+            continue
+        if not zones:
+            continue
+        any_zones = True
+        lines.append(f"*{symbol}*")
+        for z in sorted(zones, key=lambda z: (z["side"] != "LONG", z.get("prio", 99))):
+            note = f" — {z['note']}" if z.get("note") else ""
+            lines.append(f"  {z['side']} `{z['lo']}–{z['hi']}` (prio {z.get('prio', '?')}){note}")
+        lines.append("")
+    if not any_zones:
+        lines.append("Зон нет.")
+    lines.append("_Только чтение, не сигнал/гейт — информационный вотчер._")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_zones_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: /zones_set {...json...} -- ПОЛНОСТЬЮ заменяет активную разметку
+    (journal/watch_zones.json), чтобы владелец обновлял с телефона без Claude Code.
+    Старая версия архивируется в journal/watch_zones_history/ автоматически (см.
+    level_watch.replace_watch_zones), затем best-effort пуш в GitHub (переживает
+    редеплой -- иначе следующий git push с этой сессии стёр бы правку владельца)."""
+    import json
+    import os
+    import time
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    raw_parts = update.message.text.split(None, 1)
+    if len(raw_parts) < 2 or not raw_parts[1].strip():
+        await update.message.reply_text(
+            "Использование: `/zones_set {\"updated\":\"YYYY-MM-DD\",\"source\":\"...\","
+            "\"ETHUSDT\":[{\"side\":\"LONG\",\"lo\":1.0,\"hi\":2.0,\"prio\":1}]}`\n\n"
+            "Полностью заменяет активные зоны (не дописывает) — старая версия "
+            "архивируется автоматически.",
+            parse_mode="Markdown")
+        return
+    try:
+        new_config = json.loads(raw_parts[1])
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось разобрать JSON: {e}")
+        return
+    if not isinstance(new_config, dict):
+        await update.message.reply_text("❌ Ожидался JSON-объект (dict) верхнего уровня.")
+        return
+    if "updated" not in new_config:
+        new_config["updated"] = time.strftime("%Y-%m-%d")
+    ok = level_watch.replace_watch_zones(new_config)
+    if not ok:
+        await update.message.reply_text("❌ Не удалось сохранить новый конфиг локально (см. логи процесса).")
+        return
+    github_ok = await level_watch.sync_watch_zones_to_github(new_config)
+    github_note = "" if github_ok else "\n⚠️ GitHub-синк не удался (правка переживёт этот процесс, но НЕ переживёт редеплой — см. логи)."
+    await update.message.reply_text(
+        f"✅ Зоны заменены, разметка от {new_config.get('updated')}. Старая версия в архиве."
+        f"{github_note}")
+
+
 async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only общий health-check процесса (в отличие от /radar_status -- тот покрывает
     только памп-радар). Аптайм + heartbeat всех фоновых задач + источники данных +
@@ -10290,6 +10385,7 @@ async def _start_pump_detector(app):
     asyncio.create_task(run_pump_detector(ctx))
     asyncio.create_task(run_miniticker_stream(ctx))
     asyncio.create_task(_whale_radar_task(app.bot, owner_id))
+    asyncio.create_task(_level_watch_task(app.bot, owner_id))
 
     signal_journal.init(app.bot, owner_id)
     await signal_journal.startup_sync()
@@ -10395,6 +10491,8 @@ def main():
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
     app.add_handler(CommandHandler("whales",       cmd_whales))
+    app.add_handler(CommandHandler("zones",        cmd_zones))
+    app.add_handler(CommandHandler("zones_set",    cmd_zones_set))
     app.add_handler(CommandHandler("health",       cmd_health))
     app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))
