@@ -32,41 +32,55 @@ DIGEST_HOUR_UTC3 = 21
 DIGEST_WINDOW_SEC = 24 * 3600
 
 
-def _read_jsonl_events(events_dir: str, filename_prefix: str, now_ts: float = None) -> list:
-    """Читает события за ТЕКУЩИЕ UTC-сутки (та же ротация по дате, что append_event()
-    в whale_radar.py/level_watch.py) -- события, попавшие в файл ВЧЕРАШНЕЙ UTC-даты
-    (если digest шлётся вскоре после полуночи UTC), НЕ подхватываются: честное
-    ограничение того же файлового паттерна, не расширяем поиск на 2 файла ради
-    простоты (см. докстринг модуля про ежедневную ротацию)."""
+def _read_jsonl_events(events_dir: str, filename_prefix: str, now_ts: float = None,
+                        window_sec: float = DIGEST_WINDOW_SEC) -> list:
+    """Читает события за окно [now-window_sec, now], объединяя ВСЕ JSONL-файлы дат
+    (UTC), которые окно пересекает -- не только "сегодняшний" файл (та же ротация
+    по дате, что append_event() в whale_radar.py/level_watch.py). Окно почти всегда
+    пересекает полночь UTC (для любого окна, не кратного ровно суткам от 00:00 UTC)
+    -- найдено при подготовке М2 "Утренняя сводка 08:30" («Пакетный ритм» пакет 2):
+    08:30 Europe/Istanbul = 05:30 UTC, окно 12ч начинается в 17:30 UTC ПРЕДЫДУЩЕГО
+    дня -- старая версия (читала только файл "сегодняшней" даты) потеряла бы почти
+    всю ночь. Задним числом чинит и вечерний дайджест (Этап 4) тем же фиксом --
+    честное ограничение осталось прежним только по сути (события ДО последнего
+    рестарта процесса всё ещё не видны, эфемерный диск), не по границе полуночи."""
     now = now_ts if now_ts is not None else time.time()
-    dt = datetime.fromtimestamp(now, tz=timezone.utc)
-    path = os.path.join(events_dir, f"{filename_prefix}-{dt.strftime('%Y-%m-%d')}.jsonl")
+    start = now - window_sec
+    dates = set()
+    cur = start
+    while cur <= now:
+        dates.add(datetime.fromtimestamp(cur, tz=timezone.utc).strftime("%Y-%m-%d"))
+        cur += 86400
+    dates.add(datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y-%m-%d"))
+
     events = []
-    if not os.path.exists(path):
-        return events
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except Exception as e:
-        print(f"daily_metrics: не удалось прочитать {path}: {e}")
+    for date_str in sorted(dates):
+        path = os.path.join(events_dir, f"{filename_prefix}-{date_str}.jsonl")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            print(f"daily_metrics: не удалось прочитать {path}: {e}")
     return events
 
 
-def top_whale_events_today(n: int = 3, now_ts: float = None) -> list:
-    events = _read_jsonl_events(whale_radar.EVENTS_DIR, "whale_events", now_ts)
+def top_whale_events_today(n: int = 3, now_ts: float = None, window_sec: float = DIGEST_WINDOW_SEC) -> list:
+    events = _read_jsonl_events(whale_radar.EVENTS_DIR, "whale_events", now_ts, window_sec)
     events.sort(key=lambda e: e.get("size_usd", 0), reverse=True)
     return events[:n]
 
 
-def level_watch_touches_today(now_ts: float = None) -> list:
-    return _read_jsonl_events(level_watch.EVENTS_DIR, "level_watch_events", now_ts)
+def level_watch_touches_today(now_ts: float = None, window_sec: float = DIGEST_WINDOW_SEC) -> list:
+    return _read_jsonl_events(level_watch.EVENTS_DIR, "level_watch_events", now_ts, window_sec)
 
 
 def shadow_vs_live_today(now_ts: float = None, window_sec: float = DIGEST_WINDOW_SEC) -> dict:

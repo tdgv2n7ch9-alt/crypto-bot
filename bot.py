@@ -115,6 +115,7 @@ import narrative
 import whale_radar
 import level_watch
 import daily_metrics
+import morning_metrics
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -10751,6 +10752,15 @@ async def _start_pump_detector(app):
         daily_metrics.send_daily_digest,
         "cron",
         hour=daily_metrics.DIGEST_HOUR_UTC3, minute=0,
+        args=[app.bot, owner_id],
+    )
+    # «Утренняя сводка» («Пакетный ритм» пакет 2, М2) -- итог ночи 08:30 по TZ
+    # бота. Тот же cron-паттерн, что «Метрики дня» выше -- переживает рестарт
+    # нативно, не завязана на сессию Claude Code.
+    scheduler.add_job(
+        morning_metrics.send_morning_digest,
+        "cron",
+        hour=morning_metrics.MORNING_HOUR_UTC3, minute=morning_metrics.MORNING_MINUTE_UTC3,
         args=[app.bot, owner_id],
     )
     scheduler.start()

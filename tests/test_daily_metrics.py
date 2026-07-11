@@ -85,6 +85,23 @@ def test_read_jsonl_events_skips_malformed_lines(tmp_path):
     assert len(events) == 2  # 2 валидных, 1 битая строка честно пропущена
 
 
+def test_read_jsonl_events_spans_midnight_utc_boundary(tmp_path):
+    """Найдено при подготовке М2 -- окно, пересекающее полночь UTC, должно читать
+    ОБА файла (вчера+сегодня), не только "сегодняшний"."""
+    from datetime import datetime, timedelta, timezone
+    # now -- чуть после полуночи UTC, окно 12ч уходит в предыдущие сутки
+    now_dt = datetime(2026, 7, 11, 0, 30, tzinfo=timezone.utc)
+    now = now_dt.timestamp()
+    yesterday_path = tmp_path / "whale_events-2026-07-10.jsonl"
+    today_path = tmp_path / "whale_events-2026-07-11.jsonl"
+    yesterday_path.write_text(json.dumps({"symbol": "OLD", "size_usd": 1}) + "\n")
+    today_path.write_text(json.dumps({"symbol": "NEW", "size_usd": 2}) + "\n")
+
+    events = daily_metrics._read_jsonl_events(str(tmp_path), "whale_events", now_ts=now, window_sec=12 * 3600)
+    symbols = {e["symbol"] for e in events}
+    assert symbols == {"OLD", "NEW"}
+
+
 def test_top_whale_events_sorted_by_size_desc(tmp_path, monkeypatch):
     now = time.time()
     from datetime import datetime, timezone
