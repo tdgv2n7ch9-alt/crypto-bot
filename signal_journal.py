@@ -670,6 +670,25 @@ def get_status_counts():
     return active, closed
 
 
+def get_latest_source(symbol: str, direction: str = None) -> str:
+    """Источник (`source`) самой свежей записи по символу — для карточек, которые
+    сами не хранят source (напр. TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS, легаси-словари
+    bot.py, куда не все генерирующие пути пишут "note", см. bot.py cmd "top_trades",
+    ночная сессия -- находка про BANANAS31USDT без указанного источника). Только
+    чтение `_journal` (in-memory, уже загружен в процессе), без сети. `direction`
+    опционален -- фильтр "long"/"short", если нужно отличить разнонаправленные
+    сигналы по одному символу. None, если записи не найдено — вызывающая сторона
+    решает, как честно показать "источник неизвестен", не выдумывая источник."""
+    sym = symbol.upper().replace("USDT", "")
+    candidates = [r for r in _journal.values()
+                  if r.get("symbol", "").upper() == sym
+                  and (direction is None or r.get("direction") == direction)]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda r: r.get("ts", 0))
+    return latest.get("source")
+
+
 def get_closed_records() -> list:
     """Публичный read-only доступ к закрытым-с-исходом записям (ROADMAP П4, backtest/) --
     копии словарей, не ссылки на внутреннее состояние `_journal`. Только чтение, не

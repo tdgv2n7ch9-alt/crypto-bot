@@ -1149,6 +1149,38 @@ def trend_arrow(ch):
 def cmc_link(slug):  return f"https://coinmarketcap.com/currencies/{slug}/"
 def tv_link(symbol): return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}USDT"
 
+
+def top_trades_long_status(entry: float, cur: float, tp1: float, tp2: float, tp3: float,
+                            sl: float) -> tuple:
+    """Статус карточки "Монеты в работе" (LONG) -- вынесено из cmd top_trades ради
+    тестируемости, формула НЕ менялась (те же пороги, что были в исходном коде,
+    только текст восстановлен + добавлен terminal_result). Возвращает (status_text,
+    terminal_result|None) -- terminal_result != None означает, что позиция достигла
+    финального уровня (TP3 целиком или SL) и должна уйти в архив."""
+    dist = (entry - cur) / entry * 100 if cur < entry else 0
+    if cur >= tp3:          return "✅ TP3 ДОСТИГНУТ!", "TP3"
+    if cur >= tp2:          return "✅ TP2 достигнут", None
+    if cur >= tp1:          return "✅ TP1 достигнут", None
+    if cur > entry * 1.005: return "🟢 В плюсе", None
+    if dist <= 1:           return "⚠️ Близко ко входу!", None
+    if dist <= 2:           return f"🟡 Ждём вход, до входа {dist:.1f}%", None
+    if cur <= sl * 1.01:    return "🔴 ПОД SL!", "SL"
+    return f"🟡 Ждём вход, до входа {dist:.1f}%", None
+
+
+def top_trades_short_status(entry: float, cur: float, tp1: float, tp2: float,
+                             sl: float) -> tuple:
+    """Зеркало top_trades_long_status() для SHORT (только tp1/tp2 -- у SHORT-записей
+    в TOP_SHORT_SIGNALS нет tp3, тот же формат, что был в исходном коде)."""
+    dist = (cur - entry) / entry * 100 if cur > entry else 0
+    if cur <= tp2:          return "✅ TP2 ДОСТИГНУТ!", "TP2"
+    if cur <= tp1:          return "✅ TP1 достигнут", None
+    if cur < entry * 0.995: return "🟢 В плюсе", None
+    if dist <= 1:           return "⚠️ Близко ко входу!", None
+    if dist <= 2:           return f"🟡 Ждём вход, до входа {dist:.1f}%", None
+    if cur >= sl * 0.99:    return "🔴 ПОД SL!", "SL"
+    return f"🟡 Ждём вход, до входа {dist:.1f}%", None
+
 # 
 #  
 # 
@@ -3237,18 +3269,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data in ("game", "top_trades"):
         nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton(" ",     callback_data="top_trades"),
-             InlineKeyboardButton("  ", callback_data="show_menu")],
+            [InlineKeyboardButton("🔄 Обновить",     callback_data="top_trades"),
+             InlineKeyboardButton("🏠 Меню", callback_data="show_menu")],
         ])
 
-        lines = [f" *BEST TRADE    *", f" {now_utc3()}", ""]
+        lines = [f"💼 *BEST TRADE — МОНЕТЫ В РАБОТЕ*", f"🕐 {now_utc3()}", ""]
         has_signals = False
         total = len(TOP_LONG_SIGNALS) + len(TOP_SHORT_SIGNALS) + len(TOP_SPOT_SIGNALS)
 
         if total > 0:
-            lines[2] = f" *  : {total}*\n"
+            lines[2] = f"📊 *Всего сигналов: {total}*\n"
 
-        #   
+        # ── LONG в работе ──
         active_l = {s: v for s, v in TOP_LONG_SIGNALS.items() if v.get("status") != "done"}
         if active_l:
             has_signals = True
@@ -3267,28 +3299,32 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 move  = (cur - entry) / entry * 100 if entry > 0 else 0
                 t     = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 tv    = tv_link(sym)
-                dist  = (entry - cur) / entry * 100 if cur < entry else 0
 
-                # 
-                if cur >= tp3:          status = " TP3 !"
-                elif cur >= tp2:        status = " TP2 !"
-                elif cur >= tp1:        status = " TP1   "
-                elif cur > entry*1.005: status = " "
-                elif dist <= 1:        status = "   !"
-                elif dist <= 2:        status = f"   {dist:.1f}%"
-                elif cur <= sl*1.01:   status = "   SL!"
-                else:                  status = f"   {dist:.1f}%"
+                # Найдено ночной сессией: раньше при пробое SL/TP3 запись НИКОГДА не
+                # переходила в архив сама -- status="done" ставился только вручную
+                # кнопкой (tp_/sl_ callback ниже по файлу). Теперь терминальный
+                # уровень (TP3 полностью или SL) сразу переводит запись в архив --
+                # формула статуса та же, что была, см. top_trades_long_status().
+                status, terminal_result = top_trades_long_status(entry, cur, tp1, tp2, tp3, sl)
+
+                if terminal_result:
+                    v["status"] = "done"
+                    v["result"] = terminal_result
+                    continue  # ушла в архив -- покажет блок "Закрытые" ниже
+
+                source = v.get("note") or signal_journal.get_latest_source(sym, "long") or "источник неизвестен"
 
                 lines += [
-                    f" [{sym}USDT]({tv})   ",
-                    f"    `{fp(entry)}`   `{fp(cur)}`  `{move:+.1f}%`",
-                    f"   TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  SL `{fp(sl)}`",
-                    f"  {status}",
-                    f"   {t} UTC+3",
+                    f"🟢 [{sym}USDT]({tv}) — LONG",
+                    f"  Вход: `{fp(entry)}`   Текущая: `{fp(cur)}`   {move:+.1f}%",
+                    f"  TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  TP3 `{fp(tp3)}`  SL `{fp(sl)}`",
+                    f"  Статус: {status}",
+                    f"  Источник: {source}",
+                    f"  Вход в позицию: {t} UTC+3",
                     "",
                 ]
 
-        #   
+        # ── SHORT в работе ──
         active_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if v.get("status") != "done"}
         if active_s:
             has_signals = True
@@ -3306,26 +3342,28 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 move  = (entry - cur) / entry * 100 if entry > 0 else 0
                 t     = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 tv    = tv_link(sym)
-                dist  = (cur - entry) / entry * 100 if cur > entry else 0
 
-                if cur <= tp2:          status = " TP2 !"
-                elif cur <= tp1:        status = " TP1   "
-                elif cur < entry*0.995: status = " "
-                elif dist <= 1:        status = "   !"
-                elif dist <= 2:        status = f"   {dist:.1f}%"
-                elif cur >= sl*0.99:   status = "   SL!"
-                else:                  status = f"   {dist:.1f}%"
+                # Тот же принцип авто-архивации, что и у LONG выше — см. top_trades_short_status().
+                status, terminal_result = top_trades_short_status(entry, cur, tp1, tp2, sl)
+
+                if terminal_result:
+                    v["status"] = "done"
+                    v["result"] = terminal_result
+                    continue
+
+                source = v.get("note") or signal_journal.get_latest_source(sym, "short") or "источник неизвестен"
 
                 lines += [
-                    f" [{sym}USDT]({tv})   ",
-                    f"    `{fp(entry)}`   `{fp(cur)}`  `{move:+.1f}%`",
-                    f"   TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  SL `{fp(sl)}`",
-                    f"  {status}",
-                    f"   {t} UTC+3",
+                    f"🔴 [{sym}USDT]({tv}) — SHORT",
+                    f"  Вход: `{fp(entry)}`   Текущая: `{fp(cur)}`   {move:+.1f}%",
+                    f"  TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  SL `{fp(sl)}`",
+                    f"  Статус: {status}",
+                    f"  Источник: {source}",
+                    f"  Вход в позицию: {t} UTC+3",
                     "",
                 ]
 
-        #    
+        # ── SPOT (DCA) в работе ──
         if TOP_SPOT_SIGNALS:
             has_signals = True
             for sym, v in TOP_SPOT_SIGNALS.items():
@@ -3334,36 +3372,40 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 buy_lo = v.get("buy_zone_lo", v["entry"])
                 buy_hi = v.get("buy_zone_hi", v["entry"])
                 sell_t = v.get("sell_target", 0)
+                source = v.get("note") or signal_journal.get_latest_source(sym, "long") or "источник неизвестен"
                 lines += [
-                    f" [{sym}USDT]({tv})   ",
-                    f"    `{fp(buy_lo)}`  `{fp(buy_hi)}`",
-                    f"    `{fp(sell_t)}`",
-                    f"   {t} UTC+3",
+                    f"🟡 [{sym}USDT]({tv}) — SPOT DCA",
+                    f"  Зона покупки: `{fp(buy_lo)}`–`{fp(buy_hi)}`",
+                    f"  Цель продажи: `{fp(sell_t)}`",
+                    f"  Источник: {source}",
+                    f"  Вход в позицию: {t} UTC+3",
                     "",
                 ]
 
-        #   
-        done_l = {s: v for s, v in TOP_LONG_SIGNALS.items()  if True}
-        done_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if True}
+        # ── Закрытые (архив) -- честно: раньше показывал ВСЕ записи (баг "if True"
+        # вместо фильтра по статусу), сейчас только реально закрытые (status=="done"),
+        # последние 5 по каждому направлению.
+        done_l = {s: v for s, v in TOP_LONG_SIGNALS.items()  if v.get("status") == "done"}
+        done_s = {s: v for s, v in TOP_SHORT_SIGNALS.items() if v.get("status") == "done"}
         if done_l or done_s:
-            lines.append(" *:*")
-            for sym, v in list(done_l.items())[:5]:
+            lines.append("📁 *Закрытые (последние):*")
+            for sym, v in list(done_l.items())[-5:]:
                 tv = tv_link(sym)
                 t  = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
-                lines.append(f" [{sym}USDT]({tv})   ")
-                lines.append(f"   {t} UTC+3")
-            for sym, v in list(done_s.items())[:5]:
+                result = v.get("result", "?")
+                lines.append(f"  [{sym}USDT]({tv}) — {result}, вход {t} UTC+3")
+            for sym, v in list(done_s.items())[-5:]:
                 tv = tv_link(sym)
                 t  = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
-                lines.append(f" [{sym}USDT]({tv})   ")
-                lines.append(f"   {t} UTC+3")
+                result = v.get("result", "?")
+                lines.append(f"  [{sym}USDT]({tv}) — {result}, вход {t} UTC+3")
 
         if not has_signals:
             lines += [
-                " *  *\n",
-                "    30 .",
-                "  :",
-                "        ",
+                "📭 *Сейчас нет активных сигналов*\n",
+                "Сканирование рынка идёт каждые 30 минут.",
+                "Загляни позже:",
+                "как только появится качественный сетап — увидишь его здесь.",
             ]
 
         try:
@@ -3380,14 +3422,14 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         action = parts[0]   # tp / sl
         mode   = parts[1]   # long / short
         sym    = parts[2]
-        result = " TP " if action == "tp" else " SL "
+        result = "TP" if action == "tp" else "SL"
         store  = TOP_LONG_SIGNALS if mode == "long" else TOP_SHORT_SIGNALS
         if sym in store:
             store[sym]["status"] = "done"
             store[sym]["result"] = result
-        await q.answer(f"{result}  {sym}USDT")
+        await q.answer(f"Отмечено: {result} по {sym}USDT")
         await q.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(f"{'  ' if action=='tp' else ''} {result}  {sym}", callback_data="noop"),
+            InlineKeyboardButton(f"{'✅' if action=='tp' else '❌'} {result} — {sym}", callback_data="noop"),
             InlineKeyboardButton("🏠 Меню", callback_data="show_menu"),
         ]]))
     elif data.startswith("full_"):

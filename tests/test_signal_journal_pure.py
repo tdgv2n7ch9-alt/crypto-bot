@@ -112,3 +112,57 @@ def test_regime_label_fallback_to_1h():
 
 def test_regime_label_unknown_when_no_snapshot():
     assert sj.regime_label({}) == "неизвестно"
+
+
+# get_latest_source() -- АПГРЕЙД 11.07 Этап 1, "Монеты в работе": источник для
+# легаси-записей TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS, которые сами source не хранят.
+
+def test_get_latest_source_returns_none_when_no_records(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {})
+    assert sj.get_latest_source("BTC") is None
+
+
+def test_get_latest_source_finds_by_symbol(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {
+        1: {"symbol": "BTC", "direction": "long", "source": "TOP_LONG_AUTO", "ts": 100},
+    })
+    assert sj.get_latest_source("BTCUSDT") == "TOP_LONG_AUTO"
+
+
+def test_get_latest_source_strips_usdt_suffix_and_uppercases(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {
+        1: {"symbol": "SOL", "direction": "short", "source": "pump_reversal", "ts": 100},
+    })
+    assert sj.get_latest_source("solusdt") == "pump_reversal"
+
+
+def test_get_latest_source_filters_by_direction(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {
+        1: {"symbol": "ETH", "direction": "long", "source": "A", "ts": 100},
+        2: {"symbol": "ETH", "direction": "short", "source": "B", "ts": 200},
+    })
+    assert sj.get_latest_source("ETH", "long") == "A"
+    assert sj.get_latest_source("ETH", "short") == "B"
+
+
+def test_get_latest_source_direction_none_ignores_direction(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {
+        1: {"symbol": "ETH", "direction": "long", "source": "A", "ts": 100},
+        2: {"symbol": "ETH", "direction": "short", "source": "B", "ts": 200},
+    })
+    assert sj.get_latest_source("ETH") == "B"
+
+
+def test_get_latest_source_picks_most_recent_ts(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {
+        1: {"symbol": "BTC", "direction": "long", "source": "OLD", "ts": 100},
+        2: {"symbol": "BTC", "direction": "long", "source": "NEW", "ts": 500},
+    })
+    assert sj.get_latest_source("BTC") == "NEW"
+
+
+def test_get_latest_source_no_match_for_direction_returns_none(monkeypatch):
+    monkeypatch.setattr(sj, "_journal", {
+        1: {"symbol": "BTC", "direction": "long", "source": "A", "ts": 100},
+    })
+    assert sj.get_latest_source("BTC", "short") is None
