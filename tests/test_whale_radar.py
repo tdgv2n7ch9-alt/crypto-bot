@@ -135,16 +135,50 @@ def test_make_trade_event():
     assert out["ts"] == 1_700_000_000.0
 
 
+def test_is_whale_trade_absolute_only_when_sparse_window():
+    # <TRADE_MEDIAN_MIN_COUNT trades in window -> only absolute threshold applies
+    window = [1000.0, 1200.0, 900.0]
+    assert wr.is_whale_trade(window, 80_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is True
+    assert wr.is_whale_trade(window, 50_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is False
+
+
+def test_is_whale_trade_relative_threshold_with_full_window():
+    # 10 trades, median ~1000 -> relative threshold (5x) = 5000, well below absolute 75K,
+    # so absolute floor wins (max(75000, 5000)) -- notional must clear 75K regardless.
+    window = [900.0, 950.0, 1000.0, 1050.0, 1100.0, 980.0, 1020.0, 990.0, 1010.0, 970.0]
+    assert wr.is_whale_trade(window, 74_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is False
+    assert wr.is_whale_trade(window, 76_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is True
+
+
+def test_is_whale_trade_relative_threshold_dominates_on_large_median():
+    # median large enough that 5x median > 75K absolute floor
+    window = [20_000.0] * 10  # median 20,000 -> 5x = 100,000 > 75K absolute
+    assert wr.is_whale_trade(window, 90_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is False
+    assert wr.is_whale_trade(window, 110_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is True
+
+
+def test_whale_radar_state_record_trade_uses_window_before_append():
+    state = wr.WhaleRadarState()
+    # fill window with small trades (won't itself count toward its own median)
+    for _ in range(wr.TRADE_MEDIAN_MIN_COUNT):
+        assert state.record_trade("btcusdt", 1000.0) is False  # below absolute floor
+    # a genuinely large trade should be flagged whale (clears absolute + relative)
+    assert state.record_trade("btcusdt", 200_000.0) is True
+    # window now includes the 200K trade too, but it shouldn't have counted toward
+    # its OWN classification (checked above) -- verify window length is bounded
+    assert len(state.trade_windows["btcusdt"]) == wr.TRADE_MEDIAN_MIN_COUNT + 1
+
+
 def test_whale_radar_state_scan_symbol_detects_and_tracks():
     state = wr.WhaleRadarState()
     state.ensure_symbol("btcusdt")
     state.last_price["btcusdt"] = 100.0
     events_log = []
 
-    # sparse book with one whale bid
+    # sparse book with one whale bid (99.0 * 2000 = 198,000 -- clears the $100K floor)
     wr.apply_orderbook_message(state.books["btcusdt"], {
         "type": "snapshot",
-        "data": {"b": [["99.0", "600.0"]], "a": [["101.0", "1.0"]]},
+        "data": {"b": [["99.0", "2000.0"]], "a": [["101.0", "1.0"]]},
     })
     events = state.scan_symbol("btcusdt", time.time())
     assert any(e["event"] == "appeared" and e["side"] == "bid" for e in events)

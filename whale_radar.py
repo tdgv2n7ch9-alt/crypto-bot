@@ -36,10 +36,15 @@ Rate-limit: единственный REST-вызов — `/v5/market/tickers` р
 построению маленький (единицы-десятки записей), устаревшие вычищаются, когда
 уровень пропадает из книги.
 
-Пороги ниже — именованные константы. `WHALE_ORDER_MEDIAN_MULT` и
-`WHALE_SCAN_INTERVAL_SEC` — ПЕРВОЕ ПРИБЛИЖЕНИЕ, не откалиброваны на реальном
-распределении объёмов (см. `WHALE_RADAR_NOTES.md` после первого живого прогона) —
-это только Блок 1 (сбор данных), калибровка — по мере накопления `whale_events.jsonl`.
+Пороги ниже — именованные константы, калибровка v2 (решение владельца 2026-07-11
+после первого живого смоука Блока 1, см. `WHALE_RADAR_NOTES.md`): для ордеров книги
+— AND-условие ≥$100K абсолютного минимума И ≥8×медианы уровней СТОРОНЫ книги
+символа; для сделок (`publicTrade`) — то же AND-условие ≥$75K И ≥5×медианы недавних
+сделок символа (скользящее окно `TRADE_WINDOW_SIZE`, а не глобальная медиана книги —
+сделки и уровни книги разные распределения). Оба относительных порога отключаются
+(остаётся только абсолютный) при малой выборке — <5 уровней на стороне книги или
+<`TRADE_MEDIAN_MIN_COUNT` сделок в окне, — медиана на таком малом N нестабильна.
+`WHALE_SCAN_INTERVAL_SEC` по-прежнему первое приближение, не пересматривался.
 
 Это НОВЫЙ, изолированный модуль. НЕ импортируется из `bot.py`/`signal_loop.py`/
 `fa_engine.py` в Блоке 1 — то есть не запущен как часть боевого процесса, пока
@@ -51,6 +56,7 @@ import json
 import os
 import statistics
 import time
+from collections import deque
 from datetime import datetime, timezone
 
 import requests
@@ -63,9 +69,12 @@ TOP_N_SYMBOLS = 50
 ORDERBOOK_DEPTH = 200
 SYMBOL_REFRESH_SEC = 6 * 3600      # как часто пересобирать топ-N по обороту
 
-WHALE_ORDER_MIN_NOTIONAL_USD = 50_000
-WHALE_ORDER_MEDIAN_MULT = 5.0      # НЕ откалибровано, первое приближение (см. докстринг)
-WHALE_TRADE_MIN_NOTIONAL_USD = 50_000
+WHALE_ORDER_MIN_NOTIONAL_USD = 100_000  # откалибровано владельцем 2026-07-11 после смоука Блока 1
+WHALE_ORDER_MEDIAN_MULT = 8.0           # (было 50K/x5 -- шумело на BTC/ETH, см. WHALE_RADAR_NOTES.md)
+WHALE_TRADE_MIN_NOTIONAL_USD = 75_000
+WHALE_TRADE_MEDIAN_MULT = 5.0
+TRADE_WINDOW_SIZE = 200            # скользящее окно последних сделок символа для медианы
+TRADE_MEDIAN_MIN_COUNT = 10        # меньше сделок в окне -- медиана нестабильна, только абсолютный порог
 SPOOF_MAX_LIFETIME_SEC = 60
 SPOOF_APPROACH_PCT = 0.15          # цена подошла к уровню ближе чем на X% перед исчезновением
 
@@ -177,6 +186,24 @@ def classify_whale_levels(book_side: dict,
 
 def notional_usd(price: float, size: float) -> float:
     return price * size
+
+
+def is_whale_trade(recent_notionals: list, notional: float,
+                    min_notional: float = WHALE_TRADE_MIN_NOTIONAL_USD,
+                    median_mult: float = WHALE_TRADE_MEDIAN_MULT,
+                    min_count: int = TRADE_MEDIAN_MIN_COUNT) -> bool:
+    """Та же логика AND (абсолютный И относительный порог), что `classify_whale_levels`,
+    но для потока отдельных сделок символа, а не среза книги. `recent_notionals` —
+    окно ПРЕДЫДУЩИХ сделок этого символа (текущая сделка НЕ должна быть в нём —
+    иначе крупная сделка сама завышает свою же медиану-порог). Меньше `min_count`
+    сделок в окне — медиана нестабильна, используется только абсолютный порог
+    (тот же принцип, что у `classify_whale_levels` при <5 уровнях книги)."""
+    if len(recent_notionals) >= min_count:
+        median = statistics.median(recent_notionals)
+        threshold = max(min_notional, median * median_mult)
+    else:
+        threshold = min_notional
+    return notional >= threshold
 
 
 # ── Жизненный цикл китовых уровней (появился/сдвинулся/исчез/спуфинг) ──────
@@ -294,6 +321,7 @@ class WhaleRadarState:
         self.whale_levels = {}     # symbol -> {"bid": {price: usd}, "ask": {...}}
         self.lifetimes = {}        # symbol -> {"bid": {price: first_seen_ts}, "ask": {...}}
         self.last_price = {}       # symbol -> float
+        self.trade_windows = {}    # symbol -> deque(maxlen=TRADE_WINDOW_SIZE) недавних notional$
         self.event_count = 0
 
     def ensure_symbol(self, symbol: str):
@@ -301,6 +329,17 @@ class WhaleRadarState:
             self.books[symbol] = new_book()
             self.whale_levels[symbol] = {"bid": {}, "ask": {}}
             self.lifetimes[symbol] = {"bid": {}, "ask": {}}
+            self.trade_windows[symbol] = deque(maxlen=TRADE_WINDOW_SIZE)
+
+    def record_trade(self, symbol: str, notional: float) -> bool:
+        """Классифицирует сделку по текущему (ДО добавления этой сделки) окну недавних
+        сделок символа, затем добавляет её в окно. Порядок важен — иначе крупная
+        сделка искажает свою же медиану-порог."""
+        self.ensure_symbol(symbol)
+        window = self.trade_windows[symbol]
+        is_whale = is_whale_trade(list(window), notional)
+        window.append(notional)
+        return is_whale
 
     def scan_symbol(self, symbol: str, now: float) -> list:
         """Полное сканирование книги символа на китов, возвращает JSONL-готовые
@@ -417,7 +456,7 @@ async def run_whale_radar(symbols: list = None, duration_sec: float = None,
                                     continue
                                 state.last_price[symbol] = price
                                 usd = notional_usd(price, size)
-                                if usd >= WHALE_TRADE_MIN_NOTIONAL_USD:
+                                if state.record_trade(symbol, usd):
                                     evt = make_trade_event(symbol, side, price, usd, ts_ms)
                                     log_fn(evt)
                                     state.event_count += 1
