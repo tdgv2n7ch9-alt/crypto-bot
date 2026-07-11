@@ -75,6 +75,12 @@ WHALE_TRADE_MIN_NOTIONAL_USD = 75_000
 WHALE_TRADE_MEDIAN_MULT = 5.0
 TRADE_WINDOW_SIZE = 200            # скользящее окно последних сделок символа для медианы
 TRADE_MEDIAN_MIN_COUNT = 10        # меньше сделок в окне -- медиана нестабильна, только абсолютный порог
+WHALE_TRADE_SINGLE_MIN_USD = 150_000  # одиночный принт -- сразу событие, минуя агрегацию (решение
+                                       # владельца 2026-07-11 после находки "whale_trade не срабатывает"
+                                       # в WHALE_RADAR_NOTES.md -- реальные printы почти всегда мелкие
+                                       # даже на BTC/ETH, агрегация ловит "sweep"-серию printов одной
+                                       # стороны за короткое окно, а не только редкий гигант-принт)
+WHALE_TRADE_AGG_WINDOW_SEC = 10       # скользящее окно суммирования printов одной (symbol, side)
 SPOOF_MAX_LIFETIME_SEC = 60
 SPOOF_APPROACH_PCT = 0.15          # цена подошла к уровню ближе чем на X% перед исчезновением
 
@@ -337,7 +343,7 @@ def make_order_event(symbol: str, side: str, price: float, evt: dict,
 
 
 def make_trade_event(symbol: str, side: str, price: float, size_usd: float,
-                      ts_ms: int) -> dict:
+                      ts_ms: int, prints_count: int = 1) -> dict:
     return {
         "type": "whale_trade",
         "ts": round(ts_ms / 1000, 3) if ts_ms else round(time.time(), 3),
@@ -345,6 +351,7 @@ def make_trade_event(symbol: str, side: str, price: float, size_usd: float,
         "side": side,
         "price": price,
         "size_usd": round(size_usd, 2),
+        "prints_count": prints_count,
     }
 
 
@@ -363,6 +370,7 @@ class WhaleRadarState:
         self.lifetimes = {}        # symbol -> {"bid": {price: first_seen_ts}, "ask": {...}}
         self.last_price = {}       # symbol -> float
         self.trade_windows = {}    # symbol -> deque(maxlen=TRADE_WINDOW_SIZE) недавних notional$
+        self.agg_windows = {}      # symbol -> {side("Buy"/"Sell"): deque[(ts, notional)]}, 10с окно
         self.event_count = 0
 
     def ensure_symbol(self, symbol: str):
@@ -371,16 +379,48 @@ class WhaleRadarState:
             self.whale_levels[symbol] = {"bid": {}, "ask": {}}
             self.lifetimes[symbol] = {"bid": {}, "ask": {}}
             self.trade_windows[symbol] = deque(maxlen=TRADE_WINDOW_SIZE)
+            self.agg_windows[symbol] = {}
 
-    def record_trade(self, symbol: str, notional: float) -> bool:
-        """Классифицирует сделку по текущему (ДО добавления этой сделки) окну недавних
-        сделок символа, затем добавляет её в окно. Порядок важен — иначе крупная
-        сделка искажает свою же медиану-порог."""
+    def record_trade(self, symbol: str, side: str, notional: float, now: float = None) -> dict:
+        """Классифицирует поток printов сделок символа/стороны. Возвращает None (нет
+        события) либо {"size_usd", "prints_count"} — либо для одиночного крупного
+        принта (>= WHALE_TRADE_SINGLE_MIN_USD, prints_count=1, минуя агрегацию и
+        медиану целиком), либо для агрегата нескольких printов ОДНОЙ стороны за
+        скользящее окно `WHALE_TRADE_AGG_WINDOW_SEC` секунд, прошедшего тот же
+        AND-порог (`is_whale_trade`), что раньше применялся к единичным сделкам —
+        просто теперь к СУММЕ printов, а не к одному. `side` — как приходит от Bybit
+        (`"Buy"/"Sell"`, агрессор сделки), не путать с bid/ask книги заявок (другая
+        ось: сторона лимитки vs сторона исполнившейся сделки) — используется только
+        как ключ группировки, не сверяется с book-side нигде.
+
+        Медиана (для AND-порога) считается по `trade_windows[symbol]` — окну
+        ИНДИВИДУАЛЬНЫХ printов символа (не агрегатов), тот же принцип, что раньше:
+        ДО добавления текущего printа, чтобы он не искажал свою же медиану-порог.
+        При срабатывании агрегата окно этой (symbol, side) ОЧИЩАЕТСЯ — иначе следующий
+        же print на всё ещё высокой сумме выдал бы повторное событие на ту же самую
+        серию printов."""
         self.ensure_symbol(symbol)
-        window = self.trade_windows[symbol]
-        is_whale = is_whale_trade(list(window), notional)
-        window.append(notional)
-        return is_whale
+        now = now if now is not None else time.time()
+
+        median_window = self.trade_windows[symbol]
+        recent = list(median_window)
+        median_window.append(notional)
+
+        if notional >= WHALE_TRADE_SINGLE_MIN_USD:
+            return {"size_usd": notional, "prints_count": 1}
+
+        side_windows = self.agg_windows.setdefault(symbol, {})
+        agg = side_windows.setdefault(side, deque())
+        agg.append((now, notional))
+        cutoff = now - WHALE_TRADE_AGG_WINDOW_SEC
+        while agg and agg[0][0] < cutoff:
+            agg.popleft()
+        agg_sum = sum(n for _, n in agg)
+        if is_whale_trade(recent, agg_sum):
+            prints_count = len(agg)
+            agg.clear()
+            return {"size_usd": agg_sum, "prints_count": prints_count}
+        return None
 
     def get_zones(self, symbol: str, tolerance_pct: float = CLUSTER_TOLERANCE_PCT) -> dict:
         """Текущие китовые зоны символа (после кластеризации), по сторонам:
@@ -530,13 +570,16 @@ async def run_whale_radar(symbols: list = None, duration_sec: float = None,
                                     continue
                                 state.last_price[symbol] = price
                                 usd = notional_usd(price, size)
-                                if state.record_trade(symbol, usd):
-                                    evt = make_trade_event(symbol, side, price, usd, ts_ms)
+                                result = state.record_trade(symbol, side, usd, now=time.time())
+                                if result:
+                                    evt = make_trade_event(symbol, side, price, result["size_usd"],
+                                                            ts_ms, prints_count=result["prints_count"])
                                     log_fn(evt)
                                     state.event_count += 1
                                     if verbose:
                                         print(f"Whale Radar: TRADE {symbol.upper()} {side} "
-                                              f"${usd:,.0f} @ {price}")
+                                              f"${result['size_usd']:,.0f} @ {price} "
+                                              f"(prints={result['prints_count']})")
             except Exception as e:
                 if verbose:
                     print(f"Whale Radar: соединение разорвано ({type(e).__name__}: {e}), "

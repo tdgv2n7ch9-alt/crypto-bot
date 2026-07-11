@@ -257,12 +257,21 @@ def _build_alert_chart(symbol, result):
         key_high = (b1.get("key_high") or {}).get("price")
         key_low = (b1.get("key_low") or {}).get("price")
         entry_levels = [b11["entry1"], b11["entry2"], b11["entry3"]]
+        # Whale Radar слой (Блок 3, решение владельца 2026-07-11): ТОЛЬКО здесь --
+        # этот чарт owner-only (см. докстринг выше), в отличие от send_coin/AUTO-
+        # скана, которые уходят подписчикам. Владелец сам поживёт с этим слоем
+        # несколько дней перед решением, включать ли его подписчикам тоже.
+        try:
+            whale_zones = bot.get_whale_zones(symbol)
+        except Exception:
+            whale_zones = None
         try:
             chart = chart_v4.build_trade_chart_v4(
                 symbol, candles, direction, entry_levels=entry_levels,
                 sl=b11["sl"], tp1=b11["tp1"], tp2=b11["tp2"], tp3=b11["tp3"],
                 rr=b11["rr_tp1"], key_high=key_high, key_low=key_low, tf_label="2h",
-                zones=result.get("zones"), candles_4h=result.get("candles_4h"))
+                zones=result.get("zones"), candles_4h=result.get("candles_4h"),
+                whale_zones=whale_zones)
             if chart:
                 return chart
         except Exception as e:

@@ -209,16 +209,63 @@ def test_is_whale_trade_relative_threshold_dominates_on_large_median():
     assert wr.is_whale_trade(window, 110_000.0, min_notional=75_000, median_mult=5.0, min_count=10) is True
 
 
-def test_whale_radar_state_record_trade_uses_window_before_append():
+def test_record_trade_single_print_bypasses_aggregation():
     state = wr.WhaleRadarState()
-    # fill window with small trades (won't itself count toward its own median)
-    for _ in range(wr.TRADE_MEDIAN_MIN_COUNT):
-        assert state.record_trade("btcusdt", 1000.0) is False  # below absolute floor
-    # a genuinely large trade should be flagged whale (clears absolute + relative)
-    assert state.record_trade("btcusdt", 200_000.0) is True
-    # window now includes the 200K trade too, but it shouldn't have counted toward
-    # its OWN classification (checked above) -- verify window length is bounded
-    assert len(state.trade_windows["btcusdt"]) == wr.TRADE_MEDIAN_MIN_COUNT + 1
+    result = state.record_trade("btcusdt", "Buy", 200_000.0, now=1000.0)
+    assert result == {"size_usd": 200_000.0, "prints_count": 1}
+    # bypassed the agg window entirely -- nothing accumulated for this side
+    assert len(state.agg_windows["btcusdt"].get("Buy", [])) == 0
+
+
+def test_record_trade_small_prints_no_event_until_aggregate_crosses_threshold():
+    state = wr.WhaleRadarState()
+    now = 1000.0
+    # small prints, well under both absolute (75K) and each one alone is far below --
+    # accumulate 4 prints of 20K each = 80K, crossing the 75K absolute floor
+    assert state.record_trade("btcusdt", "Buy", 20_000.0, now=now) is None
+    assert state.record_trade("btcusdt", "Buy", 20_000.0, now=now + 1) is None
+    assert state.record_trade("btcusdt", "Buy", 20_000.0, now=now + 2) is None
+    result = state.record_trade("btcusdt", "Buy", 20_000.0, now=now + 3)
+    assert result == {"size_usd": 80_000.0, "prints_count": 4}
+
+
+def test_record_trade_aggregate_window_resets_after_firing():
+    state = wr.WhaleRadarState()
+    now = 1000.0
+    for i in range(4):
+        state.record_trade("btcusdt", "Buy", 20_000.0, now=now + i)
+    # window should have cleared after the 4th print fired the event above
+    assert len(state.agg_windows["btcusdt"]["Buy"]) == 0
+    # a fresh small print afterwards should NOT immediately fire again
+    assert state.record_trade("btcusdt", "Buy", 20_000.0, now=now + 4) is None
+
+
+def test_record_trade_old_prints_expire_outside_agg_window():
+    state = wr.WhaleRadarState()
+    now = 1000.0
+    state.record_trade("btcusdt", "Buy", 40_000.0, now=now)
+    # this second print arrives AFTER the 10s window -- first print should have expired,
+    # so the sum here is just 40K (this print alone), not 80K -- below 75K floor -> no event
+    result = state.record_trade("btcusdt", "Buy", 40_000.0, now=now + wr.WHALE_TRADE_AGG_WINDOW_SEC + 1)
+    assert result is None
+
+
+def test_record_trade_different_sides_have_independent_windows():
+    state = wr.WhaleRadarState()
+    now = 1000.0
+    state.record_trade("btcusdt", "Buy", 40_000.0, now=now)
+    # Sell side print shouldn't combine with the Buy side print
+    result = state.record_trade("btcusdt", "Sell", 40_000.0, now=now + 1)
+    assert result is None
+    assert sum(n for _, n in state.agg_windows["btcusdt"]["Buy"]) == 40_000.0
+    assert sum(n for _, n in state.agg_windows["btcusdt"]["Sell"]) == 40_000.0
+
+
+def test_record_trade_median_window_still_populated_by_single_prints():
+    # even a bypassed single-print (>=150K) should still feed the median-tracking window
+    state = wr.WhaleRadarState()
+    state.record_trade("btcusdt", "Buy", 200_000.0, now=1000.0)
+    assert len(state.trade_windows["btcusdt"]) == 1
 
 
 def test_whale_radar_state_scan_symbol_detects_and_tracks():
