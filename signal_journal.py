@@ -510,11 +510,16 @@ async def run_tracker():
             if rec["status"] in TERMINAL_STATUSES:
                 continue
             price, _age = live_prices.get_live_price(rec["symbol"])
-            if price is None:
-                continue
 
             if rec["status"] == "PENDING":
-                if _touches_entry(price, rec["entry_lo"], rec["entry_hi"]):
+                # 72ч-истечение НЕ требует цены -- раньше стояло ПОСЛЕ "price is None:
+                # continue" ниже, так что символ без WS-покрытия не только не получал
+                # SL/TP-исход, но даже не истекал по таймеру, вися в PENDING бесконечно
+                # (найдено в ретроспективном пересчёте journal/signals.json,
+                # PROGRESS.md 2026-07-11 -- пример id=11 NEX, 146ч при пороге 72ч).
+                # Приоритет входа над истечением сохранён (тот же if/elif, что был) --
+                # просто вход требует цены явно, истечение больше не заблокировано ею.
+                if price is not None and _touches_entry(price, rec["entry_lo"], rec["entry_hi"]):
                     rec["status"] = "ENTERED"
                     rec["entered_ts"] = now
                     rec["entered_price"] = price
@@ -527,8 +532,12 @@ async def run_tracker():
                     rec["updated_ts"] = now
                     changed = True
                     closed = True
+                continue
 
-            elif rec["status"] == "ENTERED":
+            if price is None:
+                continue
+
+            if rec["status"] == "ENTERED":
                 status, level = _check_outcome(rec["direction"], price, rec["sl"],
                                                 rec["tp1"], rec["tp2"], rec["tp3"])
                 if status:
