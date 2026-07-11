@@ -672,6 +672,76 @@ async def run_watchdog(bot: Bot):
                 pass
 
 
+DEPLOY_STALE_THRESHOLD_SEC = 15 * 60  # "Пакетный ритм", живая находка 2026-07-11:
+# Railway молча SKIPPED-нул несколько деплоев подряд после серии быстрых пушей --
+# ~50 мин без нового deployment ID, никакого алерта не было, найдено только ручной
+# проверкой `railway deployment list`. Этот watchdog закрывает дыру.
+_deploy_check_boot_sha = {"sha": None, "date": None}
+_deploy_alerted_shas = set()  # анти-спам: один алерт на конкретный "застрявший" коммит
+
+
+def _fetch_main_head_sync():
+    """GET /repos/{owner}/{repo}/commits/main -- (sha, committer_date_iso) либо
+    (None, None), если GitHub не настроен/недоступен. Переиспользует
+    signal_journal._github_configured()/_github_api_base()/_github_headers() --
+    тот же токен/репо, что уже используется для journal/signals.json, второй
+    токен заводить не пришлось."""
+    if not signal_journal._github_configured():
+        return None, None
+    try:
+        r = requests.get(f"{signal_journal._github_api_base()}/commits/main",
+                          headers=signal_journal._github_headers(), timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        sha = data.get("sha")
+        date_str = data.get("commit", {}).get("committer", {}).get("date")
+        return sha, date_str
+    except Exception as e:
+        log.error(f"[DEPLOY-CHECK] fetch main HEAD failed: {e}")
+        return None, None
+
+
+async def check_deploy_freshness(bot: Bot):
+    """Раз в 5 мин (см. scheduler.add_job ниже): сравнивает HEAD main на GitHub с
+    коммитом, который был HEAD в момент СТАРТА этого процесса (`_deploy_check_
+    boot_sha`, зафиксирован в post_init -- прокси для "какой коммит реально
+    задеплоен", т.к. Railway не прокидывает git SHA как env-переменную процессу,
+    проверено `railway run env` -- нет `RAILWAY_GIT_COMMIT_SHA`). Если main ушёл
+    вперёд и с момента ПУША прошло больше DEPLOY_STALE_THRESHOLD_SEC (15 мин), а
+    этот процесс всё ещё живёт на старом коммите -- Railway, скорее всего,
+    SKIPPED-нул деплой -- один алерт на застрявший коммит, не спамит на каждый тик."""
+    import datetime as _dt
+    import os
+    if _deploy_check_boot_sha["sha"] is None:
+        return  # GitHub не настроен при старте -- честно не проверяем, не выдумываем
+    sha, date_str = _fetch_main_head_sync()
+    if not sha or not date_str or sha == _deploy_check_boot_sha["sha"]:
+        return
+    if sha in _deploy_alerted_shas:
+        return
+    try:
+        commit_dt = _dt.datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        age_sec = (_dt.datetime.now(_dt.timezone.utc) - commit_dt).total_seconds()
+    except (ValueError, TypeError):
+        return
+    if age_sec < DEPLOY_STALE_THRESHOLD_SEC:
+        return
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    mins = int(age_sec / 60)
+    try:
+        await bot.send_message(
+            owner_id,
+            f"⚠️ Пуш в main {mins} мин назад ещё не задеплоился -- этот процесс всё ещё "
+            f"на коммите `{_deploy_check_boot_sha['sha'][:7]}`, main на `{sha[:7]}`. "
+            f"Похоже на Railway SKIPPED-деплой (см. PROGRESS.md 2026-07-11) -- проверь "
+            f"`railway deployment list` / `railway up --ci -y` вручную.",
+            parse_mode="Markdown",
+        )
+        _deploy_alerted_shas.add(sha)
+    except Exception as e:
+        log.error(f"[DEPLOY-CHECK] alert send failed: {e}")
+
+
 async def run_daily_backup(bot: Bot):
     """Раз в сутки -- версионированный снапшот подписчиков и журнала в GitHub
     (backups/<date>/...), отдельно от рабочих data/chat_ids.json и journal/signals.json,
@@ -10585,6 +10655,13 @@ async def _start_pump_detector(app):
     # подписчик (fallback-владелец) появился мгновением позже. _load_signals() -- по той
     # же причине сюда же, до первого тика.
     _load_signals()
+
+    # «Пакетный ритм», деплой-watchdog: фиксируем HEAD main НА МОМЕНТ старта этого
+    # процесса -- прокси для "какой коммит реально задеплоен" (см. check_deploy_
+    # freshness() докстринг). Best-effort -- если GitHub недоступен прямо сейчас,
+    # watchdog просто не активируется в этом процессе (не ретраит бесконечно).
+    _deploy_check_boot_sha["sha"], _deploy_check_boot_sha["date"] = _fetch_main_head_sync()
+
     scheduler = AsyncIOScheduler(timezone=TZ)
 
     # Heartbeat-обёртки (ROADMAP П1) -- регистрируем в планировщике heartbeat_* вместо
@@ -10640,6 +10717,14 @@ async def _start_pump_detector(app):
         run_watchdog,
         "interval",
         minutes=10,
+        args=[app.bot],
+    )
+    # Деплой-watchdog («Пакетный ритм», п.2) -- main ушёл вперёд >15 мин, а этот
+    # процесс всё ещё на старом коммите -> похоже на Railway SKIPPED-деплой.
+    scheduler.add_job(
+        check_deploy_freshness,
+        "interval",
+        minutes=5,
         args=[app.bot],
     )
     # Дневной версионированный бэкап БД (ROADMAP П1.4) -- в 03:00 по TZ бота, вне часов
