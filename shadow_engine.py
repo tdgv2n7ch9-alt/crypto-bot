@@ -160,9 +160,42 @@ def _sync_to_github_sync(new_record: dict) -> bool:
     return False
 
 
-def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None) -> dict:
+def compute_whale_confluence(classified_by_side: dict, whale_zones: dict) -> dict:
+    """Патч 06 (Whale Radar, Блок 2): пересечение K-LVL POI-зон
+    (`result['block4_poi']['classified_by_side']`, только `klvl=True` -- обычные S/R
+    дали бы слишком много ложных пересечений) с текущими whale-зонами
+    (`whale_radar.WhaleRadarState.get_zones(symbol)`). Чистая функция, без сети/I-O --
+    тестируется без реального стакана. `below`-сторона POI сопоставляется с `bid`-
+    зонами, `above` с `ask` НАПРЯМУЮ, без сверки с last_price: bid < ask всегда
+    гарантировано движком биржи (иначе ордера были бы немедленно исполнены), так что
+    bid-зоны структурно всегда ниже цены, ask -- всегда выше."""
+    matches = []
+    side_map = {"below": "bid", "above": "ask"}
+    for poi_side, whale_side in side_map.items():
+        klvl_zones = [z for z in (classified_by_side.get(poi_side) or []) if z.get("klvl")]
+        if not klvl_zones:
+            continue
+        for wz in (whale_zones.get(whale_side) or []):
+            for kz in klvl_zones:
+                if wz["price_lo"] <= kz["hi"] and wz["price_hi"] >= kz["lo"]:
+                    matches.append({
+                        "poi_side": poi_side, "poi_lo": kz["lo"], "poi_hi": kz["hi"],
+                        "poi_touches": kz.get("touches"),
+                        "whale_side": whale_side, "whale_lo": wz["price_lo"],
+                        "whale_hi": wz["price_hi"], "whale_usd": wz["total_usd"],
+                    })
+    return {"whale_klvl_confluence": bool(matches), "whale_klvl_matches": matches}
+
+
+def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
+                    whale_zones: dict = None) -> dict:
     """Строит один shadow-рекорд по уже посчитанному result (fa_engine.build_full_analysis()).
-    Каждый патч обёрнут в свой try/except -- падение одного не портит остальные поля."""
+    Каждый патч обёрнут в свой try/except -- падение одного не портит остальные поля.
+    `whale_zones` — опционально, {"bid": [...], "ask": [...]} от
+    `whale_radar.WhaleRadarState.get_zones(symbol)` (обычно прокинуто через
+    `bot_module.get_whale_zones(symbol)`, см. `signal_loop._send_alert()`); None,
+    если Whale Radar не запущен/недоступен — патч 06 тогда честно пропускается
+    (не выдумывает confluence на отсутствующих данных)."""
     b11 = result.get("block11_trade_plan", {}) or {}
     direction = b11.get("direction")
     candles_4h = result.get("candles_4h") or []
@@ -244,6 +277,25 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None) 
         except Exception as e:
             discrepancy.append(f"bpr calc failed: {e}")
 
+    # Патч 06: Whale Radar confluence с K-LVL POI-зонами (Блок 2, 2026-07-11, решение
+    # владельца -- "влияние на скоринг только shadow"). `whale_zones` приходит УЖЕ
+    # посчитанным от вызывающей стороны (`bot_module.get_whale_zones(symbol)`, читает
+    # живое состояние `whale_radar.WhaleRadarState`) -- сам compute_shadow() не делает
+    # сетевых вызовов и не знает про whale_radar напрямую, только про готовые данные.
+    whale_conf = {"whale_klvl_confluence": False, "whale_klvl_matches": []}
+    if whale_zones is not None:
+        try:
+            classified = (result.get("block4_poi", {}) or {}).get("classified_by_side") or {}
+            whale_conf = compute_whale_confluence(classified, whale_zones)
+            if whale_conf["whale_klvl_confluence"]:
+                affected.append("06-whale-confluence")
+                discrepancy.append(
+                    f"whale: {len(whale_conf['whale_klvl_matches'])} K-LVL зон(а) "
+                    f"пересекается с whale-зоной(ами) в стакане"
+                )
+        except Exception as e:
+            discrepancy.append(f"whale confluence calc failed: {e}")
+
     return {
         "ts": time.time(),
         "symbol": symbol,
@@ -258,6 +310,8 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None) 
         "divergence": {k: v for k, v in divergence.items() if k != "detail"} if divergence else {},
         "bpr_zone_count": len(bpr_zones),
         "bpr_confluence": bpr_confluence,
+        "whale_klvl_confluence": whale_conf["whale_klvl_confluence"],
+        "whale_klvl_matches": whale_conf["whale_klvl_matches"],
         "patches_affected": affected,
         "discrepancy": discrepancy,
         "live_journal_id": live_journal_id,
@@ -270,27 +324,29 @@ def _write_local(record: dict) -> bool:
     return _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
 
 
-def log_shadow(symbol: str, result: dict, bot_module, live_journal_id=None) -> bool:
+def log_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
+                whale_zones: dict = None) -> bool:
     """Синхронная версия -- считает shadow-рекорд и дописывает ТОЛЬКО в локальный файл
     (без GitHub-персистентности). Используется в тестах/смоуках и как фоллбек, если нет
     активного event loop. Для боевого пути из signal_loop.py используется
     log_shadow_async() ниже (та же локальная запись + best-effort пуш в GitHub)."""
     try:
-        record = compute_shadow(symbol, result, bot_module, live_journal_id)
+        record = compute_shadow(symbol, result, bot_module, live_journal_id, whale_zones)
         return _write_local(record)
     except Exception as e:
         print(f"shadow_engine.log_shadow failed for {symbol}: {e}")
         return False
 
 
-async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_id=None) -> bool:
+async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_id=None,
+                            whale_zones: dict = None) -> bool:
     """Боевой путь (вызывается из signal_loop._send_alert). Один расчёт record (не
     дважды -- иначе локальная и GitHub-копии разошлись бы по ts), локальная запись
     всегда (быстро, без сети) + best-effort пуш В ТОЙ ЖЕ record в GitHub через
     run_in_executor (не блокирует event loop, не критичен -- Railway ephemeral, но
     локальная копия уже сохранена к этому моменту)."""
     try:
-        record = compute_shadow(symbol, result, bot_module, live_journal_id)
+        record = compute_shadow(symbol, result, bot_module, live_journal_id, whale_zones)
     except Exception as e:
         print(f"shadow_engine.log_shadow_async: compute failed for {symbol}: {e}")
         return False

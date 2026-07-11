@@ -188,6 +188,47 @@ def notional_usd(price: float, size: float) -> float:
     return price * size
 
 
+# ── Кластеризация уровней в зоны (Блок 2) ────────────────────────────────────
+
+CLUSTER_TOLERANCE_PCT = 0.15   # уровни в пределах X% друг от друга -> одна зона; ПЕРВОЕ
+                                # ПРИБЛИЖЕНИЕ, не откалибровано на реальном распределении
+
+
+def cluster_levels(levels: dict, tolerance_pct: float = CLUSTER_TOLERANCE_PCT) -> list:
+    """Группирует близкие ценовые уровни ОДНОЙ стороны книги в зоны с суммарным $.
+    `levels`: {price: notional_usd} (обычно — выход `classify_whale_levels()`, уже
+    только китовые уровни). Жадный проход по отсортированным ценам: очередной уровень
+    входит в текущую зону, если он в пределах `tolerance_pct` от ПОСЛЕДНЕЙ цены уже
+    добавленной в зону (не от центра зоны — иначе широкая зона могла бы "растягиваться"
+    без ограничения на шаг между соседями). Возвращает список зон, отсортированный по
+    цене, каждая: {"price_lo", "price_hi", "mid", "total_usd", "level_count"}."""
+    if not levels:
+        return []
+    prices = sorted(levels.keys())
+    zones = []
+    current = [prices[0]]
+    for p in prices[1:]:
+        prev = current[-1]
+        if prev > 0 and abs(p - prev) / prev * 100 <= tolerance_pct:
+            current.append(p)
+        else:
+            zones.append(current)
+            current = [p]
+    zones.append(current)
+
+    out = []
+    for zone_prices in zones:
+        total_usd = sum(levels[p] for p in zone_prices)
+        out.append({
+            "price_lo": zone_prices[0],
+            "price_hi": zone_prices[-1],
+            "mid": sum(zone_prices) / len(zone_prices),
+            "total_usd": round(total_usd, 2),
+            "level_count": len(zone_prices),
+        })
+    return out
+
+
 def is_whale_trade(recent_notionals: list, notional: float,
                     min_notional: float = WHALE_TRADE_MIN_NOTIONAL_USD,
                     median_mult: float = WHALE_TRADE_MEDIAN_MULT,
@@ -341,6 +382,31 @@ class WhaleRadarState:
         window.append(notional)
         return is_whale
 
+    def get_zones(self, symbol: str, tolerance_pct: float = CLUSTER_TOLERANCE_PCT) -> dict:
+        """Текущие китовые зоны символа (после кластеризации), по сторонам:
+        {"bid": [zone, ...], "ask": [zone, ...]}, каждая зона дополнена "age_sec" —
+        сколько живёт СТАРЕЙШИЙ из уровней, вошедших в зону (по `self.lifetimes`,
+        которые заполняет `scan_symbol()`/`diff_whale_levels()`) — None, если ни один
+        уровень зоны ещё не встречался в lifetimes (например, зона собрана напрямую
+        в тесте, не через живой скан). Читает ПОСЛЕДНИЙ снимок `self.whale_levels`,
+        обновляемый `scan_symbol()` не чаще, чем раз в `WHALE_SCAN_INTERVAL_SEC` —
+        так что зоны могут отставать от книги на этот интервал, это ожидаемо (не race
+        condition, компромисс цена/CPU, см. докстринг модуля). Символ без записей
+        (ещё не сканировался) -> пустые списки, не ошибка."""
+        levels = self.whale_levels.get(symbol, {"bid": {}, "ask": {}})
+        lifetimes = self.lifetimes.get(symbol, {"bid": {}, "ask": {}})
+        now = time.time()
+        out = {}
+        for side in ("bid", "ask"):
+            zones = cluster_levels(levels.get(side, {}), tolerance_pct)
+            side_lifetimes = lifetimes.get(side, {})
+            for z in zones:
+                ages = [now - ts for price, ts in side_lifetimes.items()
+                        if z["price_lo"] <= price <= z["price_hi"]]
+                z["age_sec"] = round(min(ages), 1) if ages else None
+            out[side] = zones
+        return out
+
     def scan_symbol(self, symbol: str, now: float) -> list:
         """Полное сканирование книги символа на китов, возвращает JSONL-готовые
         событийные dict'ы (не пишет файл — вызывающий решает, что делать)."""
@@ -388,15 +454,23 @@ async def _scan_loop(state: WhaleRadarState, symbols: list, log_fn=append_event)
 
 
 async def run_whale_radar(symbols: list = None, duration_sec: float = None,
-                           log_fn=append_event, verbose: bool = True):
+                           log_fn=append_event, verbose: bool = True,
+                           state: "WhaleRadarState" = None):
     """Главный цикл сбора: подписка orderbook.200.*/publicTrade.* по `symbols`
     (по умолчанию — топ-N по обороту), реконнект при разрыве/тишине, периодическое
     сканирование книг на китов + немедленное логирование крупных сделок.
 
     `duration_sec` — если задан, корутина завершается сама через это время (для
-    смоук-тестов); None — работает бесконечно (для интеграции в боевой процесс,
-    НЕ используется в Блоке 1, см. докстринг модуля)."""
-    state = WhaleRadarState()
+    смоук-тестов); None — работает бесконечно (Блок 2: боевой процесс запускает эту
+    корутину как фоновую asyncio-задачу, см. `bot.py:_start_pump_detector`).
+
+    `state` — если передан существующий `WhaleRadarState` (пустой или нет), функция
+    мутирует ЕГО, а не создаёт новый — так вызывающий код (например, `bot.py`) может
+    держать ссылку на состояние ДО того, как бесконечный цикл начнёт его наполнять,
+    и читать текущие зоны (`state.get_zones(symbol)`) из другого места того же
+    event loop, пока эта корутина работает в фоне."""
+    if state is None:
+        state = WhaleRadarState()
     if symbols is None:
         symbols = fetch_top_symbols()
     if not symbols:

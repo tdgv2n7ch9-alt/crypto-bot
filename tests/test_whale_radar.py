@@ -115,6 +115,58 @@ def test_notional_usd():
     assert wr.notional_usd(10.0, 5.0) == 50.0
 
 
+def test_cluster_levels_empty():
+    assert wr.cluster_levels({}) == []
+
+
+def test_cluster_levels_merges_close_prices():
+    # 100.0, 100.05, 100.1 -- each step ~0.05% apart, well within 0.15% tolerance -> one zone
+    levels = {100.0: 100_000.0, 100.05: 50_000.0, 100.1: 80_000.0}
+    zones = wr.cluster_levels(levels, tolerance_pct=0.15)
+    assert len(zones) == 1
+    z = zones[0]
+    assert z["price_lo"] == 100.0
+    assert z["price_hi"] == 100.1
+    assert z["level_count"] == 3
+    assert z["total_usd"] == 230_000.0
+
+
+def test_cluster_levels_separates_far_prices():
+    # 100.0 and 110.0 are ~10% apart -- far beyond tolerance -> two separate zones
+    levels = {100.0: 100_000.0, 110.0: 200_000.0}
+    zones = wr.cluster_levels(levels, tolerance_pct=0.15)
+    assert len(zones) == 2
+    assert zones[0]["price_lo"] == 100.0
+    assert zones[1]["price_lo"] == 110.0
+
+
+def test_cluster_levels_step_chain_not_transitive_beyond_tolerance():
+    # A chain where consecutive steps are within tolerance should still merge into one
+    # zone even though the first and last price differ by more than tolerance overall --
+    # clustering compares each new price to the LAST added price, not the zone start.
+    levels = {100.0: 10_000.0, 100.1: 10_000.0, 100.2: 10_000.0, 100.3: 10_000.0}
+    zones = wr.cluster_levels(levels, tolerance_pct=0.15)
+    assert len(zones) == 1
+    assert zones[0]["level_count"] == 4
+
+
+def test_whale_radar_state_get_zones_clusters_current_levels():
+    state = wr.WhaleRadarState()
+    state.ensure_symbol("btcusdt")
+    state.whale_levels["btcusdt"]["bid"] = {100.0: 150_000.0, 100.05: 90_000.0, 90.0: 500_000.0}
+    state.whale_levels["btcusdt"]["ask"] = {110.0: 300_000.0}
+    zones = state.get_zones("btcusdt")
+    assert len(zones["bid"]) == 2  # {100.0,100.05} cluster + separate 90.0
+    assert len(zones["ask"]) == 1
+    assert zones["ask"][0]["total_usd"] == 300_000.0
+
+
+def test_whale_radar_state_get_zones_unknown_symbol_returns_empty():
+    state = wr.WhaleRadarState()
+    zones = state.get_zones("nosuchsymbol")
+    assert zones == {"bid": [], "ask": []}
+
+
 def test_make_order_event_distance_pct():
     evt = {"event": "appeared", "notional_usd": 60_000.0}
     out = wr.make_order_event("BTCUSDT", "bid", 100.0, evt, last_price=110.0)
@@ -190,6 +242,21 @@ def test_whale_radar_state_scan_symbol_detects_and_tracks():
     })
     events2 = state.scan_symbol("btcusdt", time.time())
     assert any(e["event"] == "disappeared" and e["side"] == "bid" for e in events2)
+
+
+def test_get_zones_age_sec_populated_via_full_scan_path():
+    state = wr.WhaleRadarState()
+    state.ensure_symbol("btcusdt")
+    state.last_price["btcusdt"] = 100.0
+    wr.apply_orderbook_message(state.books["btcusdt"], {
+        "type": "snapshot",
+        "data": {"b": [["99.0", "2000.0"]], "a": []},
+    })
+    state.scan_symbol("btcusdt", time.time())
+    zones = state.get_zones("btcusdt")
+    assert len(zones["bid"]) == 1
+    assert zones["bid"][0]["age_sec"] is not None
+    assert zones["bid"][0]["age_sec"] >= 0
 
 
 def test_fetch_top_symbols_filters_and_sorts(monkeypatch):

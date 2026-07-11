@@ -112,6 +112,7 @@ import signal_loop
 import chart_v3
 import chart_v4
 import narrative
+import whale_radar
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -448,6 +449,92 @@ _PROCESS_START_TS = time.time()
 _job_heartbeats = {}          # name -> {"ts": float, "ok": bool, "detail": str}
 _job_expected_interval_sec = {}   # name -> ожидаемый интервал тика, сек (для /health и watchdog)
 _job_alerted_stale = set()    # чтобы watchdog не спамил на каждый тик, пока джоба не восстановится
+
+# Whale Radar (Блок 1/2) -- НЕ путать с существующим whale_monitor()/"🐋 Whale Monitor"
+# ниже (OI/funding/L-S-ratio институциональный скоринг, другая фича, тот же "кит" в
+# названии случайно совпал). _whale_radar_state -- живое состояние стакана/сделок,
+# создаётся здесь (пустое) ДО запуска фоновой задачи, чтобы get_whale_zones() ниже
+# был безопасен вызывать даже до первого тика (просто вернёт пустые зоны).
+_whale_radar_state = whale_radar.WhaleRadarState()
+
+
+def get_whale_zones(symbol: str) -> dict:
+    """Читает ТЕКУЩИЕ (уже кластеризованные) whale-зоны символа из живого состояния
+    Whale Radar -- используется shadow_engine.compute_shadow() (Патч 06, только
+    чтение, ничего не решает про боевой сигнал). Безопасно вызывать всегда: если
+    Whale Radar ещё не успел просканировать символ (или задача не запущена по
+    какой-то причине), вернёт {"bid": [], "ask": []}, не исключение."""
+    try:
+        return _whale_radar_state.get_zones(symbol.lower())
+    except Exception:
+        return {"bid": [], "ask": []}
+
+
+# Блок 3, п.2: алерт owner-чату на появление крупной лимитки рядом с активным сигналом.
+# Именованные константы -- калибровка владельца (задача: "≥$200K в пределах 3% от цены
+# на активных сигналах"), не выдуманы отдельно от спеки.
+WHALE_ALERT_MIN_USD = 200_000
+WHALE_ALERT_MAX_DISTANCE_PCT = 3.0
+WHALE_ALERT_COOLDOWN_SEC = 30 * 60  # анти-спам: не чаще раза в 30 мин на (символ, сторона)
+_whale_alert_cooldown = {}
+
+
+async def _send_whale_alert(bot: Bot, owner_id: int, event: dict):
+    try:
+        side_label = "БИД (ниже цены)" if event["side"] == "bid" else "АСК (выше цены)"
+        base_symbol = event["symbol"].replace("USDT", "")
+        text = (
+            f"🐋 *Whale Radar — крупная лимитка рядом с активным сигналом*\n\n"
+            f"*{event['symbol']}*: ${event['size_usd']:,.0f} ({side_label}) появилась "
+            f"по цене `{event['price']}` ({event['distance_pct']:+.2f}% от текущей).\n\n"
+            f"_Информационно, не гейт — `/whales {base_symbol}` для деталей._"
+        )
+        await bot.send_message(owner_id, text, parse_mode="Markdown")
+    except Exception as e:
+        print(f"Whale Radar: alert send failed: {e}")
+
+
+def _make_whale_log_fn(bot: Bot, owner_id: int):
+    """Оборачивает whale_radar.append_event() (персистентность всегда, как в Блоке 1)
+    дополнительной проверкой алерт-критериев (Блок 3, п.2). Падение проверки алерта
+    не должно ронять персистентность -- отдельный try/except вокруг неё."""
+    def _log_fn(event):
+        whale_radar.append_event(event)
+        try:
+            if event.get("type") != "whale_order" or event.get("event") != "appeared":
+                return
+            usd = event.get("size_usd", 0)
+            dist = event.get("distance_pct")
+            if usd < WHALE_ALERT_MIN_USD or dist is None or abs(dist) > WHALE_ALERT_MAX_DISTANCE_PCT:
+                return
+            base_symbol = event["symbol"].replace("USDT", "")
+            is_active = (
+                (base_symbol in TOP_LONG_SIGNALS and TOP_LONG_SIGNALS[base_symbol].get("status") == "active") or
+                (base_symbol in TOP_SHORT_SIGNALS and TOP_SHORT_SIGNALS[base_symbol].get("status") == "active")
+            )
+            if not is_active:
+                return
+            key = (event["symbol"], event["side"])
+            now_ts = time.time()
+            if now_ts - _whale_alert_cooldown.get(key, 0) < WHALE_ALERT_COOLDOWN_SEC:
+                return
+            _whale_alert_cooldown[key] = now_ts
+            asyncio.create_task(_send_whale_alert(bot, owner_id, event))
+        except Exception as e:
+            print(f"Whale Radar: alert-check failed: {e}")
+    return _log_fn
+
+
+async def _whale_radar_task(bot: Bot, owner_id: int):
+    """Фоновая задача Whale Radar (Блок 2/3) -- тот же паттерн, что pump_detector: один
+    asyncio.create_task на весь процесс, бесконечный цикл со своим внутренним
+    реконнектом (см. whale_radar.run_whale_radar). Мутирует _whale_radar_state,
+    созданный выше ДО запуска этой задачи -- get_whale_zones() уже может его читать."""
+    try:
+        await whale_radar.run_whale_radar(state=_whale_radar_state, verbose=False,
+                                           log_fn=_make_whale_log_fn(bot, owner_id))
+    except Exception as e:
+        print(f"Whale Radar: фоновая задача упала ({type(e).__name__}: {e})")
 
 
 def _mark_heartbeat(name: str, ok: bool = True, detail: str = ""):
@@ -9861,6 +9948,61 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
+
+async def cmd_whales(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: /whales <symbol> -- топ whale-зоны символа (Whale Radar Блок 3,
+    см. WHALE_RADAR_NOTES.md). НЕ путать с существующим "🐋 Whale Monitor"
+    (callback_data=whale_status) -- та фича про OI/funding/L-S-ratio институциональный
+    скоринг, эта -- про крупные лимитки/сделки в стакане, независимые источники данных.
+    Читает ТЕКУЩЕЕ состояние Whale Radar (что накоплено с момента старта процесса), не
+    делает новых сетевых запросов -- если контур только что стартовал или символ вне
+    топ-N по обороту, зон может не быть, честно об этом сказано, не выдумано.
+    Только показ данных -- не влияет ни на какой боевой сигнал/гейт."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    if not ctx.args:
+        await update.message.reply_text("Использование: `/whales BTC`", parse_mode="Markdown")
+        return
+    symbol = ctx.args[0].upper().replace("USDT", "") + "USDT"
+    zones = get_whale_zones(symbol)
+    all_zones = [dict(z, side=side) for side in ("bid", "ask") for z in zones.get(side, [])]
+    if not all_zones:
+        await update.message.reply_text(
+            f"🐋 *Whale Radar — {symbol}*\n\n"
+            f"Whale-зон пока нет — либо символ вне топ-{whale_radar.TOP_N_SYMBOLS} по "
+            f"обороту (Whale Radar отслеживает только их), либо контур ещё не накопил "
+            f"данные с момента старта процесса.",
+            parse_mode="Markdown")
+        return
+    all_zones.sort(key=lambda z: z["total_usd"], reverse=True)
+
+    def _age_str(age_sec):
+        if age_sec is None:
+            return "возраст неизвестен"
+        h, rem = divmod(int(age_sec), 3600)
+        m, _ = divmod(rem, 60)
+        return f"{h}ч{m}м" if h else f"{m}м"
+
+    lines = [f"🐋 *Whale Radar — {symbol}*", ""]
+    for z in all_zones[:10]:
+        side_label = "🟢 БИД" if z["side"] == "bid" else "🔴 АСК"
+        price_str = (f"{ta_extra.smart_round(z['price_lo'])}"
+                     if z["price_lo"] == z["price_hi"]
+                     else f"{ta_extra.smart_round(z['price_lo'])}–{ta_extra.smart_round(z['price_hi'])}")
+        lines.append(
+            f"{side_label} `{price_str}` — ${z['total_usd']:,.0f} "
+            f"({z['level_count']} уровн., держится {_age_str(z.get('age_sec'))})"
+        )
+    lines += [
+        "",
+        "_Только чтение, не влияет на боевые сигналы/гейты — источник для shadow-"
+        "confluence (Патч 06, см. WHALE_RADAR_NOTES.md/SHADOW_MODE.md)._"
+    ]
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only общий health-check процесса (в отличие от /radar_status -- тот покрывает
     только памп-радар). Аптайм + heartbeat всех фоновых задач + источники данных +
@@ -10147,6 +10289,7 @@ async def _start_pump_detector(app):
     )
     asyncio.create_task(run_pump_detector(ctx))
     asyncio.create_task(run_miniticker_stream(ctx))
+    asyncio.create_task(_whale_radar_task(app.bot, owner_id))
 
     signal_journal.init(app.bot, owner_id)
     await signal_journal.startup_sync()
@@ -10251,6 +10394,7 @@ def main():
     app.add_handler(CommandHandler("stop",      cmd_stop))
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
+    app.add_handler(CommandHandler("whales",       cmd_whales))
     app.add_handler(CommandHandler("health",       cmd_health))
     app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))

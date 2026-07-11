@@ -61,6 +61,52 @@ ZONE_ALPHA_KLVL = 0.32        # K-LVL — ярче
 ZONE_SYNTH_WIDTH_PCT = 0.3    # ширина синтетической зоны, если отдан только уровень (level±%)
 ZONE_MAX_PER_SIDE = 3         # максимум зон с каждой стороны — иначе каша на графике
 
+# Whale Radar (Блок 3) — слой поверх POI/K-LVL. НАМЕРЕННО другие цвета, чем
+# DEMAND_COLOR/SUPPLY_COLOR выше — разные источники данных (POI/K-LVL — структура
+# fa_engine по свечам, whale — живой стакан Bybit прямо сейчас), не должны сливаться
+# визуально в одну и ту же "зону". Первое приближение (не откалибровано на реальном
+# распределении $ по всем 50 символам топ-N, см. WHALE_RADAR_NOTES.md).
+WHALE_COLOR_BID = "#00E5B0"
+WHALE_COLOR_ASK = "#FF6EC7"
+WHALE_MIN_LINEWIDTH = 1.0
+WHALE_MAX_LINEWIDTH = 8.0
+WHALE_LINEWIDTH_REF_USD = 1_000_000.0   # $ notional, дающий MAX_LINEWIDTH (насыщение)
+WHALE_ZONE_MAX_PER_SIDE = 3
+
+
+def whale_zone_linewidth(total_usd: float, min_lw: float = WHALE_MIN_LINEWIDTH,
+                          max_lw: float = WHALE_MAX_LINEWIDTH,
+                          ref_usd: float = WHALE_LINEWIDTH_REF_USD) -> float:
+    """Толщина линии whale-зоны — линейно по $ от min_lw до max_lw, насыщается на
+    ref_usd (не откалибровано, первое приближение). Чистая функция — тестируется без
+    matplotlib."""
+    if total_usd <= 0:
+        return min_lw
+    frac = min(1.0, total_usd / ref_usd)
+    return min_lw + frac * (max_lw - min_lw)
+
+
+def draw_whale_zones(ax, whale_zones: dict, n: int):
+    """Рисует whale-зоны (Whale Radar Блок 2, whale_radar.WhaleRadarState.get_zones())
+    горизонтальными линиями через всю видимую область графика — толщина по $
+    (whale_zone_linewidth). Опционально: whale_zones=None/{} — слой просто не
+    рисуется (тот же паттерн, что zones=None для POI выше), не ошибка."""
+    if not whale_zones:
+        return
+    for side, color in (("bid", WHALE_COLOR_BID), ("ask", WHALE_COLOR_ASK)):
+        for z in (whale_zones.get(side) or [])[:WHALE_ZONE_MAX_PER_SIDE]:
+            mid = z.get("mid")
+            usd = z.get("total_usd", 0)
+            if mid is None:
+                continue
+            lw = whale_zone_linewidth(usd)
+            ax.axhline(mid, color=color, linewidth=lw, alpha=0.55, zorder=1, linestyle="-")
+            # без эмодзи -- DejaVu Sans (шрифт matplotlib) не содержит 🐋, только
+            # предупреждение при рендере, глиф всё равно не виден на PNG; W-префикс
+            # + цвет линии уже достаточно отличает слой от POI/K-LVL зон
+            ax.text(n - 1, mid, f"W ${usd/1000:,.0f}K", color=color, fontsize=7.5,
+                    va="center", ha="left", alpha=0.9, zorder=6, fontweight="bold")
+
 
 def _fmt_price(v) -> str:
     if v is None:
@@ -165,13 +211,17 @@ def build_trade_chart_v4(symbol: str, candles: list, direction: str,
                          tp1: float, tp2: float = None, tp3: float = None,
                          rr: float = None, key_high: float = None, key_low: float = None,
                          tf_label: str = "2h", zones: dict = None,
-                         candles_4h: list = None) -> io.BytesIO:
+                         candles_4h: list = None, whale_zones: dict = None) -> io.BytesIO:
     """Рендерит PNG график сделки (Chart v4 = v3 + мульти-ТФ зоны + стрелка сценария).
     Параметры entry_levels/sl/tp1/... -- как в chart_v3.build_trade_chart (та же семантика,
     те же значения по умолчанию). zones: {"above":[...],"below":[...]} из
     ta_extra.find_sr_zones() (сырой или уже K-LVL-классифицированный) -- опционально, при
     отсутствии зоны просто не рисуются. candles_4h: только для K-LVL-классификации, если
-    zones ещё не классифицированы -- опционально.
+    zones ещё не классифицированы -- опционально. whale_zones (Блок 3, опционально):
+    {"bid":[...],"ask":[...]} из whale_radar.WhaleRadarState.get_zones(symbol) --
+    отдельный слой горизонтальных линий, толщина по $ (см. draw_whale_zones выше),
+    визуально отличается цветом от POI/K-LVL (разные источники данных). Вызывающая
+    сторона решает, передавать ли его -- график сам не запрашивает whale-данные.
     Возвращает None, если данных недостаточно для осмысленного графика."""
     if not candles or len(candles) < 20 or not entry_levels:
         return None
@@ -215,6 +265,9 @@ def build_trade_chart_v4(symbol: str, candles: list, direction: str,
         body_h = abs(c["close"] - c["open"]) or (c["high"] - c["low"]) * 0.01 or price * 0.0005
         ax.add_patch(patches.Rectangle((i - w / 2, min(c["open"], c["close"])), w, body_h,
                                        linewidth=0, facecolor=col, alpha=0.95, zorder=3))
+
+    # --- Whale Radar (Блок 3) -- за свечами (zorder=1), поверх POI-прямоугольников (zorder=0) ---
+    draw_whale_zones(ax, whale_zones, n)
 
     # --- Мульти-ТФ зоны (POI/K-LVL) -- позади свечей (zorder=0) ---
     prepared_zones = prepare_zones_for_chart(zones, candles_4h)
