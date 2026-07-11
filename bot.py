@@ -6502,32 +6502,41 @@ def format_position_size(ps: dict, is_long: bool = True) -> str:
 # 
 
 def get_killzone_status() -> dict:
-    """
-    ICT Killzones       .
-      UTC+3 (Istanbul).
+    """ICT Killzones -- расписание по UTC+3 (Стамбул).
 
-    Asia Session:    01:0004:00 UTC+3  ( ,   sweep)
-    London Open:     10:0012:00 UTC+3  (   )
-    London Close:    18:0019:00 UTC+3  (  )
-    NY Open:         16:0018:00 UTC+3  (   )
-    NY Close:        23:0000:00 UTC+3  (   )
+    ОБНОВЛЕНО 2026-07-11 (владелец): часы Asia/London Open/NY Open заменены на
+    METHODOLOGY_CORE.md §8 (источник: "Урок 5. Время и киллзоны.mp4" [1662s-1902s]).
+    Раньше это был теневой Патч 01 (см. get_killzone_status_shadow() ниже, ночная
+    сессия #2 Блок 1) -- изолированный исторический бэктест (100 символов, ~12 мес,
+    см. PATCH_IMPACT.md "Изоляция 01/02") показал улучшение по всем метрикам: win
+    rate 53.6%->56.2%, avg R +0.832->+1.001, expectancy +0.815->+0.986,
+    profit factor 2.86->3.37, сделок 2864->4796 (больше, не меньше -- более широкие
+    часы дают checklist-пункту 4 (fa_engine Блок 5) чаще проходить). Владелец
+    одобрил перенос в бой. London Close/NY Close не подтверждены источником,
+    оставлены как были (то же ограничение, что и у теневой версии).
+
+    Азиатская сессия: 00:00-08:00 UTC+3 (низкая волатильность, часто рендж/хай-лоу дня)
+    Лондон Open:      09:00-12:00 UTC+3 (наибольшие объёмы дня, ищем хай/лоу дня)
+    NY Open:          14:00-16:00 UTC+3 (продолжение диапазона, коррекция после Лондона)
+    Лондон Close:     18:00-19:00 UTC+3 (не подтверждено источником)
+    NY Close:         23:00-00:00 UTC+3 (не подтверждено источником)
     """
     now = datetime.now(TZ)
     h   = now.hour
     m   = now.minute
-    hm  = h * 60 + m  #   
+    hm  = h * 60 + m  # минут с полуночи
 
     zones = [
-        {"name": " Asia Session",   "start": 1*60,  "end": 4*60,  "quality": "B",
-         "desc": "Sweep ,  "},
-        {"name": " London Open",   "start": 10*60, "end": 12*60, "quality": "A+",
-         "desc": "     "},
-        {"name": " NY Open",       "start": 16*60, "end": 18*60, "quality": "A",
-         "desc": "   ,  "},
-        {"name": " London Close",   "start": 18*60, "end": 19*60, "quality": "B",
-         "desc": "    "},
-        {"name": " NY Close",       "start": 23*60, "end": 24*60, "quality": "C",
-         "desc": "  , "},
+        {"name": "🌏 Азиатская сессия", "start": 0*60,  "end": 8*60,  "quality": "B",
+         "desc": "Низкая волатильность, часто рендж или хай/лоу дня"},
+        {"name": "🇬🇧 Лондон Open",     "start": 9*60,  "end": 12*60, "quality": "A+",
+         "desc": "Наибольшие объёмы дня, ищем хай/лоу дня"},
+        {"name": "🇺🇸 NY Open",         "start": 14*60, "end": 16*60, "quality": "A",
+         "desc": "Продолжение дневного диапазона, часто коррекция после Лондона"},
+        {"name": "🇬🇧 Лондон Close",    "start": 18*60, "end": 19*60, "quality": "B",
+         "desc": "Закрытие Лондона, не подтверждено источником"},
+        {"name": "🇺🇸 NY Close",        "start": 23*60, "end": 24*60, "quality": "C",
+         "desc": "Закрытие Нью-Йорка, не подтверждено источником"},
     ]
 
     active = None
@@ -6538,7 +6547,7 @@ def get_killzone_status() -> dict:
             active["remaining_min"] = remaining
             break
 
-    #  
+    # следующая killzone
     next_zone = None
     future = [(z, z["start"] - hm if z["start"] > hm else z["start"] + 24*60 - hm)
               for z in zones]
@@ -6547,14 +6556,14 @@ def get_killzone_status() -> dict:
         next_zone = future[0][0].copy()
         next_zone["in_min"] = future[0][1]
 
-    #   
+    # вне активных killzone
     if active:
         is_good = active["quality"] in ("A+", "A")
     else:
         is_good = False
-        # Dead zone   
-        active = {"name": " Dead Zone", "quality": "D",
-                  "desc": "    ", "remaining_min": 0}
+        # Dead zone -- вне активных killzone
+        active = {"name": "⚪ Dead Zone", "quality": "D",
+                  "desc": "Вне активных killzone", "remaining_min": 0}
 
     return {
         "active":    active,
@@ -6567,13 +6576,16 @@ def get_killzone_status() -> dict:
 
 def get_killzone_status_shadow() -> dict:
     """ПАТЧ 01 (ночная сессия #2, Блок 1 -- теневой контур, см. SHADOW_MODE.md /
-    patches/01-killzone-hours/README.md) -- та же логика, что и get_killzone_status(),
-    но с часами по knowledge/METHODOLOGY_CORE.md §8 (источник: Урок 5. Время и
-    киллзоны.mp4 [1662s-1902s]): Asia до 08:00, London 09:00-12:00, NY 14:00-16:00
-    (было 10:00-12:00/16:00-18:00 в live-версии -- расхождение до 2ч для NY).
-    London Close/NY Close не подтверждены источником -- оставлены как в live.
-    НЕ заменяет и не вызывается вместо get_killzone_status() -- используется только
-    shadow_engine.py для теневого сравнения, live-поведение бота не меняет ни на бит."""
+    patches/01-killzone-hours/README.md).
+
+    ЧЕСТНО, 2026-07-11: владелец одобрил перенос этого патча в бой (см.
+    PATCH_IMPACT.md "Изоляция 01/02") -- get_killzone_status() (live, выше) теперь
+    считает ТЕМИ ЖЕ часами, что и эта функция. Сравнение в shadow_engine.compute_
+    shadow() (патч "01-killzone-hours": kz_live vs kz_shadow) с этого момента ВСЕГДА
+    будет live_good == shadow_good -- сравнивать уже нечего, эта функция стала
+    неактивным дубликатом. НЕ удалена намеренно (минимальный дифф промоушена патча,
+    см. коммит) -- удаление самой функции и её вызова в shadow_engine.py оставлено
+    отдельной задачей уборки, не входит в этот дифф."""
     now = datetime.now(TZ)
     h   = now.hour
     m   = now.minute
