@@ -57,15 +57,23 @@ def _tag_patch_factors(store: eng.HistoricalStore, trade: dict) -> dict:
     return tags
 
 
-def run_backtest_patched(symbols: list, data_dir=eng.DATA_DIR, progress_log=None) -> dict:
-    """Прогоняет run_backtest с патчами 01+02 включёнными (гейт), возвращает те же
-    поля что и eng.run_backtest, плюс "patch_tags" на каждой сделке (03/04/05,
-    информационно)."""
+def run_backtest_patched(symbols: list, data_dir=eng.DATA_DIR, progress_log=None,
+                          apply_killzone_patch: bool = True,
+                          apply_rr_gate_patch: bool = True) -> dict:
+    """Прогоняет run_backtest с патчами 01 (killzone-hours)/02 (rr-gate 2.0) включёнными
+    по отдельности или вместе -- ночная сессия #3 не разделила эффект (PATCH_IMPACT.md,
+    честно помечено как candidate), решение #1 топ-5 владельцу, выполнено 2026-07-11
+    по прямому запросу. `apply_killzone_patch`/`apply_rr_gate_patch=False` отключает
+    патч для ЭТОГО прогона -- возвращает те же поля, что и eng.run_backtest, плюс
+    "patch_tags" на каждой сделке (03/04/05, информационно, как раньше, независимо от
+    флагов 01/02)."""
     orig_kz = bot.get_killzone_status
     orig_rr_gate = ta_extra.SR_MIN_RR_TP1
     try:
-        bot.get_killzone_status = bot.get_killzone_status_shadow
-        ta_extra.SR_MIN_RR_TP1 = 2.0
+        if apply_killzone_patch:
+            bot.get_killzone_status = bot.get_killzone_status_shadow
+        if apply_rr_gate_patch:
+            ta_extra.SR_MIN_RR_TP1 = 2.0
         result = eng.run_backtest(symbols, data_dir=data_dir, progress_log=progress_log)
     finally:
         bot.get_killzone_status = orig_kz
