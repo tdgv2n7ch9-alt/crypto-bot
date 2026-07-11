@@ -366,6 +366,58 @@ async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_i
     return True
 
 
+def _adapt_send_scheduled_result(a: dict) -> dict:
+    """Адаптер полей: `bot.real_full_analysis()` (используется `send_scheduled()`) отдаёт
+    ПЛОСКИЙ словарь с другими именами полей, чем `fa_engine.build_full_analysis()`
+    (используется `signal_loop.py`) -- `compute_shadow()` ожидает
+    `result["block11_trade_plan"]` + `result["candles_4h"]`. Пакет 4 М2 (владелец,
+    "ДА" -- подключить shadow_engine к send_scheduled). Ничего не пересчитывает --
+    только переименовывает уже посчитанные поля в ожидаемую форму."""
+    direction = "long" if a.get("is_long") else "short"
+    return {
+        "block11_trade_plan": {
+            "direction": direction,
+            "entry1": a.get("entry1"), "entry3": a.get("entry3"),
+            "sl": a.get("sl"),
+            "tp1": a.get("tp1"), "tp2": a.get("tp2"), "tp3": a.get("tp3"),
+            "rr_tp1": a.get("rr_tp1"),
+        },
+        "candles_4h": a.get("candles_4h") or [],
+    }
+
+
+async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
+                                           promoted_live: bool,
+                                           gate_reasons: list = None) -> bool:
+    """Боевой путь -- вызывается из `bot.send_scheduled()` (Пакет 4 М2, владелец "ДА"):
+    КАЖДЫЙ кандидат, дошедший до `real_full_analysis()` (совпало направление прескрина
+    со структурой), прогоняется через тот же 5-патчевый теневой контур
+    (`compute_shadow()`), что и `signal_loop.py` -- независимо от того, прошёл ли он
+    боевые гейты `send_scheduled()`. Параллельная запись -- боевые гейты/рассылка
+    подписчикам НИКОГДА не читают этот модуль и не меняются этим вызовом.
+    `promoted_live`/`gate_reasons` -- честно фиксируют боевой исход рядом с теневым
+    (в отличие от signal_loop-пути, где до shadow доходят только уже-отправленные
+    сигналы -- здесь видны и отброшенные гейтом, что и было целью подключения)."""
+    try:
+        adapted = _adapt_send_scheduled_result(a)
+        record = compute_shadow(symbol, adapted, bot_module, live_journal_id=None)
+    except Exception as e:
+        print(f"shadow_engine.log_send_scheduled_shadow_async: compute failed for {symbol}: {e}")
+        return False
+    record["source"] = "send_scheduled"
+    record["promoted_live"] = promoted_live
+    record["gate_reasons"] = gate_reasons or []
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        print(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
+    return True
+
+
 def _build_pump_reversal_record(symbol: str, watch: dict, funding, oi_usd, oi_change_pct,
                                  promoted_live, kz_quality: str = None,
                                  pro_score: float = None) -> dict:

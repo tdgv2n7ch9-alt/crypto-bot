@@ -117,6 +117,7 @@ import level_watch
 import daily_metrics
 import morning_metrics
 import onchain_metrics
+import shadow_engine
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -4945,18 +4946,38 @@ async def send_scheduled(bot: Bot):
             is_long = a["is_long"]
             if is_long != want_long:
                 continue  # прескрин предполагал одно направление, структура даёт другое -- не наш кандидат
-            if a.get("suspicious"):
-                continue
-            if is_long and a["rsi_4h"] > RSI_EXTREME_LONG:
-                continue
-            if not is_long and a["rsi_4h"] < RSI_EXTREME_SHORT:
-                continue
+
+            # Пакет 4 М2 (владелец, "ДА"): гейты собираются в список причин, а не
+            # ранними continue -- НИЧЕГО в самих условиях/порядке/значениях гейтов не
+            # изменено (сравни с прежней цепочкой continue построчно), это ТОЛЬКО
+            # рефакторинг control flow, нужный, чтобы у КАЖДОГО реального кандидата
+            # (прошёл или нет) был ровно один вызов shadow-контура ниже.
             grade = _signal_grade(a, is_long)
+            gate_reasons = []
+            if a.get("suspicious"):
+                gate_reasons.append("suspicious_volume")
+            if is_long and a["rsi_4h"] > RSI_EXTREME_LONG:
+                gate_reasons.append("rsi_extreme_long")
+            if not is_long and a["rsi_4h"] < RSI_EXTREME_SHORT:
+                gate_reasons.append("rsi_extreme_short")
             if not (a["rocket"] >= 60 and grade in ("A+", "A", "B")):
-                continue
+                gate_reasons.append("rocket_or_grade")
             if _counter_trend_blocked(a, "long" if is_long else "short"):
-                continue
+                gate_reasons.append("counter_trend")
             if not a.get("rr_gate_pass"):
+                gate_reasons.append("rr_gate")
+            promoted = not gate_reasons
+
+            # Теневой контур -- параллельная запись, не влияет на promoted/gate_reasons
+            # выше (уже посчитаны) и не блокирует боевой цикл при сбое.
+            try:
+                await shadow_engine.log_send_scheduled_shadow_async(
+                    sym, a, bot_module=sys.modules[__name__],
+                    promoted_live=promoted, gate_reasons=gate_reasons)
+            except Exception as e:
+                log.error(f"[AUTO] shadow_engine (не влияет на боевой сигнал) {sym}: {e}")
+
+            if not promoted:
                 continue
 
             slug = coin.get("slug", sym.lower())
@@ -8259,6 +8280,11 @@ def real_full_analysis(coin: dict) -> dict:
         "entry1": entry1, "entry2": entry2, "entry3": entry3,
         "rr_tp1": rr_tp1, "rr_tp2": rr_tp2, "rr_tp3": rr_tp3,
         "rr_gate_pass": rr_gate_pass, "levels_source": levels_source, "zones": zones,
+        # Пакет 4 М2 (владелец, "ДА"): candles_4h нужны shadow_engine.compute_shadow()
+        # (патчи 03/04/05 -- breaker/mitigation, RSI-дивергенция, BPR) при подключении
+        # send_scheduled к теневому контуру. Уже посчитаны выше в ta = real_ta(sym) --
+        # никаких новых сетевых вызовов, чистое добавление поля.
+        "candles_4h": ta.get("candles_4h", []) if ta["ok"] else [],
     }
 
 
