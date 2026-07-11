@@ -24,3 +24,7 @@ knowledge/_ocr_batch.log
 backtest/data/
 backtest/_progress.log
 backtest/_download_stdout.log
+
+# Whale Radar (Блок 1) -- события в стакане/сделках, локальный лог с ротацией,
+# не версионируется (тот же принцип, что backtest/data/ -- сырые данные, не код).
+data/whale/
