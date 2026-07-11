@@ -57,6 +57,32 @@ WATCH_ZONES_HISTORY_DIR = os.path.join(_BASE_DIR, "journal", "watch_zones_histor
 
 _META_KEYS = ("updated", "source")
 
+# Лог касаний зон (Этап 4 АПГРЕЙД 11.07, "Метрики дня") -- тот же JSONL-per-день
+# паттерн, что whale_radar.py (EVENTS_DIR/_events_path/append_event). ЧЕСТНО: это
+# ЛОКАЛЬНЫЙ файл на диске Railway-контейнера, не синхронизируется в GitHub -- при
+# редеплое/рестарте процесса теряется (тот же нюанс, что у data/whale/ в
+# whale_radar.py). Для дневного дайджеста это значит: касания ДО последнего
+# рестарта процесса в этот день не попадут в отчёт -- честно, не выдаётся за
+# полную историю дня.
+EVENTS_DIR = os.path.join(_BASE_DIR, "data", "level_watch")
+
+
+def _events_path(dt=None) -> str:
+    import datetime as _dt
+    dt = dt or _dt.datetime.now(_dt.timezone.utc)
+    return os.path.join(EVENTS_DIR, f"level_watch_events-{dt.strftime('%Y-%m-%d')}.jsonl")
+
+
+def append_event(event: dict) -> None:
+    """Дописывает одно событие касания зоны -- не бросает исключений наружу (тот же
+    принцип, что whale_radar.append_event: ошибка лога не должна ронять цикл опроса)."""
+    try:
+        os.makedirs(EVENTS_DIR, exist_ok=True)
+        with open(_events_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"level_watch: append_event failed ({type(e).__name__}: {e})")
+
 
 def fetch_price(symbol: str) -> float:
     """Текущая цена символа (Bybit linear). None при любой ошибке сети/парсинга --
@@ -300,6 +326,11 @@ async def check_and_alert(bot_send, owner_id, state: LevelWatchState, symbol: st
             continue
         text = format_level_alert(symbol, zone, price, zstate, source=source, updated=updated)
         sent.append(text)
+        append_event({
+            "ts": now if now is not None else time.time(), "symbol": symbol.upper(),
+            "side": zone.get("side"), "zone_lo": zone.get("lo"), "zone_hi": zone.get("hi"),
+            "state": zstate, "price": price,
+        })
         if bot_send is not None:
             try:
                 await bot_send(owner_id, text)

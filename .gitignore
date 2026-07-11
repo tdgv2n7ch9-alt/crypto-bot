@@ -28,3 +28,5 @@ backtest/_download_stdout.log
 # Whale Radar (Блок 1) -- события в стакане/сделках, локальный лог с ротацией,
 # не версионируется (тот же принцип, что backtest/data/ -- сырые данные, не код).
 data/whale/
+# Level Watch (Этап 4 АПГРЕЙД 11.07) -- тот же принцип, что data/whale/ выше.
+data/level_watch/

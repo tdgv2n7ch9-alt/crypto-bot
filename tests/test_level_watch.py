@@ -161,6 +161,34 @@ def test_check_and_alert_no_bot_send_still_returns_text():
     assert len(asyncio.run(run())) == 1
 
 
+def test_check_and_alert_logs_touch_event(tmp_path, monkeypatch):
+    """Этап 4 АПГРЕЙД 11.07 -- "Метрики дня" читает касания зон из JSONL-лога,
+    check_and_alert() должен его писать на каждый прошедший кулдаун алерт."""
+    monkeypatch.setattr(lw, "EVENTS_DIR", str(tmp_path))
+    state = lw.LevelWatchState()
+    zones = [_zone(lo=100.0, hi=110.0, side="LONG")]
+
+    async def run():
+        await lw.check_and_alert(None, 42, state, "ETHUSDT", 105.0, zones, now=10_000_000.0)
+
+    asyncio.run(run())
+    # Читаем напрямую -- у level_watch нет собственного ридера (он в daily_metrics.py),
+    # здесь достаточно проверить, что файл создан и содержит событие с нужными полями.
+    # append_event()/_events_path() ротируют по РЕАЛЬНОЙ текущей UTC-дате (тот же
+    # принцип, что whale_radar.append_event -- без параметра времени), НЕ по
+    # тестовому `now=10_000_000.0`, который используется только для кулдауна.
+    from datetime import datetime, timezone
+    dt = datetime.now(timezone.utc)
+    path = tmp_path / f"level_watch_events-{dt.strftime('%Y-%m-%d')}.jsonl"
+    assert path.exists()
+    lines = path.read_text().strip().splitlines()
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["symbol"] == "ETHUSDT"
+    assert event["side"] == "LONG"
+    assert event["state"] == "in_zone"
+
+
 # ── Файловая логика: load/replace (изолированная временная директория) ───────
 
 def _cfg(updated="2026-07-11", source="Королев 4h"):

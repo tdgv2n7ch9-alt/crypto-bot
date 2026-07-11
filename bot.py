@@ -114,6 +114,7 @@ import chart_v4
 import narrative
 import whale_radar
 import level_watch
+import daily_metrics
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -10648,6 +10649,18 @@ async def _start_pump_detector(app):
         "cron",
         hour=3, minute=0,
         args=[app.bot],
+    )
+    # «Метрики дня» (АПГРЕЙД 11.07, Этап 4) -- ежедневная сводка owner-чату 21:00 по
+    # TZ бота (Europe/Istanbul == UTC+3). Тот же cron-паттерн, что run_daily_backup
+    # выше -- переживает рестарт процесса нативно: job регистрируется заново на
+    # каждом старте post_init(), а не хранится где-то в persisted-состоянии, которое
+    # можно потерять. НЕ завязан на сессию Claude Code никаким образом -- это APScheduler
+    # внутри самого боевого процесса на Railway.
+    scheduler.add_job(
+        daily_metrics.send_daily_digest,
+        "cron",
+        hour=daily_metrics.DIGEST_HOUR_UTC3, minute=0,
+        args=[app.bot, owner_id],
     )
     scheduler.start()
 

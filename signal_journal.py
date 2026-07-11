@@ -802,6 +802,42 @@ def get_journal_summary(window_sec=None, end_ts=None) -> dict:
     }
 
 
+def get_daily_digest_stats(window_sec: float = 86400, now_ts: float = None) -> dict:
+    """Для «Метрики дня» (АПГРЕЙД 11.07 Этап 4) -- честно РАЗДЕЛЯЕТ два разных
+    среза, которые get_journal_summary() выше смешивает в одну сводку:
+    "создано за окно" (фильтр по `ts` -- когда сигнал появился) и "закрыто за
+    окно" (фильтр по `outcome_ts` -- когда реально сработал TP/SL, независимо от
+    того, когда был создан -- сигнал вчерашний может закрыться сегодня). Для
+    дневного дайджеста разница существенна: "31 TP1 сегодня" должно значить
+    "31 сделка закрылась TP1 сегодня", а не "31 сигнал СОЗДАН сегодня и когда-то
+    в будущем окажется TP1"."""
+    now = now_ts if now_ts is not None else time.time()
+    cutoff = now - window_sec
+    all_recs = list(_journal.values())
+
+    created = [r for r in all_recs if r.get("ts", 0) >= cutoff]
+    closed_today = [r for r in all_recs
+                     if r.get("outcome_ts") is not None and r["outcome_ts"] >= cutoff]
+
+    by_outcome = {}
+    for r in closed_today:
+        o = r.get("outcome") or "?"
+        by_outcome[o] = by_outcome.get(o, 0) + 1
+
+    wins = sum(by_outcome.get(s, 0) for s in ("TP1_HIT", "TP2_HIT", "TP3_HIT"))
+    losses = by_outcome.get("SL_HIT", 0)
+    closed_with_outcome_today = wins + losses
+    win_rate_today = round(wins / closed_with_outcome_today * 100, 1) if closed_with_outcome_today else None
+
+    return {
+        "created_count": len(created),
+        "closed_count": len(closed_today),
+        "by_outcome": by_outcome,
+        "wins": wins, "losses": losses,
+        "win_rate_today": win_rate_today,
+    }
+
+
 def get_extended_analytics(window_sec=None, end_ts=None, min_symbol_trades: int = 2) -> dict:
     """Расширение /journal (ROADMAP П2, доп. пункт из очереди): win-rate по монетам, по
     времени суток (час отправки сигнала, TZ бота), max losing streak (самая длинная серия
