@@ -83,3 +83,17 @@ def run_backtest_patched(symbols: list, data_dir=eng.DATA_DIR, progress_log=None
     for t in result["trades"]:
         t["patch_tags"] = _tag_patch_factors(store, t)
     return result
+
+
+def tag_existing_trades(trades: list, data_dir=eng.DATA_DIR) -> list:
+    """Как run_backtest_patched(), но БЕЗ повторного прогона бэктеста -- тегирует
+    УЖЕ существующий список сделок (напр. закэшированный `_historical_trades.json`,
+    база без патчей 01/02). Изоляция 03/04/05 (М4, «Пакетный ритм», пакет 2) не
+    нуждается в новом прогоне движка -- те же 2864 сделки базы, что уже посчитаны,
+    детерминированы (нет RNG, тот же исторический период) -- пере-прогон дал бы
+    байт-в-байт тот же список ценой лишнего времени. Мутирует `trades` на месте
+    (добавляет "patch_tags" в каждый dict) и возвращает тот же список."""
+    store = eng.HistoricalStore(data_dir)
+    for t in trades:
+        t["patch_tags"] = _tag_patch_factors(store, t)
+    return trades
