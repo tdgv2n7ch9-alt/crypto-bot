@@ -509,6 +509,41 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
     }
 
 
+DCA_WEIGHTS = (0.5, 0.3, 0.2)  # entry1/entry2/entry3 -- те же доли, что в подписях "Вход 1 (50%)" и т.д.
+
+
+def weighted_dca_entry(trade: dict) -> float:
+    """Средневзвешенный DCA-вход (50/30/20 по entry1/entry2/entry3 из
+    build_trade_from_structure()) -- ОДНА честная база для R:R и % вместо смеси
+    "R:R от entry1, % от live-цены" (АПГРЕЙД 11.07 Этап 2.1, x100-сканер: карточка
+    показывала 'TP1 +2.9% R:R 1:1.6' при 'SL -9.9%' -- разные базы для % и R:R
+    создавали видимость нечестного R:R, хотя сам rr_tp1 (от entry1) был посчитан
+    правильно). НЕ используется в build_trade_from_structure()/боевом rr_gate_pass
+    для top_long/top_short/fa_engine -- те гейты владелец менять не просил, остаются
+    на entry1. Только для x100 (явный запрос владельца, аддитивно)."""
+    w1, w2, w3 = DCA_WEIGHTS
+    return trade["entry1"] * w1 + trade["entry2"] * w2 + trade["entry3"] * w3
+
+
+def rr_from_base(trade: dict, base: float, min_rr: float = SR_MIN_RR_TP1) -> dict:
+    """R:R по TP1/TP2/TP3 и honest-гейт относительно произвольной `base` (не
+    обязательно entry1) -- та же формула, что приватная _rr() внутри
+    build_trade_from_structure(), только с явной базой. Используется x100-сканером
+    поверх уже посчитанного trade (weighted_dca_entry(trade) как base) -- см. её
+    докстринг."""
+    risk = abs(base - trade["sl"]) or 1e-9
+
+    def _rr(tp):
+        return round(abs(tp - base) / risk, 2)
+
+    rr_tp1 = _rr(trade["tp1"])
+    return {
+        "base": base, "risk": risk,
+        "rr_tp1": rr_tp1, "rr_tp2": _rr(trade["tp2"]), "rr_tp3": _rr(trade["tp3"]),
+        "rr_gate_pass": rr_tp1 >= min_rr,
+    }
+
+
 # ── Доп. блоки для fa_engine.py (Полный анализ, 13 блоков) ───────────────────
 # Всё ниже — тоже чистые функции над уже полученными свечами, без фетчинга.
 

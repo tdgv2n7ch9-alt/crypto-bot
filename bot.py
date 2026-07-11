@@ -291,6 +291,31 @@ STABLECOINS = {
     "MIM","FEI","OUSD","DOLA","CUSD","CEUR","USDX","USDJ","USDN","BITCNY",
 }
 
+
+def market_sentiment(coins: list, top_n: int = 100) -> tuple:
+    """Единая формула рыночного сентимента (АПГРЕЙД 11.07 Этап 2.5) -- раньше карточки
+    "Обзор" и "Тренд" считали сентимент по-разному: разный пул монет (топ-200 со
+    стейблами vs топ-100 без стейблов) и разные пороги (>=65/>=50 vs >=60/<=40) --
+    в одном скрине владельца "Обзор" писал "МЕДВЕЖИЙ (48% растут)", "Тренд" --
+    "НЕЙТРАЛЬНЫЙ (49% бычьих)" при почти одинаковом %. Теперь один пул (топ-`top_n`
+    по капе БЕЗ стейблкоинов -- их ~0%-движение искусственно тянуло долю "растущих"
+    вниз) и один порог. Возвращает (label, pct_целое)."""
+    pool = [c for c in coins if c.get("symbol") not in STABLECOINS][:top_n]
+    if not pool:
+        return "НЕЙТРАЛЬНЫЙ", 50
+    bull = sum(1 for c in pool
+               if (c.get("quote", {}).get("USDT", {}).get("percent_change_24h") or 0) > 0)
+    pct = round(bull / len(pool) * 100)
+    if pct >= 60:   label = "БЫЧИЙ"
+    elif pct <= 40: label = "МЕДВЕЖИЙ"
+    else:           label = "НЕЙТРАЛЬНЫЙ"
+    return label, pct
+
+
+def market_sentiment_emoji(label: str) -> str:
+    return {"БЫЧИЙ": "🟢", "МЕДВЕЖИЙ": "🔴"}.get(label, "🟡")
+
+
 _ALL_COINS_CACHE_TTL = 600   # 10 мин (см. ТЗ) -- было 1800с, но теперь первичный источник
                              # (CoinGecko markets) не расходует дефицитную месячную квоту
 
@@ -1181,9 +1206,35 @@ def top_trades_short_status(entry: float, cur: float, tp1: float, tp2: float,
     if cur >= sl * 0.99:    return "🔴 ПОД SL!", "SL"
     return f"🟡 Ждём вход, до входа {dist:.1f}%", None
 
-# 
-#  
-# 
+
+WHALE_MONITOR_MIN_SCORE_FOR_DIRECTION = 40
+
+
+def whale_monitor_label(direction: str, score_100: float) -> tuple:
+    """Ярлык карточки Whale Monitor (АПГРЕЙД 11.07 Этап 2.3) -- при скоре <40 карточка
+    раньше всё равно ставила "LONG ⭐"/"SHORT ⭐" (одна звезда минимум, см. round(x/20)
+    и max(1,...) в исходном коде) -- то есть даже самый слабый сигнал выглядел как
+    утверждённое направление со звездой. Теперь <40 -- честное 'НАБЛЮДЕНИЕ' без
+    звёзд, LONG/SHORT со звёздами только от 40+. Возвращает (label, stars_str)."""
+    if score_100 < WHALE_MONITOR_MIN_SCORE_FOR_DIRECTION:
+        return "НАБЛЮДЕНИЕ", ""
+    stars = "⭐" * max(1, min(5, round(score_100 / 20)))
+    return direction, stars
+
+
+def rsi_4h_zone_label(rsi_4h: float) -> str:
+    """Зона RSI 4H с явным флагом (АПГРЕЙД 11.07 Этап 2.6) -- раньше карточка "Обзор"
+    показывала голое число ('79.4') без статуса; >=75 -- тот же порог перекупленности,
+    что уже используется в rocket score (bot.py rsi_4h>75)."""
+    if rsi_4h >= 75:   return "🔴 ПЕРЕКУПЛЕННОСТЬ"
+    if rsi_4h >= 55:   return "🟡 БЫЧИЙ"
+    if rsi_4h >= 45:   return "⚪ НЕЙТРАЛЬНЫЙ"
+    if rsi_4h >= 25:   return "🟠 МЕДВЕЖИЙ"
+    return "🔵 ПЕРЕПРОДАННОСТЬ"
+
+#
+#
+#
 def calc_ema(prices, period):
     if len(prices) < period:
         return [None] * len(prices)
@@ -2730,12 +2781,9 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         total_mcap=gm.get("total_mcap",0) or 0
         mcap_ch=gm.get("mcap_change_24h",0) or 0
 
-        # === SENTIMENT ===
-        pos=sum(1 for c in coins[:200] if (c["quote"]["USDT"].get("percent_change_24h") or 0)>0)
-        pct=pos/200*100
-        if pct>=65: sentiment="🟢 БЫЧИЙ"
-        elif pct>=50: sentiment="🟡 НЕЙТРАЛЬНЫЙ"
-        else: sentiment="🔴 МЕДВЕЖИЙ"
+        # === SENTIMENT === (единая формула с карточкой "Тренд" -- market_sentiment(), Этап 2.5)
+        sentiment_label, pct = market_sentiment(coins)
+        sentiment = market_sentiment_emoji(sentiment_label) + " " + sentiment_label
 
         # === FEAR & GREED ===
         fv=50; fl="Neutral"
@@ -2768,6 +2816,9 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             kl4=get_binance_ohlc("BTC","4h",16)
             br4=calc_rsi([c["close"] for c in kl4],14)
         except: pass
+        # Этап 2.6 (АПГРЕЙД 11.07): раньше показывалось голое число (напр. "79.4")
+        # без статуса -- честный красный флаг перекупленности, см. rsi_4h_zone_label().
+        rsi4_z = rsi_4h_zone_label(br4)
 
         # === EMA 50/200 trend ===
         ema_trend="N/A"
@@ -2926,7 +2977,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "  SOL  $"+f"{round(sol_price,2):,.2f}"+"  "+fe(sol_ch24)+" "+fp(sol_ch24)+"  7d: "+fp(sol_ch7d),"",
             "🧠 ИНДИКАТОРЫ",
             "  RSI 1D: "+str(round(br,1))+"  "+rsi_z,
-            "  RSI 4H: "+str(round(br4,1)),
+            "  RSI 4H: "+str(round(br4,1))+"  "+rsi4_z,
             "  "+ema_trend,
             "  Fear&Greed: "+str(fv)+"/100  "+fg_em+" "+fg_z,
             "  ["+fg_bar+"]",
@@ -3643,7 +3694,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 pass
 
             # --- Топ альты — из уже загруженного coins (CoinGecko), топ-100 по капе ---
-            bull_count = 0
             gainers = []
             losers  = []
             alt_coins_full = [c for c in coins[:100] if c["symbol"] not in STABLECOINS]
@@ -3653,10 +3703,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ch7 = q_c.get("percent_change_7d", 0) or 0
                 p   = q_c.get("price", 0) or 0
                 s   = c["symbol"]
-                if ch > 0: bull_count += 1
                 gainers.append((s, p, ch, ch7))
                 losers.append((s, p, ch, ch7))
-            bull_pct = round(bull_count / max(len(alt_coins_full), 1) * 100)
+            # Единая формула с карточкой "Обзор" -- market_sentiment(), Этап 2.5
+            # (раньше здесь был свой bull_pct, случайно совпадавший порогами с
+            # Обзором, но так и не гарантированно единый источник).
+            sentiment_t, bull_pct = market_sentiment(coins)
 
             gainers.sort(key=lambda x: x[2], reverse=True)
             gainers = gainers[:10]
@@ -3681,8 +3733,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 eth_trend = "\U0001f7e1 НЕЙТРАЛЬНЫЙ"
 
-            sentiment_e = "\U0001f7e2" if bull_pct >= 60 else ("\U0001f534" if bull_pct <= 40 else "\U0001f7e1")
-            sentiment_t = "БЫЧИЙ" if bull_pct >= 60 else ("МЕДВЕЖИЙ" if bull_pct <= 40 else "НЕЙТРАЛЬНЫЙ")
+            sentiment_e = {"БЫЧИЙ": "\U0001f7e2", "МЕДВЕЖИЙ": "\U0001f534"}.get(sentiment_t, "\U0001f7e1")
 
             if fg_val >= 75:   fg_e = "\U0001f680"
             elif fg_val >= 55: fg_e = "\U0001f7e2"
@@ -4046,11 +4097,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 else: ema_cross="🔴 EMA50 < EMA200 (ДЕАД КРОСС)"
             except: pass
 
-            # USDT market cap (stablecoin flow) — через CoinGecko, старый источник отдавал $0.0B
-            usdt_mcap=0
+            # USDT market cap (stablecoin flow) — через CoinGecko, старый источник отдавал $0.0B.
+            # Этап 2.4 (АПГРЕЙД 11.07): $0.0B оставался и после того фикса на пути ОШИБКИ фетча
+            # (usdt_mcap оставался 0, но отображался как "$0.0B" -- неотличимо от "реально ноль").
+            # Честно: при недоступности источника -- "н/д" текстом, не выдуманный ноль.
+            usdt_mcap_res = {"ok": False}
             try:
-                usdt_mcap=get_usdt_mcap().get("usdt_mcap",0)*1e9
-            except: pass
+                usdt_mcap_res = get_usdt_mcap()
+            except Exception:
+                pass
+            usdt_mcap = usdt_mcap_res.get("usdt_mcap", 0) * 1e9
 
             def fpct(v): return ("+"+str(round(v,2)) if v>=0 else str(round(v,2)))+"%"
             def fe(v): return "🟢" if v>=0.5 else ("🔴" if v<=-0.5 else "⚪")
@@ -4125,7 +4181,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "💰 МАКРО РЫНОК",
                 "  Общая кап: $"+str(round(total_mcap/1e12,2))+"T",
                 "  BTC.D: "+str(round(btc_dom,1))+"% | ETH.D: "+str(round(eth_dom,1))+"%",
-                "  USDT мкап: $"+str(round(usdt_mcap/1e9,1))+"B",
+                "  USDT мкап: "+(f"${round(usdt_mcap/1e9,1)}B" if usdt_mcap_res.get("ok") else "н/д (источник недоступен)"),
                 "  "+liq_dir,"",
                 "📈 ФОНДОВЫЕ РЫНКИ",
                 "  S&P500: $"+str(round(sp_price,0))[:-2]+"  "+fe(sp_ch)+" "+fpct(sp_ch),
@@ -4222,10 +4278,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     SEP, "",
                 ]
                 for w in found[:5]:
+                    label, stars = whale_monitor_label(w["direction"], w.get("score_100", 0))
                     sig_e = "\U0001f534" if w["direction"] == "SHORT" else "\U0001f7e2"
-                    stars = "\u2b50" * max(1, min(5, round(w.get("score_100", 0) / 20)))
+                    if label == "НАБЛЮДЕНИЕ":
+                        sig_e = "\U0001f7e1"  # скор <40 -- направление не утверждаем, жёлтый нейтральный маркер
                     lines_w += [
-                        f"{sig_e} *{w['symbol']}/USDT* — {w['direction']}  {stars}  _(Скор {w.get('score_100',0)}/100, {w.get('grade','C')})_",
+                        f"{sig_e} *{w['symbol']}/USDT* — {label}  {stars}  _(Скор {w.get('score_100',0)}/100, {w.get('grade','C')})_",
                         f"  Funding: `{w['funding']:+.4f}%`  |  OI: `{w['oi']:+.1f}%`  |  L/S: `{w['ls']:.2f}`",
                         f"  Цена: `{fp(w['price'])}`",
                         "",
@@ -8689,6 +8747,7 @@ async def _cmd_x100_scanner_body(update, ctx):
             card_blocks = []
             shown_x100 = 0
             rejected_x100 = 0
+            skipped_x100 = 0
             if top:
                 for c in top:
                     grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
@@ -8717,14 +8776,39 @@ async def _cmd_x100_scanner_body(update, ctx):
                         sweep_1h_x100 = ta_extra.detect_sweep(candles_1h_x100)
                         sweep_4h_x100 = ta_extra.detect_sweep(candles_4h_x100)
 
+                        # Этап 2.2 (АПГРЕЙД 11.07): раньше кандидат без live-цены ("нет WS")
+                        # или без EMA-данных ("нет данных 1h/4h") всё равно показывался с
+                        # этими честными, но бесполезными для трейдера пометками (см. живой
+                        # пример SKYAI). Теперь такой кандидат SKIP -- причина в лог, не в
+                        # выдачу.
+                        if p_fresh == "(отложенная — нет WS)":
+                            log.info(f"[SKIP] x100: {c['sym']} -- нет live-цены (нет WS)")
+                            skipped_x100 += 1
+                            continue
+                        if ema_ctx_x100["tf_1h"] is None and ema_ctx_x100["tf_4h"] is None:
+                            log.info(f"[SKIP] x100: {c['sym']} -- нет EMA-данных (1h и 4h)")
+                            skipped_x100 += 1
+                            continue
+
                         zones_x100 = ta_extra.find_sr_zones(candles_1h_x100, candles_4h_x100,
                                                              candles_1d_x100, p, ema_ctx=ema_ctx_x100)
                         trade_x100 = ta_extra.build_trade_from_structure("long", p, zones_x100)
 
-                        if not trade_x100 or not trade_x100["rr_gate_pass"]:
-                            rr_dbg = trade_x100["rr_tp1"] if trade_x100 else "n/a"
+                        # Этап 2.1 (АПГРЕЙД 11.07): раньше R:R считался от entry1, а
+                        # показанный % -- от live-цены p (разные базы, см. живой пример
+                        # MMT: "TP1 +2.9% R:R 1:1.6" при "SL -9.9%" -- по факту, если
+                        # делить эти же проценты, R:R <1). Теперь ОДНА база для обоих --
+                        # средневзвешенный DCA-вход 50/30/20 (weighted_dca_entry), гейт
+                        # тоже пересчитан от неё же -- заявленный отсев R:R<1.5 честный.
+                        # Это НЕ трогает боевой rr_gate_pass (entry1-базу) в
+                        # build_trade_from_structure() самой -- та используется
+                        # top_long/top_short/fa_engine и её владелец менять не просил.
+                        rr_w = ta_extra.rr_from_base(trade_x100, ta_extra.weighted_dca_entry(trade_x100)) if trade_x100 else None
+
+                        if not trade_x100 or not rr_w["rr_gate_pass"]:
+                            rr_dbg = rr_w["rr_tp1"] if rr_w else "n/a"
                             log.info(f"[SR-GATE] x100: {c['sym']} отброшен -- "
-                                     f"R:R по TP1 {rr_dbg} < {ta_extra.SR_MIN_RR_TP1}")
+                                     f"R:R по TP1 (DCA-база) {rr_dbg} < {ta_extra.SR_MIN_RR_TP1}")
                             rejected_x100 += 1
                             continue  # скрыт полностью, не показан с предупреждением
                         else:
@@ -8743,17 +8827,18 @@ async def _cmd_x100_scanner_body(update, ctx):
                                                            degraded_data=_data_quality_flags())
                             except Exception as e:
                                 log.error(f"[JOURNAL] X100 {c['sym']}: {e}")
+                            entry_avg = rr_w["base"]
                             pct = lambda a, b: (lambda v: f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")((b-a)/a*100) if a > 0 else "—"
                             spot = [
                                 f"",
-                                f"📍 СПОТ:",
+                                f"📍 СПОТ (R:R и % от средневзвешенного DCA-входа {fp(entry_avg)}):",
                                 f"  Вход 1 (50%): {fp(trade_x100['entry1'])}",
                                 f"  Вход 2 (30%): {fp(trade_x100['entry2'])}",
                                 f"  Вход 3 (20%): {fp(trade_x100['entry3'])}",
-                                f"  TP1: {fp(trade_x100['tp1'])} ({pct(p, trade_x100['tp1'])}) R:R 1:{trade_x100['rr_tp1']}",
-                                f"  TP2: {fp(trade_x100['tp2'])} ({pct(p, trade_x100['tp2'])}) R:R 1:{trade_x100['rr_tp2']}",
-                                f"  TP3: {fp(trade_x100['tp3'])} ({pct(p, trade_x100['tp3'])}) R:R 1:{trade_x100['rr_tp3']}",
-                                f"  SL: {fp(trade_x100['sl'])} ({pct(p, trade_x100['sl'])})",
+                                f"  TP1: {fp(trade_x100['tp1'])} ({pct(entry_avg, trade_x100['tp1'])}) R:R 1:{rr_w['rr_tp1']}",
+                                f"  TP2: {fp(trade_x100['tp2'])} ({pct(entry_avg, trade_x100['tp2'])}) R:R 1:{rr_w['rr_tp2']}",
+                                f"  TP3: {fp(trade_x100['tp3'])} ({pct(entry_avg, trade_x100['tp3'])}) R:R 1:{rr_w['rr_tp3']}",
+                                f"  SL: {fp(trade_x100['sl'])} ({pct(entry_avg, trade_x100['sl'])})",
                                 f"  Потенциал: {pot_min}–{pot_max}x",
                                 f"  {ta_extra.format_ema_stack_line(ema_ctx_x100)}",
                             ]
@@ -8784,12 +8869,13 @@ async def _cmd_x100_scanner_body(update, ctx):
                         f"🎯 Скор: {c['score']}/12",
                         _journal_footer_line("x100"),
                     ]
+            _x100_skip_note = f", {skipped_x100} skip без live-цены/EMA" if skipped_x100 else ""
             if card_blocks:
                 lines.append(f"\n💎 *Найдено: {shown_x100} кандидатов*"
-                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5)_" if rejected_x100 else "") + "\n")
+                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note})_" if (rejected_x100 or skipped_x100) else "") + "\n")
                 lines += card_blocks
-            elif rejected_x100:
-                lines.append(f"\n❌ Кандидатов не найдено -- {rejected_x100} отброшено по R:R < 1:1.5")
+            elif rejected_x100 or skipped_x100:
+                lines.append(f"\n❌ Кандидатов не найдено -- {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note}")
             else:
                 lines.append("\n❌ Кандидатов не найдено")
             lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]

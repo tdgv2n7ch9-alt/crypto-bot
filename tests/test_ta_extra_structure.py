@@ -83,3 +83,43 @@ def test_fib_fallback_when_fewer_than_3_tp_zones():
     assert trade is not None
     assert trade["tp1"] is not None and trade["tp2"] is not None and trade["tp3"] is not None
     assert trade["tp1"] < trade["tp2"] < trade["tp3"], "TP должны расти по расстоянию"
+
+
+# weighted_dca_entry() / rr_from_base() -- АПГРЕЙД 11.07 Этап 2.1, x100-сканер:
+# честная единая база (средневзвешенный DCA-вход 50/30/20) вместо смеси
+# "R:R от entry1, % от live-цены".
+
+def test_weighted_dca_entry_between_entry1_and_entry3():
+    price = 100.0
+    zones = {"below": [_zone(90, 95)], "above": [_zone(105, 110)]}
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    base = ta_extra.weighted_dca_entry(trade)
+    assert trade["entry3"] < base < trade["entry1"]
+
+
+def test_weighted_dca_entry_matches_manual_50_30_20():
+    trade = {"entry1": 100.0, "entry2": 90.0, "entry3": 80.0}
+    base = ta_extra.weighted_dca_entry(trade)
+    assert base == 100.0 * 0.5 + 90.0 * 0.3 + 80.0 * 0.2
+
+
+def test_rr_from_base_matches_entry1_when_base_is_entry1():
+    """При base==entry1 rr_from_base() должен давать те же числа, что и rr_tp1/rr_tp2/rr_tp3
+    внутри build_trade_from_structure() -- проверка, что формула идентична, только база явная."""
+    price = 100.0
+    zones = {"below": [_zone(90, 95)], "above": [_zone(105, 110)]}
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    rr = ta_extra.rr_from_base(trade, trade["entry1"])
+    assert rr["rr_tp1"] == trade["rr_tp1"]
+    assert rr["rr_tp2"] == trade["rr_tp2"]
+    assert rr["rr_tp3"] == trade["rr_tp3"]
+    assert rr["rr_gate_pass"] == trade["rr_gate_pass"]
+
+
+def test_rr_from_base_gate_respects_min_rr():
+    trade = {"tp1": 110.0, "tp2": 120.0, "tp3": 130.0, "sl": 95.0}
+    rr_pass = ta_extra.rr_from_base(trade, base=100.0, min_rr=1.5)
+    assert rr_pass["rr_tp1"] == 2.0
+    assert rr_pass["rr_gate_pass"] is True
+    rr_fail = ta_extra.rr_from_base(trade, base=100.0, min_rr=3.0)
+    assert rr_fail["rr_gate_pass"] is False
