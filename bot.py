@@ -1260,10 +1260,16 @@ def now_utc3() -> str:
     return datetime.now(TZ).strftime("%d.%m.%Y %H:%M UTC+3")
 
 def trend_arrow(ch):
-    if ch >= 3:  return ""
-    if ch >= 0:  return ""
-    if ch >= -3: return ""
-    return ""
+    """М1 «Пакетный ритм» пакет 2 -- та же историческая порча пустых ASCII-строк,
+    что уже дважды находили и чинили в этой сессии (get_killzone_status(),
+    top_trades-хендлер), найдена здесь при подготовке NEXT_PACKAGE.md. Git-история
+    для этого блока не содержит корректной версии (тот же случай, что раньше --
+    порча уже была в коммите, вводившем эту функцию), восстановлено по смыслу:
+    4-уровневая шкала силы движения, не просто вверх/вниз."""
+    if ch >= 3:  return "🚀"
+    if ch >= 0:  return "📈"
+    if ch >= -3: return "📉"
+    return "💥"
 
 def cmc_link(slug):  return f"https://coinmarketcap.com/currencies/{slug}/"
 def tv_link(symbol): return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}USDT"
