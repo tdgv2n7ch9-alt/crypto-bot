@@ -496,6 +496,18 @@ def get_whale_zones(symbol: str) -> dict:
         return {"bid": [], "ask": []}
 
 
+def get_cvd_summary(symbol: str) -> dict:
+    """Этап 3.1 (АПГРЕЙД 11.07) -- CVD (Cumulative Volume Delta) 1ч/4ч из живого
+    состояния Whale Radar (тот же WS-поток publicTrade, что уже подписан для
+    whale-детекции -- см. record_cvd() в whale_radar.py). Используется в карточке
+    Институционал. Безопасно вызывать всегда: до первых данных вернёт нули/
+    'нейтрально', не исключение (тот же принцип, что get_whale_zones())."""
+    try:
+        return _whale_radar_state.cvd_summary(symbol.lower())
+    except Exception:
+        return {"cvd_1h": 0, "cvd_4h": 0, "direction_1h": "нейтрально"}
+
+
 # Блок 3, п.2: алерт owner-чату на появление крупной лимитки рядом с активным сигналом.
 # Именованные константы -- калибровка владельца (задача: "≥$200K в пределах 3% от цены
 # на активных сигналах"), не выдуманы отдельно от спеки.
@@ -555,9 +567,20 @@ async def _whale_radar_task(bot: Bot, owner_id: int):
     """Фоновая задача Whale Radar (Блок 2/3) -- тот же паттерн, что pump_detector: один
     asyncio.create_task на весь процесс, бесконечный цикл со своим внутренним
     реконнектом (см. whale_radar.run_whale_radar). Мутирует _whale_radar_state,
-    созданный выше ДО запуска этой задачи -- get_whale_zones() уже может его читать."""
+    созданный выше ДО запуска этой задачи -- get_whale_zones() уже может его читать.
+
+    Символы явно объединены с топ-N по обороту (не заменяют его) -- CVD (Этап 3.1,
+    АПГРЕЙД 11.07) обещан владельцу для BTC/ETH/SOL конкретно; на практике они и так
+    всегда топ-3 по обороту (проверено живым вызовом fetch_top_symbols()), но список
+    топ-N в этом процессе больше не пересобирается после старта (SYMBOL_REFRESH_SEC
+    не используется -- существующее поведение, не трогаю в рамках Этапа 3), так что
+    явная гарантия дешевле, чем полагаться на совпадение."""
     try:
-        await whale_radar.run_whale_radar(state=_whale_radar_state, verbose=False,
+        symbols = whale_radar.fetch_top_symbols()
+        for must_have in ("btcusdt", "ethusdt", "solusdt"):
+            if must_have not in symbols:
+                symbols.append(must_have)
+        await whale_radar.run_whale_radar(symbols=symbols, state=_whale_radar_state, verbose=False,
                                            log_fn=_make_whale_log_fn(bot, owner_id))
     except Exception as e:
         print(f"Whale Radar: фоновая задача упала ({type(e).__name__}: {e})")
@@ -4050,15 +4073,24 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ls_ratio=_get_ls_ratio("BTC")
             except: pass
 
-            # Put/Call ratio Deribit
-            pcr=0
-            try:
-                pcr_r=_r.get("https://www.deribit.com/api/v2/public/get_book_summary_by_currency",
-                    params={"currency":"BTC","kind":"option"},timeout=6).json()
-                calls=sum(1 for x in pcr_r.get("result",[]) if x.get("instrument_name","").endswith("C"))
-                puts=sum(1 for x in pcr_r.get("result",[]) if x.get("instrument_name","").endswith("P"))
-                pcr=round(puts/calls,2) if calls>0 else 0
-            except: pass
+            # Put/Call ratio + Max Pain Deribit -- Этап 3.3 (АПГРЕЙД 11.07): раньше здесь
+            # считался СВОЙ отдельный pcr = кол-во puts / кол-во calls instrument-СЧЁТОМ
+            # (сколько СТРАЙКОВ есть, не сколько ими торгуют) -- слабая метрика, легко
+            # оказывается около 1.0 просто потому что у Deribit похожее число
+            # call/put-инструментов в листинге. Теперь честный OI-взвешенный put/call
+            # (get_options_data(), тот же расчёт, что уже используется в карточке
+            # "Обзор" -- один источник) + Max Pain (новое, compute_max_pain()).
+            opts_i = get_options_data()
+            pcr = opts_i.get("put_call_ratio", 0) if opts_i.get("ok") else 0
+            max_pain_btc = opts_i.get("max_pain")
+
+            # Perp/Spot премия BTC -- Этап 3.2 (АПГРЕЙД 11.07)
+            premium_i = get_perp_spot_premium("BTC")
+
+            # CVD BTC/ETH/SOL 1ч/4ч -- Этап 3.1 (АПГРЕЙД 11.07), живой WS-агрегатор Whale Radar
+            cvd_btc = get_cvd_summary("BTCUSDT")
+            cvd_eth = get_cvd_summary("ETHUSDT")
+            cvd_sol = get_cvd_summary("SOLUSDT")
 
             # S&P500
             sp_price=0; sp_ch=0
@@ -4195,8 +4227,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "  "+oi_signal,
                 "  Funding BTC: "+str(round(fund_btc,4))+"% — "+fund_warn,
                 "  Funding ETH: "+str(round(fund_eth,4))+"%",
-                "  Put/Call (BTC): "+str(pcr),
+                "  Put/Call (BTC): "+(str(pcr) if opts_i.get("ok") else "н/д"),
+                "  Max Pain (BTC): "+(f"${max_pain_btc:,.0f}" if max_pain_btc else "н/д"),
                 "  L/S Ratio: "+str(round(ls_ratio,2)),"",
+                "🌐 ДЕРИВАТИВЫ (Фаза B)",
+                "  Perp/Spot премия BTC: "+(fpct(premium_i["premium_pct"])+" — "+premium_i["signal"]
+                                             if premium_i.get("ok") else "н/д (источник недоступен)"),
+                "  CVD BTC 1ч: "+f"${cvd_btc['cvd_1h']:+,.0f}"+"  4ч: "+f"${cvd_btc['cvd_4h']:+,.0f}"+"  — "+cvd_btc["direction_1h"],
+                "  CVD ETH 1ч: "+f"${cvd_eth['cvd_1h']:+,.0f}"+"  4ч: "+f"${cvd_eth['cvd_4h']:+,.0f}"+"  — "+cvd_eth["direction_1h"],
+                "  CVD SOL 1ч: "+f"${cvd_sol['cvd_1h']:+,.0f}"+"  4ч: "+f"${cvd_sol['cvd_4h']:+,.0f}"+"  — "+cvd_sol["direction_1h"],
+                "  _CVD ещё копится с момента последнего рестарта бота -- значения растут со временем_","",
                 "🧠 ТЕХНИЧЕСКИЙ АНАЛИЗ",
                 "  "+ema_cross,
                 "  Fear&Greed: "+str(fv)+"/100 — "+fl,
@@ -10704,11 +10744,59 @@ def get_macro_data():
         print(f"get_macro_data: {e}")
     _macro_cache=res; _macro_ts=_t.time(); return res
 
+def _parse_deribit_option_name(name: str):
+    """'BTC-27DEC24-70000-C' -> (70000.0, 'C'). None, если формат неожиданный
+    (не 4 сегмента через '-' или страйк не число) -- honest skip, не догадка."""
+    parts = name.split("-")
+    if len(parts) != 4:
+        return None
+    try:
+        strike = float(parts[2])
+    except ValueError:
+        return None
+    opt_type = parts[3]
+    if opt_type not in ("C", "P"):
+        return None
+    return strike, opt_type
+
+
+def compute_max_pain(items: list) -> float:
+    """Max Pain -- страйк, при котором суммарная выплата держателям опционов (по
+    открытому интересу) минимальна, т.е. точка, где маркет-мейкеры/продавцы теряют
+    меньше всего. Этап 3.3 (АПГРЕЙД 11.07). УПРОЩЕНИЕ, честно: считает по ВСЕМ
+    экспирациям сразу (объединённый OI по страйку), не по ближайшей экспирации
+    отдельно -- отдельный расчёт по экспирациям (что ближе к тому, как считают
+    специализированные Max Pain калькуляторы) не сделан в рамках Этапа 3, это
+    известное упрощение, не скрыто. Возвращает None, если нет опционных данных."""
+    strikes_oi = {}
+    for it in items:
+        parsed = _parse_deribit_option_name(it.get("instrument_name", ""))
+        if not parsed:
+            continue
+        strike, opt_type = parsed
+        oi = it.get("open_interest", 0) or 0
+        d = strikes_oi.setdefault(strike, {"C": 0.0, "P": 0.0})
+        d[opt_type] += oi
+    if not strikes_oi:
+        return None
+    best_strike, best_pain = None, None
+    for candidate in sorted(strikes_oi):
+        pain = 0.0
+        for strike, oi in strikes_oi.items():
+            if strike < candidate:
+                pain += oi["C"] * (candidate - strike)   # call ITM at settlement=candidate
+            elif strike > candidate:
+                pain += oi["P"] * (strike - candidate)   # put ITM at settlement=candidate
+        if best_pain is None or pain < best_pain:
+            best_pain, best_strike = pain, candidate
+    return best_strike
+
+
 def get_options_data():
     import time as _t, requests as _r
     global _opts_cache, _opts_ts
     if _t.time()-_opts_ts<600 and _opts_cache: return _opts_cache
-    res={'ok':False,'put_call_ratio':1.0,'iv_1m':0,'options_signal':'neutral','total_oi_calls':0,'total_oi_puts':0}
+    res={'ok':False,'put_call_ratio':1.0,'iv_1m':0,'options_signal':'neutral','total_oi_calls':0,'total_oi_puts':0,'max_pain':None}
     try:
         r=_r.get('https://www.deribit.com/api/v2/public/get_book_summary_by_currency',params={'currency':'BTC','kind':'option'},timeout=8)
         if r.status_code==200:
@@ -10718,9 +10806,45 @@ def get_options_data():
             if co>0:
                 pc=po/co; res.update({'put_call_ratio':round(pc,2),'total_oi_calls':round(co),'total_oi_puts':round(po),'ok':True})
                 res['options_signal']='bearish' if pc>1.3 else ('bullish' if pc<0.7 else 'neutral')
-            if items: res['iv_1m']=round(items[0].get('mark_iv',0),1)
+            if items:
+                res['iv_1m']=round(items[0].get('mark_iv',0),1)
+                res['max_pain']=compute_max_pain(items)  # Этап 3.3 -- тот же fetch, без доп. запроса
     except: pass
     _opts_cache=res; _opts_ts=_t.time(); return res
+
+
+def get_perp_spot_premium(symbol: str = "BTC") -> dict:
+    """Perp/Spot премия через Bybit V5 tickers (linear vs spot), Этап 3.2 (АПГРЕЙД
+    11.07). premium_pct>0.3% -- перп торгуется дороже спота -- перегрев лонгов
+    (порог владельца из спеки задачи); <-0.3% -- зеркально, перегрев шортов
+    (бэквордация). ok=False при недоступности источника -- вызывающий код обязан
+    честно показать 'н/д', не 0.0%."""
+    res = {"ok": False, "perp": 0.0, "spot": 0.0, "premium_pct": 0.0, "signal": "н/д"}
+    try:
+        r_perp = requests.get("https://api.bybit.com/v5/market/tickers",
+                               params={"category": "linear", "symbol": f"{symbol}USDT"}, timeout=6)
+        r_spot = requests.get("https://api.bybit.com/v5/market/tickers",
+                               params={"category": "spot", "symbol": f"{symbol}USDT"}, timeout=6)
+        perp_list = r_perp.json().get("result", {}).get("list", [])
+        spot_list = r_spot.json().get("result", {}).get("list", [])
+        if not perp_list or not spot_list:
+            return res
+        perp = float(perp_list[0].get("lastPrice", 0) or 0)
+        spot = float(spot_list[0].get("lastPrice", 0) or 0)
+        if perp <= 0 or spot <= 0:
+            return res
+        premium_pct = (perp - spot) / spot * 100
+        if premium_pct > 0.3:
+            signal = "🔴 перегрев лонгов (перп дороже спота)"
+        elif premium_pct < -0.3:
+            signal = "🟢 перегрев шортов (перп дешевле спота, бэквордация)"
+        else:
+            signal = "⚪ норма"
+        res = {"ok": True, "perp": perp, "spot": spot,
+               "premium_pct": round(premium_pct, 3), "signal": signal}
+    except Exception:
+        pass
+    return res
 
 def get_liq_data():
     import time as _t, requests as _r

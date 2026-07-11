@@ -86,6 +86,8 @@ SPOOF_APPROACH_PCT = 0.15          # цена подошла к уровню б�
 
 WHALE_SCAN_INTERVAL_SEC = 5        # период полного сканирования книги на "китов" (не на каждую дельту)
 
+CVD_MAX_WINDOW_SEC = 4 * 3600 + 300   # держим чуть больше 4ч -- максимальное окно чтения (Этап 3.1)
+
 BYBIT_SUB_BATCH_SIZE = 10
 BYBIT_PING_INTERVAL_SEC = 20
 WATCHDOG_TIMEOUT_SEC = 60
@@ -371,6 +373,7 @@ class WhaleRadarState:
         self.last_price = {}       # symbol -> float
         self.trade_windows = {}    # symbol -> deque(maxlen=TRADE_WINDOW_SIZE) недавних notional$
         self.agg_windows = {}      # symbol -> {side("Buy"/"Sell"): deque[(ts, notional)]}, 10с окно
+        self.cvd_windows = {}      # symbol -> deque[(ts, signed_usd)] -- Этап 3.1, CVD (см. record_cvd())
         self.event_count = 0
 
     def ensure_symbol(self, symbol: str):
@@ -380,6 +383,7 @@ class WhaleRadarState:
             self.lifetimes[symbol] = {"bid": {}, "ask": {}}
             self.trade_windows[symbol] = deque(maxlen=TRADE_WINDOW_SIZE)
             self.agg_windows[symbol] = {}
+            self.cvd_windows[symbol] = deque()
 
     def record_trade(self, symbol: str, side: str, notional: float, now: float = None) -> dict:
         """Классифицирует поток printов сделок символа/стороны. Возвращает None (нет
@@ -422,6 +426,29 @@ class WhaleRadarState:
             return {"size_usd": agg_sum, "prints_count": prints_count}
         return None
 
+    def record_cvd(self, symbol: str, side: str, notional: float, now: float = None) -> None:
+        """CVD (Cumulative Volume Delta), Этап 3.1 -- каждый print аггрессора добавляется
+        в скользящее окно как +notional (Buy) / -notional (Sell). ВСЕ printы (не только
+        whale-крупные) -- по определению CVD это накопленная разница объёма покупок и
+        продаж, не только всплески. Окно обрезается по CVD_MAX_WINDOW_SEC (нужно только
+        для читателей cvd(window_sec<=4h), старое не храним)."""
+        self.ensure_symbol(symbol)
+        now = now if now is not None else time.time()
+        signed = notional if side == "Buy" else -notional
+        window = self.cvd_windows[symbol]
+        window.append((now, signed))
+        cutoff = now - CVD_MAX_WINDOW_SEC
+        while window and window[0][0] < cutoff:
+            window.popleft()
+
+    def cvd(self, symbol: str, window_sec: float, now: float = None) -> float:
+        """Сумма signed_usd за последние `window_sec` секунд -- положительное значение =
+        нетто-покупки (агрессивные Buy перевешивают), отрицательное = нетто-продажи."""
+        now = now if now is not None else time.time()
+        cutoff = now - window_sec
+        return sum(v for ts, v in self.cvd_windows.get(symbol, ())
+                   if ts >= cutoff)
+
     def get_zones(self, symbol: str, tolerance_pct: float = CLUSTER_TOLERANCE_PCT) -> dict:
         """Текущие китовые зоны символа (после кластеризации), по сторонам:
         {"bid": [zone, ...], "ask": [zone, ...]}, каждая зона дополнена "age_sec" —
@@ -446,6 +473,21 @@ class WhaleRadarState:
                 z["age_sec"] = round(min(ages), 1) if ages else None
             out[side] = zones
         return out
+
+    def cvd_summary(self, symbol: str, now: float = None) -> dict:
+        """Сводка CVD за 1ч/4ч + словесное направление, Этап 3.1 -- для карточки
+        Институционал. Порог направления (не 0, а небольшой % от суммарного объёма
+        1ч-окна) намеренно НЕ введён -- честно любой ненулевой перекос считается
+        направлением, знак решает, отображение уже показывает точную сумму $, не
+        только слово. Символ без накопленных данных -> нули, "нейтрально", не ошибка.
+        `now` -- для тестируемости (те же данные, что и record_cvd/cvd), None ->
+        реальное время."""
+        cvd_1h = self.cvd(symbol, 3600, now=now)
+        cvd_4h = self.cvd(symbol, 4 * 3600, now=now)
+        if cvd_1h > 0:   direction_1h = "накопление лонгов"
+        elif cvd_1h < 0: direction_1h = "накопление шортов"
+        else:            direction_1h = "нейтрально"
+        return {"cvd_1h": round(cvd_1h), "cvd_4h": round(cvd_4h), "direction_1h": direction_1h}
 
     def scan_symbol(self, symbol: str, now: float) -> list:
         """Полное сканирование книги символа на китов, возвращает JSONL-готовые
@@ -570,6 +612,7 @@ async def run_whale_radar(symbols: list = None, duration_sec: float = None,
                                     continue
                                 state.last_price[symbol] = price
                                 usd = notional_usd(price, size)
+                                state.record_cvd(symbol, side, usd, now=time.time())  # Этап 3.1 -- ВСЕ printы, не только whale
                                 result = state.record_trade(symbol, side, usd, now=time.time())
                                 if result:
                                     evt = make_trade_event(symbol, side, price, result["size_usd"],

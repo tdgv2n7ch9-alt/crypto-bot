@@ -326,3 +326,53 @@ def test_fetch_top_symbols_filters_and_sorts(monkeypatch):
     monkeypatch.setattr(wr.requests, "get", fake_get)
     result = wr.fetch_top_symbols(n=10)
     assert result == ["ethusdt", "btcusdt"]
+
+
+# ── CVD (Cumulative Volume Delta), Этап 3.1 АПГРЕЙД 11.07 ──
+
+def test_record_cvd_buy_is_positive_sell_is_negative():
+    state = wr.WhaleRadarState()
+    state.record_cvd("btcusdt", "Buy", 1000.0, now=1_000_000.0)
+    state.record_cvd("btcusdt", "Sell", 400.0, now=1_000_001.0)
+    assert state.cvd("btcusdt", 3600, now=1_000_002.0) == 600.0
+
+
+def test_cvd_window_excludes_old_entries():
+    state = wr.WhaleRadarState()
+    state.record_cvd("btcusdt", "Buy", 1000.0, now=1_000_000.0)
+    # 2ч спустя -- вне окна 1ч
+    assert state.cvd("btcusdt", 3600, now=1_000_000.0 + 7200) == 0.0
+    # но всё ещё внутри окна 4ч
+    assert state.cvd("btcusdt", 4 * 3600, now=1_000_000.0 + 7200) == 1000.0
+
+
+def test_cvd_unknown_symbol_is_zero():
+    state = wr.WhaleRadarState()
+    assert state.cvd("nosuchsymbol", 3600) == 0.0
+
+
+def test_record_cvd_prunes_beyond_max_window():
+    state = wr.WhaleRadarState()
+    state.record_cvd("btcusdt", "Buy", 1000.0, now=1_000_000.0)
+    # запись далеко за CVD_MAX_WINDOW_SEC (4ч+5мин) должна быть обрезана следующим record_cvd
+    state.record_cvd("btcusdt", "Buy", 1.0, now=1_000_000.0 + wr.CVD_MAX_WINDOW_SEC + 1)
+    assert len(state.cvd_windows["btcusdt"]) == 1
+
+
+def test_cvd_summary_direction_labels():
+    state = wr.WhaleRadarState()
+    now = 2_000_000.0
+    state.record_cvd("ethusdt", "Buy", 500.0, now=now)
+    summary = state.cvd_summary("ethusdt", now=now)
+    assert summary["direction_1h"] == "накопление лонгов"
+    assert summary["cvd_1h"] == 500
+
+    state2 = wr.WhaleRadarState()
+    state2.record_cvd("ethusdt", "Sell", 500.0, now=now)
+    assert state2.cvd_summary("ethusdt", now=now)["direction_1h"] == "накопление шортов"
+
+
+def test_cvd_summary_empty_symbol_is_neutral_zero():
+    state = wr.WhaleRadarState()
+    summary = state.cvd_summary("neverseenusdt")
+    assert summary == {"cvd_1h": 0, "cvd_4h": 0, "direction_1h": "нейтрально"}
