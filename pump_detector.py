@@ -956,26 +956,50 @@ def _risk_block(entry: float, sl: float) -> str:
 
 
 async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title: str,
-                          extra_lines: list) -> str:
+                          extra_lines: list, market_snapshot: dict = None) -> str:
+    """market_snapshot -- опционально: {"funding","oi_now","oi_chg","kz"} уже посчитанные
+    ВЫЗЫВАЮЩЕЙ стороной ОДИН раз на всю карточку (см. _confirm_pump_reversal/
+    _confirm_dump_reversal). Если не передан -- фетчит сам (как раньше, для ранних
+    стадий алерта без блока РАЗБОР, где повторного фетча нет и бага нет).
+
+    Честная находка владельца (карточка EVAA, 2026-07-11): шапка и блок РАЗБОР
+    показывали РАЗНЫЙ OI % за 5 мин в одном сообщении -- root cause: bot._get_oi_change()
+    имеет побочный эффект (мутирует _OI_HISTORY[symbol] при КАЖДОМ вызове), поэтому
+    второй вызов через секунды после первого видел "предыдущее" значение, только что
+    записанное первым вызовом -- отсюда near-zero % на втором чтении. Фикс: один
+    снапшот на карточку, а не независимые фетчи в header/РАЗБОР/shadow-логе."""
     sym = symbol.upper().replace("USDT", "")
     price = watch.get("last_price", watch.get("peak_price") or watch.get("bottom_price"))
     detect_price = watch["detect_price"]
     pct_move = (price - detect_price) / detect_price * 100 if detect_price else 0
 
-    funding = 0.0; oi_now = 0.0; oi_chg = 0.0
-    try:
-        funding = ctx.get_funding_pct(sym)
-        oi_now = ctx.get_oi_usd(sym)
-        oi_chg = ctx.get_oi_change(sym)
-    except Exception:
-        pass
+    if market_snapshot:
+        funding = market_snapshot.get("funding", 0.0)
+        oi_now = market_snapshot.get("oi_now", 0.0)
+        oi_chg = market_snapshot.get("oi_chg", 0.0)
+        kz = market_snapshot.get("kz")
+    else:
+        funding = 0.0; oi_now = 0.0; oi_chg = 0.0
+        try:
+            funding = ctx.get_funding_pct(sym)
+            oi_now = ctx.get_oi_usd(sym)
+            oi_chg = ctx.get_oi_change(sym)
+        except Exception:
+            pass
+        kz = None
+        try:
+            kz = ctx.get_killzone_status()
+        except Exception:
+            pass
 
     kz_name = "?"
-    try:
-        kz = ctx.get_killzone_status()
-        kz_name = kz["active"]["name"]
-    except Exception:
-        pass
+    kz_quality = None
+    if kz:
+        try:
+            kz_name = kz["active"]["name"]
+            kz_quality = kz["active"].get("quality")
+        except Exception:
+            pass
 
     oi_line = _oi_matrix_label(price_up=pct_move > 0, oi_change_pct=oi_chg, funding=funding)
 
@@ -1005,8 +1029,12 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
         f"📈 Funding: {funding:+.4f}%",
         f"📊 OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин) — {html.escape(oi_line)}",
         f"⏰ Сессия: {kz_name_e}",
-        "",
     ]
+    if kz_quality == "D":
+        # METHODOLOGY_CORE.md §8: сессия влияет на качество -- явная пометка вместо
+        # только имени зоны (владелец, 2026-07-11, карточка EVAA).
+        lines.append("⚠️ <b>Мёртвая зона</b> — пониженная ликвидность, вход осторожно")
+    lines.append("")
     lines.extend(extra_lines)
     lines.append(SEP)
     return "\n".join(lines)
@@ -1073,11 +1101,16 @@ async def _notify_subscribers_zone(ctx: PumpContext, symbol: str, watch: dict, e
 # ── Машина состояний (fine-grained, по kline) ────────────────────
 
 async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
+    """Возвращает `pa` (dict от ctx.pro_analysis(), содержит pro_score) при успешном
+    расчёте, иначе None -- вызывающая сторона (_confirm_pump_reversal) переиспользует
+    его для shadow-логирования (Dead Zone penalty, см. shadow_engine.py) БЕЗ повторного
+    фетча pro_analysis (тот же принцип "один снапшот", что и для OI/funding — см.
+    _compose_alert докстринг)."""
     sym = symbol.upper().replace("USDT", "")
     try:
         coin = ctx.get_coin_by_symbol(sym)
         if not coin:
-            return
+            return None
         pa = ctx.pro_analysis(sym, coin)
         entry = watch["entry_lo"] or watch["last_price"]
         sl = watch["sl"]
@@ -1095,8 +1128,10 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
             await _send_alert(ctx, symbol, text, watch, f"pump_sub_{sym}")
             _finalize_any(symbol, "pump", "PROMOTED")
             await _send_promotion_chart(ctx, sym, "short", entry, sl, tp1, watch.get("tp2"), rr)
+        return pa
     except Exception as e:
         print(f"Pump Radar: promote check {symbol}: {e}")
+        return None
 
 
 async def _send_promotion_chart(ctx: PumpContext, sym: str, direction: str,
@@ -1138,12 +1173,17 @@ async def _send_promotion_chart(ctx: PumpContext, sym: str, direction: str,
         print(f"Pump Radar: promotion chart_v3 {sym}: {e}")
 
 
-async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict) -> str:
+async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
+                                 market_snapshot: dict = None) -> str:
     """Блок 'РАЗБОР' под графиком в тексте алерта REVERSAL_CONFIRMED: EMA-контекст (1h/4h
     стек через ta_extra), BB-контекст (перерастяжение за полосы), свип-детектор если
     сработал, OI/funding, killzone. Требует свежий фетч 1h/4h OHLC (ctx.get_ohlc) --
     поэтому вызывается только на REVERSAL_CONFIRMED (точка принятия решения), а не на
-    каждом алерте радара, чтобы не грузить CoinGecko на каждый грубый детект."""
+    каждом алерте радара, чтобы не грузить CoinGecko на каждый грубый детект.
+
+    `market_snapshot` -- тот же снапшот funding/OI/killzone, что уже посчитан для
+    _compose_alert() (см. её докстринг про баг рассинхрона OI на карточке EVAA) --
+    если передан, НЕ фетчит OI/funding/killzone заново."""
     if not ctx.get_ohlc:
         return ""
     sym = symbol.upper().replace("USDT", "")
@@ -1195,16 +1235,22 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict) -> s
         print(f"Pump Radar: analysis block sweep {symbol}: {e}")
 
     try:
-        funding = ctx.get_funding_pct(sym)
-        oi_now = ctx.get_oi_usd(sym)
-        oi_chg = ctx.get_oi_change(sym)
+        if market_snapshot:
+            funding = market_snapshot.get("funding", 0.0)
+            oi_now = market_snapshot.get("oi_now", 0.0)
+            oi_chg = market_snapshot.get("oi_chg", 0.0)
+        else:
+            funding = ctx.get_funding_pct(sym)
+            oi_now = ctx.get_oi_usd(sym)
+            oi_chg = ctx.get_oi_change(sym)
         lines.append(f"Funding: {funding:+.4f}%  ·  OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин)")
     except Exception as e:
         print(f"Pump Radar: analysis block OI/funding {symbol}: {e}")
 
     try:
-        kz = ctx.get_killzone_status()
-        lines.append(f"Killzone: {kz['active']['name']}")
+        kz = market_snapshot.get("kz") if market_snapshot else ctx.get_killzone_status()
+        if kz:
+            lines.append(f"Killzone: {kz['active']['name']}")
     except Exception as e:
         print(f"Pump Radar: analysis block killzone {symbol}: {e}")
 
@@ -1227,6 +1273,25 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     watch["tp1"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * risk
     watch["tp2"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * 1.6 * risk
     rr = abs(watch["tp1"] - close) / abs(close - watch["sl"]) if close != watch["sl"] else 0
+
+    # ОДИН снапшот funding/OI/killzone на всю карточку (шапка + РАЗБОР + shadow-лог) --
+    # см. _compose_alert докстринг про баг рассинхрона OI на карточке EVAA (owner,
+    # 2026-07-11): раньше каждый блок фетчил независимо, а ctx.get_oi_change() мутирует
+    # состояние при каждом вызове, из-за чего второй вызов через секунды видел
+    # near-zero % вместо реального.
+    sym = symbol.upper().replace("USDT", "")
+    market_snapshot = {"funding": 0.0, "oi_now": 0.0, "oi_chg": 0.0, "kz": None}
+    try:
+        market_snapshot["funding"] = ctx.get_funding_pct(sym)
+        market_snapshot["oi_now"] = ctx.get_oi_usd(sym)
+        market_snapshot["oi_chg"] = ctx.get_oi_change(sym)
+    except Exception:
+        pass
+    try:
+        market_snapshot["kz"] = ctx.get_killzone_status()
+    except Exception:
+        pass
+
     text = await _compose_alert(ctx, symbol, watch, "REVERSAL CONFIRMED 🔻",
                                  [f"🎯 Зона входа (шорт): <code>{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}</code>",
                                   f"🛑 SL: <code>{_fmt_price(watch['sl'])}</code> (пик +{SL_BUFFER_PCT}%)",
@@ -1235,26 +1300,32 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
                                   _risk_block(watch["entry_lo"], watch["sl"]),
                                   "",
                                   "🛡 <b>Position Protection:</b> если уже в позиции — частичная фиксация на TP1, "
-                                  "трейлинг-стоп в безубыток после TP1."])
-    analysis = await _build_analysis_block(ctx, symbol, watch)
+                                  "трейлинг-стоп в безубыток после TP1."],
+                                 market_snapshot=market_snapshot)
+    analysis = await _build_analysis_block(ctx, symbol, watch, market_snapshot=market_snapshot)
     if analysis:
         text = text + "\n\n" + analysis
     await _send_alert(ctx, symbol, text, watch, f"pump_sub_{symbol.upper().replace('USDT','')}")
-    await _try_promote_pump(ctx, symbol, watch)
+    pa = await _try_promote_pump(ctx, symbol, watch)
 
     # Ночная сессия #2, Блок 4: измерительное логирование в journal/shadow_signals.json
     # (peak/retrace%/объём/funding/OI) -- ПОСЛЕ уже существующего live-пути выше (алерт
     # отправлен, промоушен уже решён), не влияет ни на что боевое. promoted_live
     # фиксирует фактический исход существующего гейта (pro_score>=60 + R:R>=2.0), чтобы
     # позже сравнить promoted vs НЕ promoted кандидатов на одинаковых входных данных.
+    # kz_quality/pro_score -- 2026-07-11, owner: Dead Zone (METHODOLOGY_CORE.md §8) не
+    # штрафовал pro_score вообще -- shadow-only штраф, см. shadow_engine.py.
     try:
-        sym = symbol.upper().replace("USDT", "")
-        funding = ctx.get_funding_pct(sym)
-        oi_now = ctx.get_oi_usd(sym)
-        oi_chg = ctx.get_oi_change(sym)
         promoted_live = watch.get("stage") == "PROMOTED"
+        kz_quality = None
+        kz = market_snapshot.get("kz")
+        if kz:
+            kz_quality = kz.get("active", {}).get("quality")
+        pro_score = pa.get("pro_score") if pa and pa.get("ok") else None
         await shadow_engine.log_pump_reversal_shadow_async(
-            symbol, watch, funding, oi_now, oi_chg, promoted_live)
+            symbol, watch, market_snapshot["funding"], market_snapshot["oi_now"],
+            market_snapshot["oi_chg"], promoted_live, kz_quality=kz_quality,
+            pro_score=pro_score)
     except Exception as e:
         print(f"Pump Radar: shadow-логирование reversal не удалось (не влияет на боевой алерт): {e}")
 
@@ -1279,6 +1350,20 @@ async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     if not show_button:
         rr_line += "  ⚠️ ниже порога 1:1.5 — кнопка добавления недоступна"
 
+    # ОДИН снапшот funding/OI/killzone на всю карточку -- см. _compose_alert докстринг
+    # (тот же фикс, что и в _confirm_pump_reversal, найдено на живой карточке EVAA).
+    market_snapshot = {"funding": 0.0, "oi_now": 0.0, "oi_chg": 0.0, "kz": None}
+    try:
+        market_snapshot["funding"] = ctx.get_funding_pct(sym)
+        market_snapshot["oi_now"] = ctx.get_oi_usd(sym)
+        market_snapshot["oi_chg"] = ctx.get_oi_change(sym)
+    except Exception:
+        pass
+    try:
+        market_snapshot["kz"] = ctx.get_killzone_status()
+    except Exception:
+        pass
+
     text = await _compose_alert(ctx, symbol, watch, "REVERSAL CONFIRMED 🟢",
                                  [f"🎯 Зона входа (лонг): <code>{_fmt_price(watch['entry_lo'])}–{_fmt_price(watch['entry_hi'])}</code>",
                                   f"🛑 SL: <code>{_fmt_price(watch['sl'])}</code> (дно −{DUMP_SL_BUFFER_PCT}%)",
@@ -1287,9 +1372,10 @@ async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
                                   _risk_block(watch["entry_lo"], watch["sl"]),
                                   "",
                                   "🛡 <b>Position Protection:</b> если уже в позиции — частичная фиксация на TP1, "
-                                  "трейлинг-стоп в безубыток после TP1."])
+                                  "трейлинг-стоп в безубыток после TP1."],
+                                 market_snapshot=market_snapshot)
 
-    analysis = await _build_analysis_block(ctx, symbol, watch)
+    analysis = await _build_analysis_block(ctx, symbol, watch, market_snapshot=market_snapshot)
     if analysis:
         text = text + "\n\n" + analysis
 

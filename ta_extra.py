@@ -68,14 +68,30 @@ def _calc_ema_series(closes: list) -> dict:
     return out
 
 
-def _stack_label(last: dict) -> str:
+def _stack_label(last: dict, price: float = None) -> str:
+    """"Бычий"/"медвежий" требует ДВУХ условий: (1) порядок EMA20>EMA50>EMA100>EMA200
+    (или зеркально) И (2) цена ПОДТВЕРЖДАЕТ порядок -- находится выше (ниже) ОБЕИХ
+    ближних EMA20/EMA50. Раньше проверялся только порядок EMA -- честный баг, найден
+    владельцем на живой карточке Pump-Reversal EVAA (2026-07-11): "стек бычий (4h)"
+    при цене НИЖЕ EMA20 и EMA50 (4h). EMA лагают за ценой -- порядок EMA может ещё не
+    "догнать" свежий разворот, поэтому один лишь порядок недостаточен для честного
+    вердикта. Расхождение порядка и цены -- "смешанный" (переходное состояние), не
+    ложный бычий/медвежий. `price=None` (вызов без цены) -- откат к чистому порядку
+    EMA, как раньше, для обратной совместимости мест, где цены под рукой нет."""
     vals = [last.get(p) for p in EMA_PERIODS]
     if any(v is None for v in vals):
         return "недостаточно данных"
     e20, e50, e100, e200 = vals
-    if e20 > e50 > e100 > e200:
+    ema_order_bull = e20 > e50 > e100 > e200
+    ema_order_bear = e20 < e50 < e100 < e200
+    if price is not None:
+        if ema_order_bull and not (price > e20 and price > e50):
+            return "смешанный"
+        if ema_order_bear and not (price < e20 and price < e50):
+            return "смешанный"
+    if ema_order_bull:
         return "бычий"
-    if e20 < e50 < e100 < e200:
+    if ema_order_bear:
         return "медвежий"
     return "смешанный"
 
@@ -91,7 +107,7 @@ def _tf_context(candles: list):
     series = _calc_ema_series(closes)
     last = {p: series[p][-1] for p in EMA_PERIODS}
     price = closes[-1]
-    stack = _stack_label(last)
+    stack = _stack_label(last, price)
 
     def _slope(period):
         s = series[period]

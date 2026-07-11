@@ -44,6 +44,11 @@ import ta_extra
 SHADOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "shadow_signals.json")
 GITHUB_SHADOW_PATH = "journal/shadow_signals.json"
 SR_MIN_RR_TP1_SHADOW = 2.0  # патч 02 -- см. patches/02-rr-gate/README.md, НЕ live-константа
+DEAD_ZONE_SHADOW_SCORE_PENALTY = 10  # находка владельца 2026-07-11 (карточка EVAA):
+# METHODOLOGY_CORE.md §8 -- сессия влияет на качество, но killzone quality=="D" (Dead
+# Zone) никак не штрафовал pro_score reversal-кандидата. НЕ live-константа -- боевой
+# pro_analysis()/_try_promote_pump() не трогаются, только shadow-запись (см.
+# _build_pump_reversal_record ниже). Первое приближение, не откалибровано.
 
 
 def _atomic_write_json(path: str, obj) -> bool:
@@ -362,16 +367,25 @@ async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_i
 
 
 def _build_pump_reversal_record(symbol: str, watch: dict, funding, oi_usd, oi_change_pct,
-                                 promoted_live) -> dict:
+                                 promoted_live, kz_quality: str = None,
+                                 pro_score: float = None) -> dict:
     """Ночная сессия #2, Блок 4: кандидат SHORT после подтверждённого разворота пампа
     (памп -> откат >= REVERSAL_DRAWDOWN_PCT% от пика с объёмом >= REVERSAL_VOL_MULT --
     см. pump_detector.py, эта проверка УЖЕ существует в живом коде, здесь только
     измерительное логирование поверх неё). Вызывается ПОСЛЕ уже существующего live-пути
     (алерт владельцу уже отправлен, `_try_promote_pump` уже отработал) -- не влияет ни
-    на что боевое, чисто накопление данных для последующей оценки."""
+    на что боевое, чисто накопление данных для последующей оценки.
+
+    `kz_quality`/`pro_score` -- добавлены 2026-07-11 (находка владельца на карточке
+    EVAA, METHODOLOGY_CORE.md §8): killzone quality=="D" (Dead Zone) не штрафовал
+    pro_score вообще. Считаем ЗДЕСЬ (shadow), не в pro_analysis()/_try_promote_pump()
+    -- боевой гейт промоушена не меняется."""
     peak = watch.get("peak_price")
     last = watch.get("last_price")
     retrace_pct = round((peak - last) / peak * 100, 2) if peak else None
+    is_dead_zone = kz_quality == "D"
+    penalty = DEAD_ZONE_SHADOW_SCORE_PENALTY if is_dead_zone else 0
+    pro_score_shadow_adjusted = (pro_score - penalty) if pro_score is not None else None
     return {
         "ts": time.time(),
         "type": "pump_reversal_shadow",
@@ -390,15 +404,21 @@ def _build_pump_reversal_record(symbol: str, watch: dict, funding, oi_usd, oi_ch
         "tp1": watch.get("tp1"),
         "tp2": watch.get("tp2"),
         "promoted_live": promoted_live,
+        "kz_quality": kz_quality,
+        "dead_zone": is_dead_zone,
+        "pro_score_live": pro_score,
+        "dead_zone_score_penalty": penalty,
+        "pro_score_shadow_adjusted": pro_score_shadow_adjusted,
     }
 
 
 def log_pump_reversal_shadow(symbol: str, watch: dict, funding, oi_usd, oi_change_pct,
-                              promoted_live) -> bool:
+                              promoted_live, kz_quality: str = None,
+                              pro_score: float = None) -> bool:
     """Синхронная версия -- см. _build_pump_reversal_record. Локальная запись только."""
     try:
         record = _build_pump_reversal_record(symbol, watch, funding, oi_usd, oi_change_pct,
-                                              promoted_live)
+                                              promoted_live, kz_quality, pro_score)
         return _write_local(record)
     except Exception as e:
         print(f"shadow_engine.log_pump_reversal_shadow failed for {symbol}: {e}")
@@ -406,12 +426,14 @@ def log_pump_reversal_shadow(symbol: str, watch: dict, funding, oi_usd, oi_chang
 
 
 async def log_pump_reversal_shadow_async(symbol: str, watch: dict, funding, oi_usd,
-                                          oi_change_pct, promoted_live) -> bool:
+                                          oi_change_pct, promoted_live,
+                                          kz_quality: str = None,
+                                          pro_score: float = None) -> bool:
     """Боевой путь -- вызывается из pump_detector._confirm_pump_reversal(). Локальная
     запись + best-effort пуш в GitHub, тот же паттерн, что и log_shadow_async()."""
     try:
         record = _build_pump_reversal_record(symbol, watch, funding, oi_usd, oi_change_pct,
-                                              promoted_live)
+                                              promoted_live, kz_quality, pro_score)
     except Exception as e:
         print(f"shadow_engine.log_pump_reversal_shadow_async: build failed for {symbol}: {e}")
         return False
