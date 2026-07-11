@@ -2634,3 +2634,56 @@ py_compile отдельно -- чисто. 9 новых тестов (`tests/tes
 **М1 статус: ГОТОВ** (переиспользование Пакета 2, ничего нового не написано).
 Решение о переводе патчей 03/04/05 в бой -- по-прежнему за владельцем (цифры
 даны, вывод не мой).
+
+## 2026-07-11 -- Пакет 3, М2: On-chain через реально бесплатные источники (чекпоинт)
+
+Задание: заменить Glassnode (Пакет 2 нашёл -- платный, см. М5) на реально
+бесплатные источники: blockchain.com charts, mempool.space, DeFiLlama,
+alternative.me F&G. Правило: "каждый эндпоинт проверить живьём ДО написания
+кода" -- выполнено буквально, curl'ом, до единой строки кода:
+
+- `mempool.space/api/v1/fees/recommended` -- HTTP 200, `{fastestFee, ...}`
+- `mempool.space/api/mempool` -- HTTP 200, `{count, vsize, total_fee, ...}`
+- `mempool.space/api/v1/difficulty-adjustment` -- HTTP 200
+- `api.blockchain.info/charts/hash-rate?timespan=2days&format=json` -- HTTP 200
+- `api.blockchain.info/charts/difficulty?...` -- HTTP 200
+- `api.blockchain.info/charts/miners-revenue?...` -- HTTP 200
+- `api.llama.fi/v2/historicalChainTvl` -- HTTP 200 (глобальный TVL)
+- `stablecoins.llama.fi/stablecoincharts/all` -- HTTP 200
+- `api.alternative.me/fng/?limit=1` -- HTTP 200 (уже используется в bot.py в
+  других карточках с более ранних этапов -- подтверждено grep: строки 2893,
+  3795, 4127, 3034-3036/3871-3875 (скоринг), 3977, 4324)
+
+Все 4 источника -- без API-ключа, без блокеров. Etherscan (ETH whale) сознательно
+НЕ в этом пакете (владелец сам отложил его ещё в ответах к Пакету 2).
+
+**Код**: `onchain_metrics.py` расширен аддитивно (старый Glassnode/BGeometrics
+каркас из Пакета 2 М5 не тронут -- остаётся валиден, если владелец решит
+всё-таки задействовать платный источник). Добавлено: `_safe_get_json()`
+(общий безопасный GET+JSON, честный `{"ok": False, "reason": ...}` на любую
+ошибку), `fetch_mempool_fees/congestion/difficulty_adjustment()`,
+`fetch_blockchain_hashrate/difficulty/miners_revenue()`,
+`fetch_defillama_global_tvl/stablecoins()`, `fetch_fear_greed()`,
+`get_free_onchain_snapshot(symbol)` (единая точка входа, честная частичная
+деградация -- отказ одного источника не валит остальные),
+`shadow_score_adjustment_free()` (хук на будущее, формула ЕЩЁ НЕ
+спроектирована -- честно `available: False`, боевой скоринг не тронут).
+`format_onchain_card_text()` полностью переписан на реальные данные
+(старый "заглушка" текст убран). Карточка "🔗 On-Chain" в `bot.py`
+(callback `onchain_info`, строка ~3727) уже вызывала
+`onchain_metrics.format_onchain_card_text("BTC")` из Пакета 2 -- новых
+изменений в `bot.py` не потребовалось, реальные данные пошли автоматически.
+
+**Честно НЕ решено этим пакетом**: SOPR/MVRV/NVT/Puell/LTH-STH supply
+по-прежнему недоступны бесплатно -- задокументировано в новом
+`KNOWLEDGE_GAPS.md` (переисследован Glassnode-вывод Пакета 2, BGeometrics
+статус не менялся -- вне скоупа Пакета 3). Формула shadow-скоринга по новым
+метрикам НЕ спроектирована -- отдельный шаг, ждёт решения владельца.
+
+py_compile (`onchain_metrics.py`, `bot.py`, `tests/test_onchain_metrics.py`)
+отдельно -- чисто. 16 новых тестов (юнит-тесты фетчеров мокают
+`requests.get` -- никаких реальных сетевых вызовов в pytest, детерминизм;
+живая проверка была отдельно, curl'ом, до кода). Один старый тест
+(`test_format_onchain_card_text_honest_not_configured`) переписан, т.к.
+проверял старое поведение заглушки, которого больше нет. 381 passed, 1
+skipped (было 365).
