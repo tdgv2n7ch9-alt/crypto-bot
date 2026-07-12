@@ -124,3 +124,63 @@ def test_build_morning_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path
     assert "Топ-1 расхождение" in text
     assert "BEAT" in text
     assert "Патчи 02-05" in text
+
+
+# --- Пакет 11 М7: night_package_status_summary() + секция в дайджесте ---
+
+def test_night_package_status_summary_extracts_status_lines(tmp_path):
+    progress = tmp_path / "PROGRESS.md"
+    progress.write_text(
+        "## М1\n**Статус М1: ГОТОВ.**\n\n## М2\n**Статус М2: НЕ ЗАКРЫТ, причина X.**\n"
+    )
+    result = morning_metrics.night_package_status_summary(progress_md_path=str(progress))
+    assert result == ["Статус М1: ГОТОВ.", "Статус М2: НЕ ЗАКРЫТ, причина X."]
+
+
+def test_night_package_status_summary_missing_file_returns_empty(tmp_path):
+    result = morning_metrics.night_package_status_summary(
+        progress_md_path=str(tmp_path / "does_not_exist.md"))
+    assert result == []
+
+
+def test_night_package_status_summary_caps_at_max_lines(tmp_path):
+    progress = tmp_path / "PROGRESS.md"
+    lines = "\n".join(f"**Статус М{i}: ГОТОВ.**" for i in range(20))
+    progress.write_text(lines)
+    result = morning_metrics.night_package_status_summary(progress_md_path=str(progress))
+    assert len(result) == morning_metrics.NIGHT_STATUS_MAX_LINES
+    assert result[-1] == "Статус М19: ГОТОВ."
+
+
+def test_night_package_status_summary_only_reads_tail(tmp_path):
+    """Старые статусы за пределами tail_chars не должны попадать в выжимку --
+    это НАМЕРЕННО (только последняя ночная сессия, не вся история)."""
+    progress = tmp_path / "PROGRESS.md"
+    old = "x" * 100 + "\n**Статус СТАРЫЙ: ГОТОВ.**\n" + "y" * 200
+    progress.write_text(old)
+    result = morning_metrics.night_package_status_summary(
+        progress_md_path=str(progress), tail_chars=50)
+    assert result == []
+
+
+def test_build_morning_digest_includes_night_package_section(monkeypatch, tmp_path):
+    progress = tmp_path / "PROGRESS.md"
+    progress.write_text("**Статус М1: ГОТОВ.**\n")
+    monkeypatch.setattr(morning_metrics, "PROGRESS_MD_PATH", str(progress))
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Ночной пакет" in text
+    assert "Статус М1: ГОТОВ." in text
+
+
+def test_build_morning_digest_night_package_na_when_no_progress_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(morning_metrics, "PROGRESS_MD_PATH", str(tmp_path / "missing.md"))
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "н/д" in text
