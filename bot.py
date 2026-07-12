@@ -8215,6 +8215,35 @@ def real_full_analysis(coin: dict) -> dict:
     if supertrend_bull is True:  smc_factors.append("ST BUY ")
     elif supertrend_bull is False: smc_factors.append("ST SELL ")
 
+    # --- Пакет 10 М1 (владелец "да"): shadow-структурные примитивы -----------------
+    # Честные ta_extra.smc_setup_type()/find_fvg_zones() вместо %-порогов smc_bos_*/
+    # smc_fvg_* выше (см. ENGINE_UNIFICATION.md §5 Шаг 3, §4 "Блок 3"/"Блок 4" ТЗ).
+    # SHADOW ONLY -- rocket/is_long/direction уже полностью вычислены к этой строке,
+    # это поле их не читает и не меняет. Диф-лог расхождений -- см. diff-скрипт.
+    try:
+        c4h_shadow = ta.get("candles_4h", []) if ta["ok"] else []
+        bias_dir = "long" if is_long else "short"
+        setup_shadow = (ta_extra.smc_setup_type(c4h_shadow, bias_dir) if c4h_shadow
+                         else {"type": None, "label": "н/д -- нет 4h-свечей", "aligned": None})
+        fvg_zones_shadow = ta_extra.find_fvg_zones(c4h_shadow, price) if c4h_shadow and price else []
+        fvg_bull_new = any(z["type"] == "bull" for z in fvg_zones_shadow)
+        fvg_bear_new = any(z["type"] == "bear" for z in fvg_zones_shadow)
+        structural_primitives_shadow = {
+            "smc_bos_bull_new": setup_shadow.get("type") == "BOS_bull",
+            "smc_bos_bear_new": setup_shadow.get("type") == "BOS_bear",
+            "smc_choch_bull_new": setup_shadow.get("type") == "CHoCH_bull",
+            "smc_choch_bear_new": setup_shadow.get("type") == "CHoCH_bear",
+            "smc_setup_label": setup_shadow.get("label"),
+            "smc_fvg_bull_new": fvg_bull_new,
+            "smc_fvg_bear_new": fvg_bear_new,
+            "fvg_zone_count": len(fvg_zones_shadow),
+            # старые (боевые, НЕ тронуты) значения рядом -- для диф-сверки в одном месте
+            "smc_bos_bull_old": smc_bos_bull, "smc_bos_bear_old": smc_bos_bear,
+            "smc_fvg_bull_old": smc_fvg_bull, "smc_fvg_bear_old": smc_fvg_bear,
+        }
+    except Exception as e:
+        structural_primitives_shadow = {"error": str(e)}
+
     return {
         "label": rocket_label, "score": score_ta, "is_long": is_long,
         "rocket": rocket, "rocket_label": rocket_label,
@@ -8250,6 +8279,7 @@ def real_full_analysis(coin: dict) -> dict:
         # send_scheduled к теневому контуру. Уже посчитаны выше в ta = real_ta(sym) --
         # никаких новых сетевых вызовов, чистое добавление поля.
         "candles_4h": ta.get("candles_4h", []) if ta["ok"] else [],
+        "structural_primitives_shadow": structural_primitives_shadow,
     }
 
 
