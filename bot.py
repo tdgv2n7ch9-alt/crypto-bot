@@ -10335,19 +10335,29 @@ async def cmd_whales(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+_patterns_digest_busy = False   # отдельный, лёгкий guard -- НЕ часть _SCAN_TYPES/
+                                 # _scan_busy (не влияет на паузу AUTO-цикла, эта
+                                 # команда ручная и вне боевого пути)
+PATTERNS_DIGEST_TOP_N = 30       # топ-N по cmc_rank для дайджеста "Паттерны дня"
+
+
 async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only: /patterns <symbol> -- классические чарт-паттерны Булковского
     (chart_patterns.py, Пакет 8 М3: "отдельная строка в карточке ТА
     (информационно). Бой не трогать") на 4h-свечах символа. Только показ данных --
     не влияет ни на какой боевой сигнал/гейт (shadow_engine пишет то же самое поле
     "chart_patterns" в journal/shadow_signals.json, эта команда -- ручной просмотр
-    по запросу для любого символа, не только по уже отправленным сигналам)."""
+    по запросу для любого символа, не только по уже отправленным сигналам).
+
+    Пакет 9 М5 ("Паттерны дня"): БЕЗ аргумента -- дайджест по топ-N монет вместо
+    подсказки по использованию, тот же источник паттернов, без доп. боевого
+    эффекта."""
     import os
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     if update.effective_user.id != owner_id:
         return
     if not ctx.args:
-        await update.message.reply_text("Использование: `/patterns BTC`", parse_mode="Markdown")
+        await _cmd_patterns_digest(update, ctx)
         return
     symbol = ctx.args[0].upper().replace("USDT", "") + "USDT"
     candles_4h = get_binance_ohlc(symbol, "4h", 200)
@@ -10361,6 +10371,63 @@ async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"_Источник: Bulkowski, «Энциклопедия графических моделей» (Trading/). "
         f"Только информация — не влияет ни на какой боевой сигнал/гейт._",
         parse_mode="Markdown")
+
+
+async def _cmd_patterns_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """"Паттерны дня" -- дайджест классических паттернов (флаги/голова-плечи/
+    треугольники) по топ-N монет (PATTERNS_DIGEST_TOP_N, по cmc_rank), 4h-свечи.
+    Только показ -- та же chart_patterns.py, что и /patterns SYMBOL и
+    shadow_engine патч 08, никакого нового боевого эффекта."""
+    global _patterns_digest_busy
+    if _patterns_digest_busy:
+        await update.message.reply_text("⏳ Дайджест паттернов уже считается, подожди ~15 сек.")
+        return
+    _patterns_digest_busy = True
+    try:
+        msg = await update.message.reply_text(f"📐 Сканирую топ-{PATTERNS_DIGEST_TOP_N} монет на паттерны... ~15 сек")
+    except Exception:
+        msg = None
+
+    def _scan_sync():
+        stables = {"USDT", "USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP", "FRAX",
+                   "LUSD", "GUSD", "USDD", "PYUSD", "WBTC", "WETH", "CBBTC"}
+        coins = [c for c in get_all_coins() if c.get("symbol", "") not in stables][:PATTERNS_DIGEST_TOP_N]
+        hits = []
+        skipped = 0
+        for c in coins:
+            sym = c.get("symbol", "") + "USDT"
+            candles_4h = get_binance_ohlc(sym, "4h", 200)
+            if not candles_4h or len(candles_4h) < 15:
+                skipped += 1
+                continue
+            # Переиспользует chart_patterns.format_line() -- тот же агрегатор,
+            # что /patterns SYMBOL и shadow_engine патч 08, без дублирования логики.
+            line = chart_patterns.format_line(candles_4h)
+            if "не найдено" not in line:
+                hits.append({"sym": c.get("symbol", ""), "line": line.replace("📐 Классические паттерны (Булковский): ", "")})
+        return hits, skipped, len(coins)
+
+    try:
+        loop = asyncio.get_event_loop()
+        hits, skipped, total = await loop.run_in_executor(None, _scan_sync)
+        SEP = "━━━━━━━━━━━━━━━━━━━━"
+        lines = [f"📐 *Паттерны дня* — топ-{total} монет по капе", SEP, ""]
+        if hits:
+            for h in hits:
+                lines.append(f"*{h['sym']}*: {h['line']}")
+        else:
+            lines.append("Классических паттернов не найдено.")
+        if skipped:
+            lines.append(f"\n_{skipped} монет пропущено -- недостаточно 4h-свечей._")
+        lines.append(f"\n_Источник: Bulkowski, «Энциклопедия графических моделей» (Trading/). "
+                      f"Только информация — не влияет ни на какой боевой сигнал/гейт._")
+        text = "\n".join(lines)
+        if msg:
+            await msg.edit_text(text, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(text, parse_mode="Markdown")
+    finally:
+        _patterns_digest_busy = False
 
 
 async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
