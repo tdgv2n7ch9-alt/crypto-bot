@@ -45,6 +45,7 @@ import requests
 import websockets
 
 import live_prices
+import rug_radar
 import shadow_engine
 import ta_extra
 
@@ -159,7 +160,7 @@ class PumpContext:
     (killzone, OI-матрица, funding, скоринг) и не тащить сюда Binance REST."""
     def __init__(self, bot, owner_chat_id, get_coin_by_symbol, full_analysis, pro_analysis,
                  get_killzone_status, get_funding_pct, get_oi_usd, get_oi_change,
-                 add_top_short_signal, get_ohlc=None):
+                 add_top_short_signal, get_ohlc=None, get_cg_detail=None):
         self.bot = bot
         self.owner_chat_id = owner_chat_id
         self.get_coin_by_symbol = get_coin_by_symbol
@@ -173,6 +174,9 @@ class PumpContext:
         self.get_ohlc = get_ohlc   # bot.get_binance_ohlc(symbol, interval, limit) -- для
                                     # 1h/4h EMA-стека/свип-детектора в блоке "РАЗБОР" (см.
                                     # _build_analysis_block), только на REVERSAL_CONFIRMED
+        self.get_cg_detail = get_cg_detail  # bot._cg_get(coins/{id}) wrapper -- для
+                                    # rug_radar.compute_rug_risk() (FDV/tickers/genesis),
+                                    # Пакет 9. None -- rug-строка честно не показывается.
 
 
 def get_pump_radar_state() -> dict:
@@ -1004,11 +1008,20 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
     oi_line = _oi_matrix_label(price_up=pct_move > 0, oi_change_pct=oi_chg, funding=funding)
 
     memecoin_line = ""
+    rug_line = ""
     try:
         coin = ctx.get_coin_by_symbol(sym)
         mcap = (coin.get("quote", {}).get("USDT", {}).get("market_cap", 0) or 0) if coin else 0
         if 0 < mcap < MEMECOIN_MCAP_USD:
             memecoin_line = "\n⚠️ <b>МЕМКОИН</b> — низкая капитализация, повышенный риск манипуляции"
+        # Rug-Radar (Пакет 9, кейс LAB, METHODOLOGY_CORE.md §21) -- информационно,
+        # НЕ подано в _try_promote_pump()/боевой гейт (уже решается независимо).
+        if coin and ctx.get_cg_detail:
+            cg_detail = ctx.get_cg_detail(sym) or {}
+            rug_risk = rug_radar.compute_rug_risk(sym, coin, cg_detail=cg_detail)
+            rug_line_text = rug_radar.format_rug_risk_line(rug_risk)
+            if rug_line_text:
+                rug_line = f"\n{html.escape(rug_line_text)}"
     except Exception:
         pass
 

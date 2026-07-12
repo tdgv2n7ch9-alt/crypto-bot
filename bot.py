@@ -119,6 +119,7 @@ import morning_metrics
 import onchain_metrics
 import shadow_engine
 import chart_patterns
+import rug_radar
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -8994,6 +8995,25 @@ async def _cmd_x100_scanner_body(update, ctx):
                     except Exception:
                         spot = []
                         price_line = f"💰 Цена: {c['price']} | МКап: {c['mcap']}"
+                    # Rug-Radar (Пакет 9, kейс LAB, knowledge/METHODOLOGY_CORE.md §21):
+                    # информационная строка ТОЛЬКО, score>=40 -- НЕ подана в c["score"]/
+                    # ранжирование/фильтр выше (уже полностью решены к этой строке).
+                    rug_line = ""
+                    try:
+                        rug_cg_detail = _cg_get(
+                            f"https://api.coingecko.com/api/v3/coins/{c['slug']}",
+                            params={"localization": "false", "tickers": "true",
+                                    "community_data": "false", "developer_data": "false"},
+                            timeout=8) or {}
+                        rug_coin = {"quote": {"USDT": {
+                            "market_cap": mc_val,
+                            "volume_24h": mc_val * c["vol_ratio"] / 100 if mc_val else 0,
+                            "percent_change_30d": c["ch30d"],
+                        }}}
+                        rug_risk = rug_radar.compute_rug_risk(c["sym"], rug_coin, cg_detail=rug_cg_detail)
+                        rug_line = rug_radar.format_rug_risk_line(rug_risk)
+                    except Exception as e:
+                        log.info(f"[RUG-RADAR] x100 {c['sym']}: {e}")
                     shown_x100 += 1
                     card_blocks += [
                         SEP,
@@ -9003,6 +9023,7 @@ async def _cmd_x100_scanner_body(update, ctx):
                         *spot,
                         f"⚡ {' · '.join(c['reasons'])}",
                         f"🎯 Скор: {c['score']}/12",
+                        *([rug_line] if rug_line else []),
                         _journal_footer_line("x100"),
                     ]
             _x100_skip_note = f", {skipped_x100} skip без live-цены/EMA" if skipped_x100 else ""
@@ -10673,6 +10694,19 @@ async def _start_pump_detector(app):
     def _get_coin(sym):
         return next((c for c in get_all_coins() if c.get("symbol") == sym), None)
 
+    def _get_cg_detail(sym):
+        """rug_radar.compute_rug_risk() -- FDV/supply/genesis/tickers, лучший-эффорт
+        (см. rug_radar.py докстринг: тот же паттерн, что get_binance_alltime_low())."""
+        try:
+            slug = _cg_slug(sym)
+            data = _cg_get(f"https://api.coingecko.com/api/v3/coins/{slug}",
+                            params={"localization": "false", "tickers": "true",
+                                    "community_data": "false", "developer_data": "false"},
+                            timeout=8)
+            return data or {}
+        except Exception:
+            return {}
+
     ctx = PumpContext(
         app.bot, owner_id, _get_coin, full_analysis,
         pro_analysis=pro_analysis,
@@ -10682,6 +10716,7 @@ async def _start_pump_detector(app):
         get_oi_change=_get_oi_change,
         add_top_short_signal=add_top_short_signal,
         get_ohlc=get_binance_ohlc,
+        get_cg_detail=_get_cg_detail,
     )
     asyncio.create_task(run_pump_detector(ctx))
     asyncio.create_task(run_miniticker_stream(ctx))
