@@ -301,6 +301,20 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         except Exception as e:
             discrepancy.append(f"whale confluence calc failed: {e}")
 
+    # amd_phase/smc_inducement по методологии (Пакет 5 М3, владелец "ДА" --
+    # ТОЛЬКО shadow-скоринг, не бой, не патч 01-06 -- отдельные исследовательские
+    # поля, не участвуют в affected/discrepancy выше, не решают "прошёл бы гейт").
+    amd_methodology = {"phase": None, "nymidnight_price": None, "price_vs_nymidnight": None}
+    inducement = {"inducement_swept": False, "detail": None}
+    try:
+        amd_methodology = ta_extra.classify_amd_phase(candles_4h)
+    except Exception as e:
+        discrepancy.append(f"amd_phase (methodology) calc failed: {e}")
+    try:
+        inducement = ta_extra.detect_inducement_sweep(candles_4h)
+    except Exception as e:
+        discrepancy.append(f"inducement calc failed: {e}")
+
     return {
         "ts": time.time(),
         "symbol": symbol,
@@ -317,6 +331,8 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         "bpr_confluence": bpr_confluence,
         "whale_klvl_confluence": whale_conf["whale_klvl_confluence"],
         "whale_klvl_matches": whale_conf["whale_klvl_matches"],
+        "amd_phase_methodology": amd_methodology,
+        "inducement": inducement,
         "patches_affected": affected,
         "discrepancy": discrepancy,
         "live_journal_id": live_journal_id,

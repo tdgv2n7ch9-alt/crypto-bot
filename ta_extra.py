@@ -1112,3 +1112,96 @@ def detect_bpr_zones(candles: list) -> list:
                 })
     zones.sort(key=lambda z: z["formed_idx"], reverse=True)
     return zones
+
+
+# ── Пакет 5 М3 (владелец, "ДА" -- ТОЛЬКО shadow-скоринг, не бой) ──
+# amd_phase/smc_inducement по методологии, отдельно от живого bot.pro_analysis()
+# (который использует грубую час-суточную эвристику без ценового якоря вообще
+# -- METHODOLOGY_CORE.md §18.2 -- и не трогается этим пакетом). Пишутся ТОЛЬКО
+# в shadow-записи через shadow_engine.compute_shadow(), НИКАКОГО влияния на
+# bull_pts/bear_pts/pro_score/боевые гейты.
+
+import datetime as _dt
+import pytz as _pytz
+
+_NY_TZ = _pytz.timezone("America/New_York")
+
+
+def ny_midnight_price(candles: list, now_utc: "_dt.datetime" = None):
+    """Цена на New York Midnight (00:00 America/New_York, с учётом перехода на
+    летнее время) -- осевой уровень AMD/MMXM-модели (METHODOLOGY_CORE.md
+    §18.2/§18.3), которого в движке раньше не было ВООБЩЕ (grep на
+    daily_open/midnight -- 0 совпадений до этого пакета). Разрешение свечей
+    (4h) не даёт точного попадания в полночь -- честно берёт CLOSE ближайшей
+    4h-свечи, чья временная метка <= NY-полночи, не интерполирует точнее, чем
+    позволяют данные. None, если подходящей свечи нет (мало истории)."""
+    if not candles or now_utc is None:
+        return None
+    now_ny = now_utc.astimezone(_NY_TZ)
+    midnight_ny = now_ny.replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight_utc_ms = int(midnight_ny.astimezone(_pytz.utc).timestamp() * 1000)
+    candidates = [c for c in candles if c.get("timestamp", 0) <= midnight_utc_ms]
+    if not candidates:
+        return None
+    return candidates[-1]["close"]
+
+
+def classify_amd_phase(candles_4h: list, now_utc: "_dt.datetime" = None) -> dict:
+    """AMD/PO3-фаза, честно привязанная к New York Midnight (см.
+    ny_midnight_price()) -- в отличие от живой эвристики bot.pro_analysis()
+    (только час суток, без ценового якоря, см. METHODOLOGY_CORE.md §18.2).
+    Часовые окна -- те же, что в живом коде (UTC+3, Стамбул): Азия 01-09
+    accumulation, Лондон 09-13 manipulation, NY 15-22 distribution, иначе
+    dead_zone. НЕ полная MMXM-модель (нет проверки breaker+непокрытый FVG для
+    валидации SMR, METHODOLOGY_CORE.md §18.3) -- честно упрощённая версия, но
+    с добавленным ценовым якорем, которого не было вообще. ТОЛЬКО для
+    shadow-записей -- не читается никаким боевым путём."""
+    if now_utc is None:
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+    now_ist = now_utc.astimezone(_dt.timezone(_dt.timedelta(hours=3)))
+    h = now_ist.hour
+    nymid = ny_midnight_price(candles_4h, now_utc)
+    last_close = candles_4h[-1]["close"] if candles_4h else None
+    price_vs_nymidnight = None
+    if nymid is not None and last_close is not None:
+        price_vs_nymidnight = "above" if last_close > nymid else "below"
+
+    if 1 <= h < 9:
+        phase = "accumulation"
+    elif 9 <= h < 13:
+        if price_vs_nymidnight == "below":
+            phase = "manipulation_bear"
+        elif price_vs_nymidnight == "above":
+            phase = "manipulation_bull"
+        else:
+            phase = "manipulation"
+    elif 15 <= h < 22:
+        if price_vs_nymidnight == "above":
+            phase = "distribution_bull"
+        elif price_vs_nymidnight == "below":
+            phase = "distribution_bear"
+        else:
+            phase = "distribution"
+    else:
+        phase = "dead_zone"
+
+    return {"phase": phase, "nymidnight_price": nymid,
+            "price_vs_nymidnight": price_vs_nymidnight}
+
+
+def detect_inducement_sweep(candles: list, min_bars_ago: int = 3) -> dict:
+    """Упрощённая детекция inducement -- снятие ликвидности ПЕРЕД POI (не
+    самим входом), см. METHODOLOGY_CORE.md §18.5 (источники "36 Стрим Работа
+    в POI"/"Воркшоп 2.0 5 день"). Настоящий inducement требует привязки к
+    конкретной POI-зоне и "чистого билдинга" перед свипом -- этого здесь НЕТ,
+    честно не выдаю за полную реализацию. Упрощение: переиспользует
+    detect_sweep() -- если свежий свип найден, но случился НЕ на последних
+    min_bars_ago барах (то есть до текущей точки, не в момент входа),
+    считается кандидатом на inducement. Порог min_bars_ago эвристический, не
+    из источника."""
+    sweep = detect_sweep(candles)
+    if not sweep:
+        return {"inducement_swept": False, "detail": None}
+    if sweep["bars_ago"] >= min_bars_ago:
+        return {"inducement_swept": True, "detail": sweep}
+    return {"inducement_swept": False, "detail": sweep}
