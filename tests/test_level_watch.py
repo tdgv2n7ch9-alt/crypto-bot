@@ -99,6 +99,101 @@ def test_format_level_alert_no_note_omits_note_line():
     assert "note" not in text.lower()
 
 
+def test_format_level_alert_includes_liq_line_when_provided():
+    z = _zone(side="LONG", lo=100.0, hi=110.0)
+    text = lw.format_level_alert("ETHUSDT", z, 105.0, "in_zone", liq_line="🗺 Ликвидации рядом: тест")
+    assert "🗺 Ликвидации рядом: тест" in text
+
+
+# ── find_liquidation_clusters_near_zone / format_liquidation_cluster_line ─────
+# Владелец 2026-07-12: "кластеры рядом (±1%) в первом же алерте; если heatmap-слой
+# для альтов ещё не покрывает эти символы -- честно «н/д»".
+
+def _heatmap(buckets, ok=True):
+    return {"ok": ok, "retrospective": True, "buckets": buckets}
+
+
+def _bucket(price_lo, price_hi, notional=1000.0):
+    return {"price_lo": price_lo, "price_hi": price_hi,
+            "pct_from_now": 0.0, "notional_usd": notional}
+
+
+def test_find_clusters_empty_without_heatmap():
+    assert lw.find_liquidation_clusters_near_zone(None, _zone(lo=100, hi=110)) == []
+    assert lw.find_liquidation_clusters_near_zone({"ok": False}, _zone(lo=100, hi=110)) == []
+
+
+def test_find_clusters_matches_overlapping_bucket():
+    z = _zone(lo=100.0, hi=110.0)
+    heatmap = _heatmap([_bucket(105.0, 106.0)])  # inside zone
+    result = lw.find_liquidation_clusters_near_zone(heatmap, z)
+    assert len(result) == 1
+
+
+def test_find_clusters_matches_within_threshold_but_outside_zone():
+    z = _zone(lo=100.0, hi=110.0)
+    # bucket just above zone, within 1% extension (110 * 1.01 = 111.1)
+    heatmap = _heatmap([_bucket(110.5, 111.0)])
+    result = lw.find_liquidation_clusters_near_zone(heatmap, z, threshold_pct=1.0)
+    assert len(result) == 1
+
+
+def test_find_clusters_excludes_bucket_beyond_threshold():
+    z = _zone(lo=100.0, hi=110.0)
+    heatmap = _heatmap([_bucket(120.0, 121.0)])  # way outside ±1%
+    result = lw.find_liquidation_clusters_near_zone(heatmap, z, threshold_pct=1.0)
+    assert result == []
+
+
+def test_format_liq_line_na_without_injected_function():
+    line = lw.format_liquidation_cluster_line("ETHUSDT", _zone(lo=100, hi=110), get_liq_data_fn=None)
+    assert "н/д" in line
+
+
+def test_format_liq_line_na_on_provider_exception():
+    def _boom(sym):
+        raise RuntimeError("network down")
+    line = lw.format_liquidation_cluster_line("ETHUSDT", _zone(lo=100, hi=110), get_liq_data_fn=_boom)
+    assert "н/д" in line
+
+
+def test_format_liq_line_na_when_symbol_has_no_okx_market():
+    # e.g. JASMYUSDT -- confirmed live 2026-07-12: OKX code 51014 "Index doesn't exist"
+    def _no_market(sym):
+        return {"ok": True, "heatmap": None, "error": "Index doesn't exist."}
+    line = lw.format_liquidation_cluster_line("JASMYUSDT", _zone(lo=0.004, hi=0.0043), get_liq_data_fn=_no_market)
+    assert "н/д" in line
+    assert "Index doesn't exist" in line
+
+
+def test_format_liq_line_reports_real_clusters():
+    z = _zone(lo=100.0, hi=110.0)
+    def _with_clusters(sym):
+        return {"ok": True, "heatmap": _heatmap([_bucket(104.0, 106.0, notional=50000.0)])}
+    line = lw.format_liquidation_cluster_line("ETHUSDT", z, get_liq_data_fn=_with_clusters)
+    assert "н/д" not in line
+    assert "50,000" in line
+    assert "ретроспектива" in line
+
+
+def test_format_liq_line_no_clusters_found_is_honest_not_na():
+    z = _zone(lo=100.0, hi=110.0)
+    def _no_clusters(sym):
+        return {"ok": True, "heatmap": _heatmap([])}
+    line = lw.format_liquidation_cluster_line("ETHUSDT", z, get_liq_data_fn=_no_clusters)
+    assert "не найдено" in line
+    assert "н/д" not in line
+
+
+def test_format_liq_line_strips_usdt_suffix_before_calling_provider():
+    seen = {}
+    def _capture(sym):
+        seen["symbol"] = sym
+        return {"ok": True, "heatmap": _heatmap([])}
+    lw.format_liquidation_cluster_line("WLDUSDT", _zone(lo=0.38, hi=0.39), get_liq_data_fn=_capture)
+    assert seen["symbol"] == "WLD"
+
+
 # ── LevelWatchState (кулдаун) ─────────────────────────────────────────────────
 
 def test_cooldown_blocks_repeat():

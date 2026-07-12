@@ -265,9 +265,57 @@ def distance_pct(price: float, zone: dict) -> float:
     return round((price - hi) / price * 100, 3)
 
 
+LIQUIDATION_CLUSTER_THRESHOLD_PCT = 1.0  # "кластеры рядом (±1%)" -- владелец, 2026-07-12
+
+
+def find_liquidation_clusters_near_zone(heatmap: dict, zone: dict,
+                                         threshold_pct: float = LIQUIDATION_CLUSTER_THRESHOLD_PCT) -> list:
+    """Чистая функция -- фильтрует heatmap["buckets"] (см. bot.get_liq_data()/
+    derivatives_extra.compute_liquidation_heatmap) по пересечению с зоной,
+    расширенной на threshold_pct% в обе стороны. Пустой список, если heatmap
+    недоступен/пуст -- вызывающая сторона трактует это честно, не как "0 кластеров"."""
+    if not heatmap or not heatmap.get("ok"):
+        return []
+    lo, hi = zone["lo"], zone["hi"]
+    lo_ext = lo * (1 - threshold_pct / 100)
+    hi_ext = hi * (1 + threshold_pct / 100)
+    return [b for b in heatmap.get("buckets", [])
+            if not (b["price_hi"] < lo_ext or b["price_lo"] > hi_ext)]
+
+
+def format_liquidation_cluster_line(symbol: str, zone: dict, get_liq_data_fn=None) -> str:
+    """Владелец, 2026-07-12: "кластеры рядом (±1%) в первом же алерте; если heatmap-
+    слой для альтов ещё не покрывает эти символы -- честно «н/д»". `get_liq_data_fn`
+    -- инъекция (тот же принцип, что PumpContext/bot_send), т.к. level_watch.py не
+    импортирует bot.py напрямую. Возвращает готовую строку, ВСЕГДА непустую --
+    либо реальные кластеры, либо честное "н/д" с причиной (не молчание)."""
+    coin_symbol = symbol.upper().replace("USDT", "")
+    if get_liq_data_fn is None:
+        return "🗺 Ликвидации рядом: н/д (слой не подключён)"
+    try:
+        liq = get_liq_data_fn(coin_symbol)
+    except Exception as e:
+        return f"🗺 Ликвидации рядом: н/д (ошибка запроса: {e})"
+    if not liq or not liq.get("ok"):
+        return "🗺 Ликвидации рядом: н/д (нет данных биржи для этого символа)"
+    heatmap = liq.get("heatmap")
+    if not heatmap or not heatmap.get("ok"):
+        reason = liq.get("error") or "нет перпетуального рынка на OKX для этого символа"
+        return f"🗺 Ликвидации рядом: н/д ({reason})"
+    clusters = find_liquidation_clusters_near_zone(heatmap, zone)
+    if not clusters:
+        return f"🗺 Ликвидации рядом (±{LIQUIDATION_CLUSTER_THRESHOLD_PCT:.0f}%): не найдено"
+    total = sum(c["notional_usd"] for c in clusters)
+    return (f"🗺 Ликвидации рядом (±{LIQUIDATION_CLUSTER_THRESHOLD_PCT:.0f}%): "
+            f"${total:,.0f} -- ретроспектива недавних ликвидаций, не прогноз")
+
+
 def format_level_alert(symbol: str, zone: dict, price: float, state: str,
-                        source: str = None, updated: str = None) -> str:
-    """Сторона, зона, цена, % до зоны, дата разметки — как в задаче."""
+                        source: str = None, updated: str = None,
+                        liq_line: str = None) -> str:
+    """Сторона, зона, цена, % до зоны, дата разметки — как в задаче. `liq_line` --
+    опциональная строка про ликвидационные кластеры рядом (см.
+    format_liquidation_cluster_line), владелец 2026-07-12."""
     side = zone["side"]
     lo, hi = zone["lo"], zone["hi"]
     dist = distance_pct(price, zone)
@@ -276,11 +324,12 @@ def format_level_alert(symbol: str, zone: dict, price: float, state: str,
     note_line = f"\n{note}" if note else ""
     src_bits = [b for b in (source, updated) if b]
     src_line = " / ".join(src_bits) if src_bits else "?"
+    liq_block = f"\n{liq_line}" if liq_line else ""
     return (
         f"{header} — {symbol} {side}\n"
         f"Зона: {lo}–{hi}{note_line}\n"
         f"Цена: {price:.2f}  ·  до зоны: {dist:.2f}%\n"
-        f"Разметка: {src_line}"
+        f"Разметка: {src_line}{liq_block}"
     )
 
 
@@ -315,16 +364,21 @@ def scan_zones(price: float, zones: list, approach_pct: float = APPROACH_PCT) ->
 
 async def check_and_alert(bot_send, owner_id, state: LevelWatchState, symbol: str,
                            price: float, zones: list, source: str = None,
-                           updated: str = None, now: float = None) -> list:
+                           updated: str = None, now: float = None,
+                           get_liq_data_fn=None) -> list:
     """Сканирует zones на текущей price, шлёт алерт (через bot_send, если задан) на
     каждую зону, прошедшую кулдаун. Возвращает список отправленных текстов (для
     тестов/логирования). bot_send: async def bot_send(owner_id, text) -- инъекция
-    вместо прямого импорта bot.py (тот же принцип, что PumpContext/get_whale_zones)."""
+    вместо прямого импорта bot.py (тот же принцип, что PumpContext/get_whale_zones).
+    `get_liq_data_fn` -- аналогичная инъекция bot.get_liq_data(symbol), владелец
+    2026-07-12: "кластеры рядом (±1%) в первом же алерте"."""
     sent = []
     for zone, zstate in scan_zones(price, zones):
         if not state.should_alert(symbol, zone, zstate, now=now):
             continue
-        text = format_level_alert(symbol, zone, price, zstate, source=source, updated=updated)
+        liq_line = format_liquidation_cluster_line(symbol, zone, get_liq_data_fn)
+        text = format_level_alert(symbol, zone, price, zstate, source=source,
+                                   updated=updated, liq_line=liq_line)
         sent.append(text)
         append_event({
             "ts": now if now is not None else time.time(), "symbol": symbol.upper(),
@@ -342,13 +396,14 @@ async def check_and_alert(bot_send, owner_id, state: LevelWatchState, symbol: st
 async def run_level_watch(bot_send, owner_id, path: str = WATCH_ZONES_FILE,
                            state: LevelWatchState = None,
                            poll_interval_sec: float = POLL_INTERVAL_SEC,
-                           iterations: int = None) -> LevelWatchState:
+                           iterations: int = None, get_liq_data_fn=None) -> LevelWatchState:
     """Бесконечный цикл опроса (iterations=None) — для боевого процесса; iterations=N
     для смоука/тестов (N тиков, затем возврат). `state` можно передать существующий,
     чтобы вызывающая сторона держала ссылку на кулдауны между вызовами (тот же
     принцип, что whale_radar.run_whale_radar(state=...)). Конфиг ПЕРЕЧИТЫВАЕТСЯ с
     диска на КАЖДОМ тике -- дёшево (маленький локальный JSON), зато /zones_set
-    (владелец меняет разметку с телефона) подхватывается без рестарта процесса."""
+    (владелец меняет разметку с телефона) подхватывается без рестарта процесса.
+    `get_liq_data_fn` -- см. check_and_alert()."""
     state = state if state is not None else LevelWatchState()
     i = 0
     while iterations is None or i < iterations:
@@ -361,7 +416,8 @@ async def run_level_watch(bot_send, owner_id, path: str = WATCH_ZONES_FILE,
             price = fetch_price(symbol)
             if price is not None:
                 await check_and_alert(bot_send, owner_id, state, symbol, price, zones,
-                                       source=source, updated=updated)
+                                       source=source, updated=updated,
+                                       get_liq_data_fn=get_liq_data_fn)
         i += 1
         if iterations is None or i < iterations:
             await asyncio.sleep(poll_interval_sec)

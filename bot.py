@@ -607,7 +607,7 @@ async def _level_watch_task(bot: Bot, owner_id: int):
     except Exception as e:
         print(f"Level Watch: startup_sync упал ({type(e).__name__}: {e})")
     try:
-        await level_watch.run_level_watch(_send, owner_id)
+        await level_watch.run_level_watch(_send, owner_id, get_liq_data_fn=get_liq_data)
     except Exception as e:
         print(f"Level Watch: фоновая задача упала ({type(e).__name__}: {e})")
 
@@ -11022,8 +11022,7 @@ _macro_cache={}
 _macro_ts=0.0
 _opts_cache={}
 _opts_ts=0.0
-_liq_cache={}
-_liq_ts=0.0
+_liq_cache={}   # symbol -> {"ts": float, "data": dict} -- Пакет 10, generalized от BTC-only
 
 def get_macro_data():
     import time as _t
@@ -11155,18 +11154,36 @@ def get_perp_spot_premium(symbol: str = "BTC") -> dict:
         pass
     return res
 
-def get_liq_data():
+def get_liq_data(symbol: str = "BTC"):
     import time as _t, requests as _r
-    global _liq_cache, _liq_ts
-    if _t.time()-_liq_ts<300 and _liq_cache: return _liq_cache
+    global _liq_cache
+    symbol = (symbol or "BTC").upper()
+    cached = _liq_cache.get(symbol)
+    if cached and _t.time() - cached["ts"] < 300:
+        return cached["data"]
     res={'ok':False,'liq_long':0,'liq_short':0,'liq_ratio':1.0,'liq_signal':'neutral','heatmap':None}
     try:
+        # Контрактный размер (ctVal) РАЗНЫЙ по символам -- проверено живьём 2026-07-12
+        # (BTC-USDT-SWAP ctVal=0.01 BTC, WLD-USDT-SWAP ctVal=1 WLD) -- раньше был
+        # захардкожен 0.01 (верно только для BTC), Пакет 10: честно фетчится за
+        # символ, дефолт 1.0 при ошибке (не тихо считать в BTC-масштабе для альта).
+        ct_val = 1.0
+        try:
+            instr = _r.get('https://www.okx.com/api/v5/public/instruments',
+                            params={'instType': 'SWAP', 'instId': f'{symbol}-USDT-SWAP'}, timeout=6)
+            idata = instr.json().get('data', []) if instr.status_code == 200 else []
+            if idata:
+                ct_val = float(idata[0].get('ctVal', 1.0) or 1.0)
+        except Exception:
+            pass
         # OKX liquidation-orders (замена fapi.binance.com/allForceOrders, заблокированного на Railway)
         r=_r.get('https://www.okx.com/api/v5/public/liquidation-orders',
-                 params={'instType':'SWAP','uly':'BTC-USDT','state':'filled','limit':'100'},timeout=8)
+                 params={'instType':'SWAP','uly':f'{symbol}-USDT','state':'filled','limit':'100'},timeout=8)
         if r.status_code==200:
-            od=r.json().get('data',[])
-            ct_val=0.01  # BTC-USDT-SWAP contract size = 0.01 BTC
+            data = r.json()
+            if data.get('code') not in ('0', 0):
+                res['error'] = data.get('msg') or f"OKX code {data.get('code')}"  # напр. "Index doesn't exist" для альтов без перпа на OKX
+            od=data.get('data',[])
             ll=ls=0.0
             for row in od:
                 for d in row.get('details',[]):
@@ -11179,14 +11196,15 @@ def get_liq_data():
             # Пакет 9 М3 -- Liquidation Heatmap, информационно (retrospective, см.
             # derivatives_extra.py докстринг). Не подано в liq_ratio/liq_signal выше.
             try:
-                tk=_r.get('https://www.okx.com/api/v5/market/ticker',params={'instId':'BTC-USDT-SWAP'},timeout=6)
+                tk=_r.get('https://www.okx.com/api/v5/market/ticker',params={'instId':f'{symbol}-USDT-SWAP'},timeout=6)
                 px_now=float(tk.json().get('data',[{}])[0].get('last',0) or 0) if tk.status_code==200 else 0
                 if px_now>0:
-                    res['heatmap']=derivatives_extra.compute_liquidation_heatmap(od, px_now)
+                    res['heatmap']=derivatives_extra.compute_liquidation_heatmap(od, px_now, contract_size=ct_val)
             except Exception:
                 pass
     except: pass
-    _liq_cache=res; _liq_ts=_t.time(); return res
+    _liq_cache[symbol]={"ts": _t.time(), "data": res}
+    return res
 
 _usdt_mcap_cache={"ts":0,"data":None}
 
