@@ -5019,13 +5019,39 @@ async def send_scheduled(bot: Bot):
             if not a.get("rr_gate_pass"):
                 gate_reasons.append("rr_gate")
             promoted = not gate_reasons
+            mode = "long" if is_long else "short"
+
+            # Пакет 7 М2 (владелец "ДА" -- связка shadow-записей с фактическими
+            # исходами): для promoted-кандидатов journal-запись создаётся ЗДЕСЬ,
+            # ДО теневого лога, чтобы передать реальный journal_id напрямую --
+            # без этого shadow_outcome_analysis.py пришлось бы матчить запись
+            # задним числом по (symbol, direction, окно времени), что и остаётся
+            # фоллбеком для записей ДО этого исправления.
+            journal_id = None
+            if promoted:
+                # entry_lo/entry_hi -- фактический ценовой порядок (lo<hi), не порядок
+                # DCA-входа: для LONG entry1 (первый транш) выше entry3, для SHORT --
+                # наоборот (см. тот же конвеншен в fa_engine.py и в ручных /long, /short).
+                e_lo, e_hi = ((a["entry3"], a["entry1"]) if is_long else (a["entry1"], a["entry3"]))
+                try:
+                    journal_id = signal_journal.log_signal(
+                        "TOP_LONG_AUTO" if is_long else "TOP_SHORT_AUTO", sym, mode, a["price"],
+                        entry_lo=e_lo, entry_hi=e_hi, sl=a["sl"],
+                        tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"], rr=a["rr"],
+                        rocket_score=a.get("rocket"), ema_stack=a.get("ema_ctx"),
+                        sweep=a.get("sweep_4h") or a.get("sweep_1h"),
+                        levels_source=a.get("levels_source"), grade=grade,
+                        degraded_data=_data_quality_flags())
+                except Exception as e:
+                    log.error(f"[JOURNAL] {'TOP_LONG_AUTO' if is_long else 'TOP_SHORT_AUTO'} {sym}: {e}")
 
             # Теневой контур -- параллельная запись, не влияет на promoted/gate_reasons
             # выше (уже посчитаны) и не блокирует боевой цикл при сбое.
             try:
                 await shadow_engine.log_send_scheduled_shadow_async(
                     sym, a, bot_module=sys.modules[__name__],
-                    promoted_live=promoted, gate_reasons=gate_reasons)
+                    promoted_live=promoted, gate_reasons=gate_reasons,
+                    live_journal_id=journal_id)
             except Exception as e:
                 log.error(f"[AUTO] shadow_engine (не влияет на боевой сигнал) {sym}: {e}")
 
@@ -5033,7 +5059,6 @@ async def send_scheduled(bot: Bot):
                 continue
 
             slug = coin.get("slug", sym.lower())
-            mode = "long" if is_long else "short"
             text = _build_signal_post(sym, a, {}, mode=mode)
             target_dict = TOP_LONG_SIGNALS if is_long else TOP_SHORT_SIGNALS
             target_dict[sym] = {
@@ -5042,21 +5067,6 @@ async def send_scheduled(bot: Bot):
                 "sl": a["sl"], "rr": a["rr"], "status": "active",
             }
             _save_signals()
-            # entry_lo/entry_hi -- фактический ценовой порядок (lo<hi), не порядок DCA-входа:
-            # для LONG entry1 (первый транш) выше entry3, для SHORT -- наоборот (см. тот же
-            # конвеншен в fa_engine.py и в ручных /long, /short).
-            e_lo, e_hi = ((a["entry3"], a["entry1"]) if is_long else (a["entry1"], a["entry3"]))
-            try:
-                signal_journal.log_signal(
-                    "TOP_LONG_AUTO" if is_long else "TOP_SHORT_AUTO", sym, mode, a["price"],
-                    entry_lo=e_lo, entry_hi=e_hi, sl=a["sl"],
-                    tp1=a["tp1"], tp2=a["tp2"], tp3=a["tp3"], rr=a["rr"],
-                    rocket_score=a.get("rocket"), ema_stack=a.get("ema_ctx"),
-                    sweep=a.get("sweep_4h") or a.get("sweep_1h"),
-                    levels_source=a.get("levels_source"), grade=grade,
-                    degraded_data=_data_quality_flags())
-            except Exception as e:
-                log.error(f"[JOURNAL] {'TOP_LONG_AUTO' if is_long else 'TOP_SHORT_AUTO'} {sym}: {e}")
             already_sent.add(sym)
             if is_long:
                 sent_long += 1

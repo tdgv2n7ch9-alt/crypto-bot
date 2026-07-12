@@ -431,7 +431,8 @@ def _adapt_send_scheduled_result(a: dict) -> dict:
 
 async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
                                            promoted_live: bool,
-                                           gate_reasons: list = None) -> bool:
+                                           gate_reasons: list = None,
+                                           live_journal_id=None) -> bool:
     """Боевой путь -- вызывается из `bot.send_scheduled()` (Пакет 4 М2, владелец "ДА"):
     КАЖДЫЙ кандидат, дошедший до `real_full_analysis()` (совпало направление прескрина
     со структурой), прогоняется через тот же 5-патчевый теневой контур
@@ -440,10 +441,15 @@ async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
     подписчикам НИКОГДА не читают этот модуль и не меняются этим вызовом.
     `promoted_live`/`gate_reasons` -- честно фиксируют боевой исход рядом с теневым
     (в отличие от signal_loop-пути, где до shadow доходят только уже-отправленные
-    сигналы -- здесь видны и отброшенные гейтом, что и было целью подключения)."""
+    сигналы -- здесь видны и отброшенные гейтом, что и было целью подключения).
+    `live_journal_id` -- Пакет 7 М2 (владелец "ДА" -- связка shadow с исходами):
+    для promoted-кандидатов `bot.send_scheduled()` теперь логирует journal-запись
+    ДО вызова этой функции и передаёт сюда реальный id, чтобы
+    `shadow_outcome_analysis.py` мог напрямую сопоставить shadow-запись с
+    фактическим исходом сделки без ретроактивного матчинга по времени."""
     try:
         adapted = _adapt_send_scheduled_result(a)
-        record = compute_shadow(symbol, adapted, bot_module, live_journal_id=None)
+        record = compute_shadow(symbol, adapted, bot_module, live_journal_id=live_journal_id)
     except Exception as e:
         print(f"shadow_engine.log_send_scheduled_shadow_async: compute failed for {symbol}: {e}")
         return False
