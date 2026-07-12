@@ -1116,7 +1116,8 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
         sl = watch["sl"]
         tp1 = watch["tp1"]
         rr = abs(entry - tp1) / abs(sl - entry) if sl != entry else 0
-        if pa.get("ok") and pa.get("direction") == "short" and pa.get("pro_score", 0) >= PROMOTE_SCORE_THRESHOLD and rr >= PROMOTE_MIN_RR:
+        promoted_live = bool(pa.get("ok") and pa.get("direction") == "short" and pa.get("pro_score", 0) >= PROMOTE_SCORE_THRESHOLD and rr >= PROMOTE_MIN_RR)
+        if promoted_live:
             ctx.add_top_short_signal(sym, {
                 "time": None, "entry": entry, "tp1": tp1, "tp2": watch["tp2"],
                 "sl": sl, "rr": round(rr, 2), "status": "active",
@@ -1128,6 +1129,13 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
             await _send_alert(ctx, symbol, text, watch, f"pump_sub_{sym}")
             _finalize_any(symbol, "pump", "PROMOTED")
             await _send_promotion_chart(ctx, sym, "short", entry, sl, tp1, watch.get("tp2"), rr)
+        # Пакет 9 кусок 2 (владелец "да" на diff+shadow, НЕ на переключение live):
+        # накопление EMA-стек shadow-сравнения на РЕАЛЬНЫХ промоушен-проверках,
+        # минимум 3 суток. Не влияет на promoted_live выше (уже вычислено).
+        try:
+            await shadow_engine.log_ema_stack_shadow_async(sym, pa.get("ema_stack_shadow"), promoted_live, rr)
+        except Exception as e:
+            print(f"Pump Radar: ema_stack_shadow log {symbol} не удалось (не влияет на боевой алерт): {e}")
         return pa
     except Exception as e:
         print(f"Pump Radar: promote check {symbol}: {e}")

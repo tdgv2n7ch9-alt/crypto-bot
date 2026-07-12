@@ -7185,7 +7185,8 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         "tf_4h": "neutral",
         "tf_1d": "neutral",
         "tf_1w": "neutral",
-        "tf_confluence": 0,      #  TF 
+        "tf_confluence": 0,      #  TF
+        "ema_stack_shadow": None,  # Пакет 9 кусок 2: diff+shadow, НЕ подано в pro_score
     }
 
     try:
@@ -7704,6 +7705,51 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         elif strong_confluences >= 2: entry_q = "B "
         else:                         entry_q = "C "
 
+        # --- EMA-стек унификация: diff+shadow (Пакет 9 кусок 2, владелец "да" ---
+        # ТОЛЬКО на diff+shadow, переключение live ждёт отдельного "да" по shadow-цифрам).
+        # Считает альтернативные bull_tfs/bear_tfs/pro_score через ta_extra.ema_context()
+        # (тот же стек-детектор, что чинили в Баге 2 Памп-радара -- требует ПОДТВЕРЖДЕНИЯ
+        # ценой порядка EMA, не только сам порядок) вместо инлайн tf_trend() для 1h/4h.
+        # 1d/1w у ta_extra.ema_context() не покрыты (другие периоды EMA/ТФ) -- для них
+        # берутся СТАРЫЕ значения tf_1d_trend/tf_1w_trend без изменений, единой замены
+        # для этих ТФ пока не существует. НИКАК не влияет на bull_pts/bear_pts/score/
+        # direction/pro_score выше -- те уже полностью вычислены к этой строке.
+        try:
+            ema_ctx_new = ta_extra.ema_context(c1h, c4h)
+
+            def _map_stack(label):
+                return {"бычий": "bullish", "медвежий": "bearish"}.get(label, "neutral")
+
+            tf_1h_new = _map_stack(ema_ctx_new["tf_1h"]["stack"]) if ema_ctx_new.get("tf_1h") else "neutral"
+            tf_4h_new = _map_stack(ema_ctx_new["tf_4h"]["stack"]) if ema_ctx_new.get("tf_4h") else "neutral"
+            bull_tfs_new = sum(1 for t in [tf_1h_new, tf_4h_new, tf_1d_trend, tf_1w_trend] if t == "bullish")
+            bear_tfs_new = sum(1 for t in [tf_1h_new, tf_4h_new, tf_1d_trend, tf_1w_trend] if t == "bearish")
+
+            def _conf_pts(n):
+                return 20 if n >= 3 else 10 if n == 2 else 0
+
+            bull_pts_new = bull_pts - _conf_pts(bull_tfs) + _conf_pts(bull_tfs_new)
+            bear_pts_new = bear_pts - _conf_pts(bear_tfs) + _conf_pts(bear_tfs_new)
+
+            if bull_pts_new > bear_pts_new + 10:
+                direction_new, score_new = "long", min(100, 30 + bull_pts_new)
+            elif bear_pts_new > bull_pts_new + 10:
+                direction_new, score_new = "short", min(100, 30 + bear_pts_new)
+            else:
+                direction_new, score_new = "neutral", max(bull_pts_new, bear_pts_new)
+            if vol_ratio > 50:
+                score_new = int(score_new * 0.6)
+
+            ema_stack_shadow = {
+                "tf_1h_new": tf_1h_new, "tf_4h_new": tf_4h_new,
+                "bull_tfs_old": bull_tfs, "bear_tfs_old": bear_tfs,
+                "bull_tfs_new": bull_tfs_new, "bear_tfs_new": bear_tfs_new,
+                "pro_score_old": score, "direction_old": direction,
+                "pro_score_new": score_new, "direction_new": direction_new,
+            }
+        except Exception as e:
+            ema_stack_shadow = {"error": str(e)}
+
         result.update({
             "ok":             True,
             "pro_score":      score,
@@ -7715,6 +7761,7 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
             "entry_quality":  entry_q,
             "market_structure": f"{direction}",
             "phase":          wyckoff_phase,
+            "ema_stack_shadow": ema_stack_shadow,
             # raw data for display
             "rsi_1h": rsi_1h, "rsi_4h": rsi_4h, "rsi_1d": rsi_1d,
             "ema200_4h": ema200_4h, "ema200_1d": ema200_1d,
