@@ -29,6 +29,9 @@ journal/shadow_signals.json. Ни разу не влияет на то, что �
   03 breaker/MB       -- ta_extra.classify_breaker_or_mitigation() (аддитивна)
   04 RSI-дивергенция  -- ta_extra.detect_price_indicator_divergence() (аддитивна)
   05 BPR              -- ta_extra.detect_bpr_zones() (аддитивна)
+  07 order-block-body -- ta_extra.detect_order_block() (аддитивна, Пакет 7 М1,
+                          shadow-only вариант B из Пакета 5 М2/6 М1 -- живой
+                          pro_analysis() геометрию НЕ меняет)
 """
 import asyncio
 import base64
@@ -205,6 +208,7 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
     direction = b11.get("direction")
     candles_4h = result.get("candles_4h") or []
     rr_tp1 = b11.get("rr_tp1")
+    price = result.get("price")
 
     affected = []
     discrepancy = []
@@ -301,6 +305,26 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         except Exception as e:
             discrepancy.append(f"whale confluence calc failed: {e}")
 
+    # Патч 07: Order Block геометрия -- live (тело+фитиль, зеркало pro_analysis())
+    # vs methodology (чистое тело, METHODOLOGY_CORE.md §18.1). Пакет 7 М1, владелец
+    # "ДА" на вариант B из Пакета 5 М2/6 М1 -- живой pro_analysis() НЕ трогается,
+    # это ТОЛЬКО shadow-сравнение той же зоны на тех же свечах.
+    _ob_empty = {"bull": False, "bull_zone": None, "bear": False, "bear_zone": None}
+    ob_result = {"live": dict(_ob_empty), "methodology": dict(_ob_empty)}
+    if candles_4h and price is not None:
+        try:
+            ob_result = ta_extra.detect_order_block(candles_4h, price)
+            live_ob = ob_result["live"]
+            meth_ob = ob_result["methodology"]
+            if live_ob["bull"] != meth_ob["bull"] or live_ob["bear"] != meth_ob["bear"]:
+                affected.append("07-order-block-body")
+                discrepancy.append(
+                    f"order_block: live(bull={live_ob['bull']},bear={live_ob['bear']}) vs "
+                    f"methodology-тело(bull={meth_ob['bull']},bear={meth_ob['bear']})"
+                )
+        except Exception as e:
+            discrepancy.append(f"order_block geometry calc failed: {e}")
+
     # amd_phase/smc_inducement по методологии (Пакет 5 М3, владелец "ДА" --
     # ТОЛЬКО shadow-скоринг, не бой, не патч 01-06 -- отдельные исследовательские
     # поля, не участвуют в affected/discrepancy выше, не решают "прошёл бы гейт").
@@ -333,6 +357,8 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         "whale_klvl_matches": whale_conf["whale_klvl_matches"],
         "amd_phase_methodology": amd_methodology,
         "inducement": inducement,
+        "order_block_live": ob_result["live"],
+        "order_block_methodology": ob_result["methodology"],
         "patches_affected": affected,
         "discrepancy": discrepancy,
         "live_journal_id": live_journal_id,
@@ -399,6 +425,7 @@ def _adapt_send_scheduled_result(a: dict) -> dict:
             "rr_tp1": a.get("rr_tp1"),
         },
         "candles_4h": a.get("candles_4h") or [],
+        "price": a.get("price"),
     }
 
 

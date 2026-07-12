@@ -1205,3 +1205,76 @@ def detect_inducement_sweep(candles: list, min_bars_ago: int = 3) -> dict:
     if sweep["bars_ago"] >= min_bars_ago:
         return {"inducement_swept": True, "detail": sweep}
     return {"inducement_swept": False, "detail": sweep}
+
+
+def detect_order_block(candles: list, price: float) -> dict:
+    """ПАТЧ 07 (Пакет 7 М1 -- владелец "ДА" на вариант B из Пакета 5 М2/6 М1:
+    shadow-only фикс геометрии, живой pro_analysis() НЕ трогается).
+
+    Строит ОБЕ геометрии Order Block на ОДНИХ И ТЕХ ЖЕ 4H-свечах для честного
+    сравнения:
+      - "live" -- точное зеркало инлайн-кода `pro_analysis()` (`bot.py`,
+        функция `pro_analysis`, блок "ICT ORDER BLOCK"): bull zone
+        (candle["open"], candle["high"]), bear zone (candle["low"],
+        candle["open"]) -- микс тела и фитиля. Это КОПИЯ формулы для
+        тестируемости, не рефакторинг живого пути -- живой инлайн-код в
+        bot.py не тронут и не вызывает эту функцию.
+      - "methodology" -- по METHODOLOGY_CORE.md §18.1 ("OB ВСЕГДА по телу,
+        даже некрасивый OB с большим фитилём — по телу, не по хвостам",
+        источник "18. Бектесты 3.mp4"): bull zone (candle["close"],
+        candle["open"]) -- тело последней медвежьей свечи перед разворотом
+        (close < open, поэтому close -- нижняя граница тела); bear zone
+        (candle["open"], candle["close"]) -- тело последней бычьей свечи
+        перед разворотом.
+
+    Критерий сигнальной свечи (body/range > 0.5) и подтверждение пробоя
+    следующими 3 свечами -- ОДИНАКОВЫ для обеих геометрий и скопированы из
+    живого кода без изменений; различие изолировано ИМЕННО в границах зоны
+    (тело vs тело+фитиль) и, как следствие, в проверке "цена сейчас внутри
+    зоны" (та же формула контроля vs 1%/0.99 буфер, что и в живом коде) --
+    это и есть узкий вопрос, который просил проверить владелец, не полная
+    переработка детектора.
+
+    НЕ проверяет "снятие ликвидности предыдущего свинга" -- второй core-
+    критерий OB по методике, честно отсутствует в ОБЕИХ версиях здесь (тот
+    же пробел, что уже зафиксирован в §18.1, не расширяю объём патча за
+    пределы geometry-вопроса).
+
+    price=None (симптом отсутствующих данных) -- обе геометрии возвращаются
+    как "не активны" (False), а не выдумывают активность без цены.
+
+    Возвращает {"live": {"bull": bool, "bull_zone": (lo,hi)|None, "bear": bool,
+    "bear_zone": (lo,hi)|None}, "methodology": {...та же форма...}}."""
+    empty = {"bull": False, "bull_zone": None, "bear": False, "bear_zone": None}
+    live = dict(empty)
+    meth = dict(empty)
+    if not candles or len(candles) < 9 or price is None:
+        return {"live": live, "methodology": meth}
+
+    for i in range(5, len(candles) - 3):
+        candle = candles[i]
+        next3 = candles[i + 1:i + 4]
+        body = abs(candle["close"] - candle["open"])
+        rng = candle["high"] - candle["low"]
+        if rng == 0:
+            continue
+
+        if candle["close"] < candle["open"] and body / rng > 0.5:
+            if all(c["close"] > candle["high"] for c in next3):
+                live_lo, live_hi = candle["open"], candle["high"]
+                if live_lo <= price <= live_hi * 1.01:
+                    live["bull"], live["bull_zone"] = True, (live_lo, live_hi)
+                meth_lo, meth_hi = candle["close"], candle["open"]
+                if meth_lo <= price <= meth_hi * 1.01:
+                    meth["bull"], meth["bull_zone"] = True, (meth_lo, meth_hi)
+
+        if candle["close"] > candle["open"] and body / rng > 0.5:
+            if all(c["close"] < candle["low"] for c in next3):
+                live_lo, live_hi = candle["low"], candle["open"]
+                if live_lo * 0.99 <= price <= live_hi:
+                    live["bear"], live["bear_zone"] = True, (live_lo, live_hi)
+                meth_lo, meth_hi = candle["open"], candle["close"]
+                if meth_lo * 0.99 <= price <= meth_hi:
+                    meth["bear"], meth["bear_zone"] = True, (meth_lo, meth_hi)
+
+    return {"live": live, "methodology": meth}
