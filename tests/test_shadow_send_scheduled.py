@@ -114,6 +114,47 @@ def test_log_send_scheduled_shadow_async_honest_false_on_local_write_failure(mon
     assert ok is False
 
 
+# --- Пакет 10 М2: oi_funding_ls_shadow передаётся через в запись ---
+
+def test_log_send_scheduled_shadow_async_carries_oi_funding_ls_shadow(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)
+    a["oi_funding_ls_shadow"] = {
+        "oi_combo": "up_up", "d_oi": 6, "d_funding": 0, "d_ls": -3,
+        "total_delta": 3, "rocket_old": 61, "rocket_would_be": 64,
+    }
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert captured["record"]["oi_funding_ls_shadow"]["total_delta"] == 3
+    assert captured["record"]["oi_funding_ls_shadow"]["rocket_would_be"] == 64
+
+
+def test_log_send_scheduled_shadow_async_missing_oi_funding_ls_shadow_is_none(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)  # no oi_funding_ls_shadow key
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert captured["record"]["oi_funding_ls_shadow"] is None
+
+
 def test_log_send_scheduled_shadow_async_compute_failure_returns_false(monkeypatch):
     # bot_module без ожидаемых методов -- compute_shadow должен упасть внутри
     # try/except патча 01, но НЕ уронить всю функцию (уже проверено в compute_shadow

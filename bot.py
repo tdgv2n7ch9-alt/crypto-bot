@@ -8244,6 +8244,58 @@ def real_full_analysis(coin: dict) -> dict:
     except Exception as e:
         structural_primitives_shadow = {"error": str(e)}
 
+    # --- Пакет 10 М2 (владелец "да" -- shadow-патч 09, НЕ live): OI/funding/L-S ----
+    # Бэклог-баг "AUTO-путь слеп к OI/funding/L-S" (ENGINE_UNIFICATION.md §4 Блок 7,
+    # §5 Шаг 5 -- самый рискованный шаг по площади воздействия, поэтому владелец
+    # явно ограничил его shadow в этом пакете, НЕ live). Формула -- 1-в-1 портирована
+    # из fa_engine.py._oi_matrix()/_rocket_score() (рекомендация владельца:
+    # "fa_engine'а вариант... ближе к методике курса"), НЕ переизобретена заново.
+    # Копится минимум 3 суток ИЛИ 100 сигналов (что раньше) -- отчёт отдельно.
+    try:
+        direction = "long" if is_long else "short"
+        oi_change = _get_oi_change(sym)  # ВНИМАНИЕ: мутирует _OI_HISTORY[sym] --
+        # вызывается ЗДЕСЬ ровно один раз за весь real_full_analysis(), тот же
+        # принцип "один снапшот", что уже применён в pump_detector._compose_alert
+        # (см. её докстринг про баг v110->v111 с двойным вызовом).
+        funding = get_funding_rate(sym)
+        ls_ratio = _get_ls_ratio(sym)
+
+        oi_combo = None
+        if oi_change and ch1h != 0:
+            if ch1h > 0 and oi_change > 0: oi_combo = "up_up"
+            elif ch1h > 0 and oi_change < 0: oi_combo = "up_down"
+            elif ch1h < 0 and oi_change > 0: oi_combo = "down_up"
+            else: oi_combo = "down_down"
+
+        d_oi = 0
+        if oi_combo == "up_up":       d_oi = 6 if direction == "long" else -6
+        elif oi_combo == "down_up":   d_oi = 6 if direction == "short" else -6
+        elif oi_combo == "up_down":   d_oi = 2 if direction == "long" else 0
+        elif oi_combo == "down_down": d_oi = 2 if direction == "short" else 0
+
+        d_funding = 0
+        if funding.get("ok"):
+            rate = funding["rate"]
+            if rate > 0.05:    d_funding = -4 if direction == "long" else 4
+            elif rate < -0.05: d_funding = 4 if direction == "long" else -4
+
+        d_ls = 0
+        if ls_ratio > 1.5:   d_ls = 3 if direction == "short" else -3
+        elif ls_ratio < 0.7: d_ls = 3 if direction == "long" else -3
+
+        total_delta = d_oi + d_funding + d_ls
+        oi_funding_ls_shadow = {
+            "oi_change_pct": oi_change, "oi_combo": oi_combo,
+            "funding_rate": funding.get("rate") if funding.get("ok") else None,
+            "ls_ratio": round(ls_ratio, 2),
+            "d_oi": d_oi, "d_funding": d_funding, "d_ls": d_ls,
+            "total_delta": total_delta,
+            "rocket_old": rocket,
+            "rocket_would_be": max(0, min(100, rocket + total_delta)),
+        }
+    except Exception as e:
+        oi_funding_ls_shadow = {"error": str(e)}
+
     return {
         "label": rocket_label, "score": score_ta, "is_long": is_long,
         "rocket": rocket, "rocket_label": rocket_label,
@@ -8280,6 +8332,7 @@ def real_full_analysis(coin: dict) -> dict:
         # никаких новых сетевых вызовов, чистое добавление поля.
         "candles_4h": ta.get("candles_4h", []) if ta["ok"] else [],
         "structural_primitives_shadow": structural_primitives_shadow,
+        "oi_funding_ls_shadow": oi_funding_ls_shadow,
     }
 
 
