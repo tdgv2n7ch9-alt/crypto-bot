@@ -26,6 +26,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import level_watch
+import security_log
 import signal_journal
 import whale_radar
 
@@ -241,6 +242,23 @@ def build_daily_digest(bot_module, now_ts: float = None) -> str:
         lines.append("  " + " · ".join(bad))
     else:
         lines.append("  Все источники в норме")
+
+    sec = security_log.get_daily_summary(now_ts=now)
+    lines += ["", "🔐 *Security-лог за сутки:*"]
+    if sec["total"] == 0:
+        lines.append("  Событий нет")
+    else:
+        by_type = sec["by_type"]
+        lines.append(f"  Всего: {sec['total']}")
+        notable = {k: by_type[k] for k in (
+            security_log.EVENT_DENIED, security_log.EVENT_RATE_LIMITED,
+            security_log.EVENT_FLOOD_GUARD, security_log.EVENT_AUTO_BAN,
+            security_log.EVENT_GRANT, security_log.EVENT_REVOKE,
+            security_log.EVENT_INVITE_GENERATED, security_log.EVENT_INVITE_REDEEMED,
+            security_log.EVENT_LOCKDOWN, security_log.EVENT_UNLOCK,
+        ) if by_type.get(k)}
+        if notable:
+            lines.append("  " + " · ".join(f"{k}: {v}" for k, v in notable.items()))
 
     lines += ["", "_whale/level-watch события — с последнего рестарта процесса, не всегда с полуночи (эфемерный диск)_"]
 

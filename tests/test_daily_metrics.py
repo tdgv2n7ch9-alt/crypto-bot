@@ -244,10 +244,33 @@ def test_build_daily_digest_no_crash_on_empty_data(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    # security_log._events -- глобальное состояние процесса, могло быть засеяно другими
+    # тестами (access_control.enforce() пишет в него по-настоящему) -- изолируем явно.
+    monkeypatch.setattr(daily_metrics.security_log, "_events", [])
     text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "МЕТРИКИ ДНЯ" in text
     assert "н/д" in text  # честный win-rate при 0 закрытых
+    assert "Security-лог" in text
+    assert "Событий нет" in text  # честно, security_log._events пуст в тестовом процессе
     assert len(text) <= 4096
+
+
+def test_build_daily_digest_shows_security_events(monkeypatch, tmp_path):
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    now = 1_000_000.0
+    monkeypatch.setattr(daily_metrics.security_log, "_events", [
+        {"ts": now - 10, "type": "denied", "chat_id": 1, "detail": ""},
+        {"ts": now - 20, "type": "denied", "chat_id": 2, "detail": ""},
+        {"ts": now - 30, "type": "grant", "chat_id": 3, "detail": ""},
+    ])
+    text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=now)
+    assert "Security-лог" in text
+    assert "Всего: 3" in text
+    assert "denied: 2" in text
+    assert "grant: 1" in text
 
 
 def test_build_daily_digest_shows_down_sources(monkeypatch, tmp_path):

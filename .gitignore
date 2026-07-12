@@ -1,6 +1,7 @@
 best_trade_reader.session*
 chat_ids.txt
 signal_journal.json
+journal/security_log.json
 reader_dedup_seen.json
 __pycache__/
 *.pyc

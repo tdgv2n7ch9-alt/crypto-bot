@@ -107,6 +107,7 @@ import pytz
 import signal_journal
 import subscribers
 import access_control
+import security_log
 import ta_extra
 import fa_engine
 import signal_loop
@@ -2874,11 +2875,13 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # невалидный/уже использованный код -- молчаливый отказ, тот же принцип,
             # что и для команд без доступа (не подтверждаем существование бота никому,
             # кто не предъявил рабочий код).
+            security_log.log_event(security_log.EVENT_DENIED, cid, "invalid invite code")
             # Пакет SECURITY-HARDENING М3 (владелец "да") -- анти-абьюз: считаем
             # неудачные попытки, автобан + алерт владельцу при переборе кодов.
             banned = access_control.record_invite_failure(cid)
             if banned:
                 await subscribers.set_role(cid, access_control.ROLE_NONE)
+                security_log.log_event(security_log.EVENT_AUTO_BAN, cid, "invite code brute-force")
                 try:
                     await ctx.bot.send_message(
                         access_control._owner_id(),
@@ -2890,6 +2893,18 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     log.error(f"[SEC] автобан-алерт владельцу не отправлен: {e}")
             return
         access_control.reset_invite_failures(cid)
+        security_log.log_event(security_log.EVENT_INVITE_REDEEMED, cid, f"role={role}")
+        # Пакет SECURITY-HARDENING М4 (владелец "да") -- "любое админ-действие --
+        # алерт немедленно": новый пользователь через инвайт -- владелец САМ не
+        # инициировал этот конкретный редемпшн (в отличие от /grant), должен узнать.
+        if cid != access_control._owner_id():
+            try:
+                await ctx.bot.send_message(
+                    access_control._owner_id(),
+                    f"🎟 Новый доступ: chat_id `{cid}` активировал инвайт-код, роль `{role}`.",
+                    parse_mode="Markdown")
+            except Exception as e:
+                log.error(f"[SEC] алерт о новом доступе не отправлен: {e}")
         # успешный редемпшн -- дальше падаем в обычный welcome-flow ниже.
     else:
         role = access_control.get_role(cid)
@@ -2964,6 +2979,8 @@ async def cmd_grant(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ expires_days должен быть числом.")
             return
     await subscribers.set_role(target_id, role, expires_ts)
+    security_log.log_event(security_log.EVENT_GRANT, target_id,
+                            f"by={update.effective_chat.id} role={role}")
     await update.message.reply_text(f"✅ chat_id `{target_id}` -- роль `{role}`"
                                      f"{f', истекает через {args[2]}д' if expires_ts else ''}.",
                                      parse_mode="Markdown")
@@ -2983,6 +3000,8 @@ async def cmd_revoke(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ chat_id должен быть числом.")
         return
     await subscribers.set_role(target_id, access_control.ROLE_NONE)
+    security_log.log_event(security_log.EVENT_REVOKE, target_id,
+                            f"by={update.effective_chat.id}")
     await update.message.reply_text(f"🔒 Доступ chat_id `{target_id}` отозван.", parse_mode="Markdown")
 
 
@@ -3026,6 +3045,8 @@ async def cmd_invite(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ expires_days должен быть числом.")
             return
     code = await subscribers.generate_invite_code(role, expires_days)
+    security_log.log_event(security_log.EVENT_INVITE_GENERATED, update.effective_chat.id,
+                            f"role={role} expires_days={expires_days}")
     bot_username = (await ctx.bot.get_me()).username
     await update.message.reply_text(
         f"🎟 Инвайт-код на роль `{role}` создан (одноразовый):\n"
@@ -11119,6 +11140,7 @@ async def _start_pump_detector(app):
     asyncio.create_task(signal_journal.run_github_sync_loop())
 
     await subscribers.startup_sync()
+    security_log.load_startup_events()
 
     # Планировщик (в т.ч. send_scheduled/whale_monitor с next_run_time=now(), т.е. первый
     # тик почти сразу) регистрируется ЗДЕСЬ, а не в main() -- раньше scheduler.start()
@@ -11230,6 +11252,14 @@ async def _start_pump_detector(app):
         "cron",
         hour=morning_metrics.MORNING_HOUR_UTC3, minute=morning_metrics.MORNING_MINUTE_UTC3,
         args=[app.bot, owner_id],
+    )
+    # SEC М4 -- security_log.log_event() сам чисто локальный (см. докстринг модуля),
+    # GitHub-синк вынесен сюда отдельной периодической задачей, тот же интервал
+    # порядка, что и остальные best-effort GitHub-синки в проекте.
+    scheduler.add_job(
+        security_log.sync_to_github,
+        "interval",
+        minutes=10,
     )
     scheduler.start()
 

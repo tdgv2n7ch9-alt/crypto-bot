@@ -5675,3 +5675,54 @@ SUCCESS) -- `railway logs` показал чистый старт, все job'ы
 20-я попытка разрешена, 21-я заблокирована -- ровно по `RATE_LIMIT_MAX_PER_MIN=20`.
 
 **Статус SEC М3: ГОТОВ.**
+
+## 2026-07-13 -- SEC М4: security-лог + суточная выжимка -- ГОТОВ
+
+Новый модуль `security_log.py`: журнал security-событий (команды, отказы в
+доступе, гранты/отзывы ролей, инвайт-коды, автобан, rate-limit/flood-guard,
+lockdown/unlock -- последние два кода зарезервированы под М7). Тот же паттерн
+персистентности, что `shadow_engine.py`/`subscribers.py` (GitHub Contents API,
+локальный JSON -- источник истины, retry-catchup при конфликте), но с
+критичным отличием: `log_event()` -- ЧИСТО ЛОКАЛЬНАЯ синхронная операция (без
+сети), потому что вызывается на КАЖДЫЙ апдейт внутри
+`access_control.enforce()`; GitHub-синк вынесен в отдельную периодическую
+задачу scheduler'а (`security_log.sync_to_github`, каждые 10 минут). Retry-
+catchup контракт (не путать "файла нет" с "запрос не удался") применён С
+РОЖДЕНИЯ, не задним числом -- урок из фикса Пакета 11 М1 для `shadow_engine.py`.
+
+Подключено:
+- `access_control.enforce()` пишет `EVENT_DENIED`/`EVENT_RATE_LIMITED`/
+  `EVENT_FLOOD_GUARD`/`EVENT_COMMAND` на каждый апдейт.
+- `cmd_start()` пишет `EVENT_DENIED` (невалидный инвайт-код),
+  `EVENT_AUTO_BAN`, `EVENT_INVITE_REDEEMED` -- плюс немедленный алерт
+  владельцу при успешном редемпшне нового пользователя (владелец сам не
+  инициировал этот конкретный вход, в отличие от /grant, поэтому это
+  единственный из "админ-действий" М4, где нужен отдельный алерт -- /grant,
+  /revoke, /invite generate уже идут ИЗ чата владельца, ответ хендлера и есть
+  уведомление).
+- `cmd_grant`/`cmd_revoke`/`cmd_invite` пишут `EVENT_GRANT`/`EVENT_REVOKE`/
+  `EVENT_INVITE_GENERATED`.
+- Старт бота: `security_log.load_startup_events()` подтягивает локальный файл
+  (честно пусто на свежем Railway-контейнере -- эфемерный диск).
+- «Метрики дня» (`daily_metrics.build_daily_digest`): новый блок
+  «🔐 Security-лог за сутки» -- счётчик по типам событий за 24ч через
+  `get_daily_summary()`, честно "Событий нет" на пустых данных.
+
+19 новых тестов (`tests/test_security_log.py`) -- log_event append/dirty-flag/
+дисковая запись/не бросает исключений/кап на MAX_LOCAL_EVENTS,
+load_startup_events, get_daily_summary (окно/включительная граница), retry-
+catchup контракт GET (not-configured/error-vs-empty), sync_to_github (skip
+без dirty/без конфигурации, abort на транзиентной GET-ошибке -- НЕ шлёт PUT
+вслепую, success-путь, retry на 409-конфликте). Плюс 2 новых теста в
+`tests/test_daily_metrics.py` на новый блок дайджеста (честно "Событий нет" /
+подсчёт по типам).
+
+`journal/security_log.json` добавлен в `.gitignore` -- та же логика, что
+`signal_journal.json`: реальные данные живут на GitHub через Contents API,
+не в обычных git-коммитах этого репозитория.
+
+Полный `pytest`: 657 passed, 1 skipped, без регрессий. `py_compile` чисто на
+всех тронутых файлах.
+
+**Статус SEC М4: код готов, тесты готовы. Деплой/живая проверка -- следующим
+шагом этого чекпоинта.**

@@ -224,7 +224,11 @@ async def enforce(update, context):
     chat_id = chat.id
     role = get_role(chat_id)
 
+    import security_log
+
     if not _role_check(role, update, context):
+        security_log.log_event(security_log.EVENT_DENIED, chat_id,
+                                f"role={role} cmd={_extract_command(update) or '(text/callback)'}")
         raise ApplicationHandlerStop
 
     # Анти-абьюз (М3) -- ТОЛЬКО для прошедших ролевую проверку, OWNER полностью
@@ -232,9 +236,15 @@ async def enforce(update, context):
     if role != ROLE_OWNER:
         now = time.time()
         if check_global_flood(now):
+            security_log.log_event(security_log.EVENT_FLOOD_GUARD, chat_id, "")
             await _maybe_alert_owner_flood(context)
         if not check_rate_limit(chat_id, now):
+            security_log.log_event(security_log.EVENT_RATE_LIMITED, chat_id, "")
             raise ApplicationHandlerStop
+
+    cmd = _extract_command(update)
+    if cmd:
+        security_log.log_event(security_log.EVENT_COMMAND, chat_id, cmd)
 
 
 def install(app):
