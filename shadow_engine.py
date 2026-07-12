@@ -51,6 +51,15 @@ Multi-TF confluence на реальных промоушен-проверках 
 "AUTO-путь слеп к OI/funding/L-S", ENGINE_UNIFICATION.md §4 Блок 7) в
 каждую send_scheduled-запись. Никак не влияет на rocket/promoted_live выше --
 те уже полностью решены до вызова этой функции.
+
+Пакет 11 М1 (2026-07-13, находка ночного цикла -- см. SHADOW_ANALYSIS.md
+23:42 запись): _sync_to_github_sync()/_github_get_shadow_sync() исправлены --
+раньше транзиентный сбой GET (сеть/парсинг) трактовался как "файл ещё не
+существует", что могло привести к PUT без sha (422 на существующий файл, в
+худшем случае риск затирания). Теперь ошибка GET явно отличается от
+"файла нет" и прерывает синк. Плюс ретрай-catchup: каждый успешный синк
+теперь подтягивает ВЕСЬ локальный хвост, не ушедший в GitHub с прошлых
+неудачных попыток, а не только запись текущего вызова.
 """
 import asyncio
 import base64
@@ -112,10 +121,18 @@ def _dedup_key(rec: dict):
 
 
 def _github_get_shadow_sync():
-    """GET journal/shadow_signals.json. Возвращает (records list, sha) либо (None, None),
-    если файла ещё нет / GitHub не настроен / запрос не удался. Синхронно -- вызывать
-    только через run_in_executor из async-кода (см. signal_journal._github_get_file_sync,
-    тот же паттерн)."""
+    """GET journal/shadow_signals.json. Три разных исхода, НЕ схлопнутые в один (найдено
+    2026-07-12/13 -- см. SHADOW_ANALYSIS.md, запись 23:42: раньше "файла ещё нет" и
+    "запрос не удался" возвращали одинаковый (None, None), из-за чего вызывающий код на
+    транзиентном сбое GET считал удалённый файл ПУСТЫМ и пытался его PUT'нуть без sha --
+    либо 422 (как и было в инциденте), либо в худшем случае затирание существующих
+    записей, если бы GitHub такой PUT принял):
+      - GitHub не настроен / невалидный токен -> (None, None) -- синк пропускается, не ошибка.
+      - Файла действительно ещё нет (404) -> ([], None) -- пустой список, безопасно создавать.
+      - Запрос не удался (сеть/парсинг/rate-limit) -> (False, None) -- ОШИБКА, не пустой
+        файл; вызывающий код обязан прервать синк, а не создавать файл поверх существующего.
+    Синхронно -- вызывать только через run_in_executor из async-кода (см.
+    signal_journal._github_get_file_sync, тот же паттерн)."""
     if not signal_journal._github_configured():
         return None, None
     token_issue = signal_journal._validate_github_token()
@@ -126,7 +143,7 @@ def _github_get_shadow_sync():
         r = requests.get(f"{signal_journal._github_api_base()}/contents/{GITHUB_SHADOW_PATH}",
                           headers=signal_journal._github_headers(), timeout=15)
         if r.status_code == 404:
-            return None, None
+            return [], None
         r.raise_for_status()
         data = r.json()
         content = base64.b64decode(data["content"]).decode()
@@ -136,7 +153,7 @@ def _github_get_shadow_sync():
     except Exception as e:
         detail = getattr(getattr(e, "response", None), "text", "")
         print(f"shadow_engine: GitHub GET failed ({e} {detail[:300]})")
-        return None, None
+        return False, None
 
 
 def _github_put_shadow_sync(records: list, sha):
@@ -168,20 +185,36 @@ def _github_put_shadow_sync(records: list, sha):
         return None
 
 
-def _sync_to_github_sync(new_record: dict) -> bool:
-    """GET текущего состояния из GitHub, append новой записи (дедуп по symbol+ts), PUT.
-    Один повтор при 409-конфликте (записи иммутабельны -- дедуп + повторный PUT решает
-    конфликт без сложного merge). Best-effort -- отсутствие GITHUB_TOKEN просто пропускает
-    шаг (см. _github_get_shadow_sync), это не ошибка."""
+def _sync_to_github_sync(new_record: dict = None) -> bool:
+    """GET текущего состояния из GitHub, добавляет ВСЕ локальные записи, которых там ещё
+    нет (не только new_record -- параметр оставлен для обратной совместимости вызовов и
+    логов, сама функция берёт полный список из _load_local()), PUT. Один повтор при
+    409-конфликте. Best-effort -- отсутствие GITHUB_TOKEN просто пропускает шаг, это не
+    ошибка.
+
+    Ретрай-catchup (найдено 2026-07-12/13, см. SHADOW_ANALYSIS.md запись 23:42): раньше
+    функция пушила ТОЛЬКО новую запись текущего вызова -- если предыдущий вызов не
+    смог синкнуться (сетевой сбой, см. ниже), его запись НИКОГДА не попадала в GitHub
+    сама по себе, только если та же запись передавалась бы повторно явно (что не
+    происходит -- каждый вызов даёт свою новую запись). Теперь на каждом успешном синке
+    подтягивается весь локальный "хвост", не ушедший в GitHub с прошлых попыток.
+
+    Также больше НЕ трактует ошибку GET как пустой файл (см. _github_get_shadow_sync) --
+    транзиентный сбой прерывает синк без попытки PUT, чтобы не рисковать перезаписью
+    существующих записей меньшим (локальным) списком."""
     for attempt in range(2):
         remote, sha = _github_get_shadow_sync()
+        if remote is False:
+            return False  # транзиентная ошибка GET -- НЕ пустой файл, синк прерван безопасно
         if remote is None and sha is None and not signal_journal._github_configured():
             return False  # GitHub не настроен -- локальная запись уже сделана, этого достаточно
-        records = remote or []
-        keys = {_dedup_key(r) for r in records}
-        if _dedup_key(new_record) not in keys:
-            records.append(new_record)
-        result = _github_put_shadow_sync(records, sha)
+        remote_records = remote or []
+        remote_keys = {_dedup_key(r) for r in remote_records}
+        local_records = _load_local()
+        missing = [r for r in local_records if _dedup_key(r) not in remote_keys]
+        if not missing:
+            return True  # уже всё синхронизировано (включая new_record, если был передан)
+        result = _github_put_shadow_sync(remote_records + missing, sha)
         if result == "conflict":
             continue  # повтор со свежим sha
         return bool(result)
