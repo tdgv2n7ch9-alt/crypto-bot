@@ -6969,192 +6969,6 @@ def killzone_label() -> str:
     return line
 
 
-# 
-#      A / A+
-# 
-
-def signal_quality_filter(a: dict, pa: dict, coin: dict) -> dict:
-    """
-     :     3+  .
-     {"pass": bool, "quality": str, "reasons": list, "score": int}
-    
-         A/A+ .
-    """
-    reasons  = []
-    warnings = []
-    score    = 0
-    is_long  = a.get("is_long", True)
-    rsi_4h   = a.get("rsi_4h", 50)
-    rocket   = a.get("rocket", 0)
-
-    #    (  1  2) 
-    has_structure = False
-
-    # 1. Trend alignment (4H    )
-    trend_4h = a.get("trend_4h", "neutral")
-    if (is_long and trend_4h == "bullish") or (not is_long and trend_4h == "bearish"):
-        score += 15; reasons.append("  4H   ")
-        has_structure = True
-    elif trend_4h == "neutral":
-        score += 5; reasons.append("    ")
-    else:
-        warnings.append("     ")
-
-    # 2. Supertrend 
-    st_bull = a.get("supertrend_bull")
-    if (is_long and st_bull is True) or (not is_long and st_bull is False):
-        score += 12; reasons.append(" Supertrend  ")
-        has_structure = True
-
-    # 3. RSI   
-    if is_long and rsi_4h < 35:
-        score += 15; reasons.append(f" RSI  ({rsi_4h:.0f})   ")
-    elif is_long and rsi_4h < 50:
-        score += 8;  reasons.append(f" RSI  ({rsi_4h:.0f})")
-    elif is_long and rsi_4h > 70:
-        score -= 10; warnings.append(f" RSI  ({rsi_4h:.0f})     ")
-    if not is_long and rsi_4h > 65:
-        score += 15; reasons.append(f" RSI  ({rsi_4h:.0f})   ")
-    elif not is_long and rsi_4h < 30:
-        score -= 10; warnings.append(f" RSI  ({rsi_4h:.0f})     ")
-
-    # 4. MACD 
-    if (is_long and a.get("macd_bullish")) or (not is_long and a.get("macd_bearish")):
-        score += 10; reasons.append(" MACD ")
-
-    # 5. EMA200   
-    if is_long and a.get("above_ema200"):
-        score += 12; reasons.append("  EMA200   ")
-    elif is_long and not a.get("above_ema200"):
-        score += 3;  reasons.append("  EMA200    ")
-    if not is_long and not a.get("above_ema200"):
-        score += 12; reasons.append("  EMA200   ")
-
-    # 6. PRO Analysis 
-    if pa.get("ok"):
-        pro_score = pa.get("pro_score", 0)
-        if pro_score >= 70:
-            score += 15; reasons.append(f" PRO Score {pro_score}/100   ")
-        elif pro_score >= 50:
-            score += 8;  reasons.append(f" PRO Score {pro_score}/100   ")
-        else:
-            score -= 5;  warnings.append(f" PRO Score {pro_score}/100   ")
-
-        # ICT   pro_analysis
-        if pa.get("ict_ob_bull") and is_long:
-            score += 15; reasons.append(" ICT Bullish Order Block")
-        if pa.get("ict_ob_bear") and not is_long:
-            score += 15; reasons.append(" ICT Bearish Order Block")
-        if pa.get("ict_liquidity_sweep"):
-            score += 12; reasons.append(" Liquidity Sweep   ")
-        if pa.get("smc_choch"):
-            score += 10; reasons.append(f" CHoCH {pa['smc_choch']}   ")
-        if (pa.get("ict_fvg_bull") and is_long) or (pa.get("ict_fvg_bear") and not is_long):
-            score += 8; reasons.append(" FVG   ")
-
-        # Wyckoff 
-        wy = pa.get("wyckoff_phase")
-        if (is_long and wy == "Accumulation") or (is_long and wy == "Markup"):
-            score += 10; reasons.append(f" Wyckoff: {wy}")
-        elif (not is_long and wy == "Distribution") or (not is_long and wy == "Markdown"):
-            score += 10; reasons.append(f" Wyckoff: {wy}")
-
-        # TF confluence
-        conf = pa.get("tf_confluence", 0)
-        if (is_long and conf >= 3) or (not is_long and conf <= -3):
-            score += 12; reasons.append(f" {abs(conf)}/4  ")
-        elif abs(conf) >= 2:
-            score += 5
-
-        # Funding rate
-        fr = pa.get("funding_rate")
-        if fr is not None:
-            if is_long and fr < -0.03:
-                score += 8; reasons.append(f" Funding  ({fr:.4f}%)   ")
-            elif not is_long and fr > 0.06:
-                score += 8; reasons.append(f" Funding  ({fr:.4f}%)   ")
-
-    # 7. Rocket Score
-    if rocket >= 70:
-        score += 10; reasons.append(f" Rocket Score {rocket}/100")
-    elif rocket >= 55:
-        score += 5
-    else:
-        warnings.append(f" Rocket Score  ({rocket}/100)")
-
-    # 8.  
-    if a.get("suspicious"):
-        score -= 25; warnings.append("     ")
-
-    #  BTC  
-    btc = get_btc_market_context()
-    if btc["ok"]:
-        if is_long and btc["signal"] == "bull":
-            score += 12; reasons.append(" BTC      ")
-        elif is_long and btc["signal"] == "bear":
-            score -= 20; warnings.append(" BTC     ,  ")
-        elif is_long and "neutral_bear" in btc["signal"]:
-            score -= 8;  warnings.append(" BTC     ")
-        elif not is_long and btc["signal"] == "bear":
-            score += 12; reasons.append(" BTC      ")
-        elif not is_long and btc["signal"] == "bull":
-            score -= 15; warnings.append(" BTC     ")
-        #   BTC
-        if not btc["long_ok"] and is_long:
-            score -= 25; warnings.append(f" BTC   ({btc['btc_ch1h']:.1f}%  1)   ")
-
-    #  USDT.D  
-    #  USDT.D =    =  
-    try:
-        usdt_d_data = get_usdt_dominance() if "get_usdt_dominance" in dir() else {}
-        usdt_d = usdt_d_data.get("usdt_d", 0)
-        if usdt_d > 9.0 and is_long:
-            score -= 15; warnings.append(f" USDT.D={usdt_d:.1f}%    ,  ")
-        elif usdt_d > 8.5 and is_long:
-            score -= 8; warnings.append(f" USDT.D={usdt_d:.1f}%    ")
-        elif usdt_d < 7.5 and is_long:
-            score += 8; reasons.append(f" USDT.D={usdt_d:.1f}%     ")
-        elif usdt_d > 8.5 and not is_long:
-            score += 10; reasons.append(f" USDT.D={usdt_d:.1f}%   ,   ")
-    except: pass
-
-    #   Gold /   
-    try:
-        mac_ctx = get_macro_context()
-        if mac_ctx.get("traditional_risk") == "risk_off" and is_long:
-            score -= 10; warnings.append(" Gold   risk-off   ")
-        elif mac_ctx.get("traditional_risk") == "risk_off" and not is_long:
-            score += 5; reasons.append(" Risk-off     ")
-    except: pass
-
-    #  Killzone / 
-    kz = get_killzone_status()
-    if kz["is_good"]:
-        score += 8; reasons.append(f" {kz['active']['name']}   ")
-    elif kz["active"]["quality"] == "D":
-        score -= 5; warnings.append(f" Dead Zone     ")
-
-    #   
-    score = max(0, min(100, score))
-
-    if score >= 75 and has_structure:    quality = "A+ "
-    elif score >= 55 and has_structure:  quality = "A "
-    elif score >= 40:                    quality = "B "
-    else:                                quality = "C "
-
-    passes = quality in ("A+ ", "A ")
-
-    return {
-        "pass":     passes,
-        "quality":  quality,
-        "score":    score,
-        "reasons":  reasons,
-        "warnings": warnings,
-        "kz":       kz,
-    }
-
-
-
 def get_tokenomics(symbol: str) -> dict:
     """
         .
@@ -9564,8 +9378,7 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 RSI_EXTREME_LONG = 75   # RSI(4H) выше этого -- перекуп, жёсткий отказ для лонга вне зависимости
-                        # от остального скора (signal_quality_filter даёт за это лишь -10,
-                        # недостаточно чтобы одно это остановило слабый но "проходной" сигнал)
+                        # от остального скора (намеренно жёсткий гейт, не мягкий штраф)
 RSI_EXTREME_SHORT = 25  # зеркально для шорта (RSI ниже -- перепроданность)
 
 
@@ -9609,9 +9422,6 @@ def _scan_top_long_sync():
                 rejected.append((sym, f"RSI перегрет ({a['rsi_4h']:.0f}) для лонга", a.get("rocket", 0)))
                 continue
 
-            pa  = pro_analysis(sym, coin)
-            sqf = signal_quality_filter(a, pa, coin)
-
             grade = _signal_grade(a, True)
             if not (a["rocket"] >= 60 and grade in ("A+", "A", "B")):
                 rejected.append((sym, f"качество недостаточно (Rocket {a.get('rocket', 0)}/100, "
@@ -9628,7 +9438,6 @@ def _scan_top_long_sync():
                          f"R:R по TP1 {a.get('rr_tp1')} < {ta_extra.SR_MIN_RR_TP1}")
                 continue
 
-            a["_sqf"] = sqf
             a["_grade"] = grade
             scored.append((coin, a))
         except: pass
