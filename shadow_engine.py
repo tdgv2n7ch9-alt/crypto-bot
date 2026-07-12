@@ -543,6 +543,9 @@ async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
     # уже посчитан внутри bot.real_full_analysis() (см. её докстринг), здесь только
     # переносится в запись -- копится минимум 3 суток/100 сигналов, затем отчёт.
     record["oi_funding_ls_shadow"] = a.get("oi_funding_ls_shadow")
+    # Пакет 11 М1 (владелец "да" -- A/B тело-vs-фитиль, НЕ live): аналогично, уже
+    # посчитан внутри bot.real_full_analysis(), здесь только переносится.
+    record["bos_body_close_shadow"] = a.get("bos_body_close_shadow")
     ok_local = _write_local(record)
     if not ok_local:
         return False

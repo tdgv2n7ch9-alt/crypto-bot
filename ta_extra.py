@@ -773,6 +773,83 @@ def smc_setup_type(candles_4h: list, bias_direction: str = None) -> dict:
     return out
 
 
+def smc_setup_type_body_close_variant(candles_4h: list, bias_direction: str = None) -> dict:
+    """A/B-вариант smc_setup_type() -- Пакет 11 М1 (владелец "да" на A/B тело-vs-фитиль).
+
+    Находка ночного цикла (knowledge/METHODOLOGY_CORE.md §1): два источника расходятся
+    в критерии валидности слома структуры. Инструктор B (уже реализован в
+    smc_setup_type() выше и во всём боевом движке -- _find_fractals/swing_points
+    сравнивают только high/low, без проверки close) считает пробой ТЕНЬЮ достаточным.
+    "Урок 2. Structure.pdf" (cryptomannn.com) заявляет обратное: пробой без ЗАКРЫТИЯ
+    свечи за уровнем -- это SFP (снятие ликвидности), не валидный слом.
+
+    Та же логика swing-точек/range/HH-LL, что и smc_setup_type(), плюс один
+    дополнительный гейт: среди свечей МЕЖДУ предпоследним и последним swing-экстремумом
+    (включительно по последнему) должна быть хотя бы одна, ЗАКРЫВШАЯСЯ за уровнем
+    предпоследнего экстремума. Если нет -- пробой понижается до
+    "invalid_break_wick_only" вместо BOS/CHoCH/break_up/break_down.
+
+    Shadow-only: НЕ вызывается из живого пути, не участвует в rocket/скоринге/гейтах --
+    только измерение расхождения для отчёта владельцу (см. shadow_engine.py)."""
+    out = {"type": None, "label": "структура не определена", "aligned": None}
+    highs, lows = swing_points(candles_4h)
+    if len(highs) < 3 or len(lows) < 3:
+        return out
+
+    h_idx = [i for i, _ in highs[-3:]]
+    h = [p for _, p in highs[-3:]]
+    l_idx = [i for i, _ in lows[-3:]]
+    l = [p for _, p in lows[-3:]]
+
+    avg_h = sum(h) / len(h)
+    avg_l = sum(l) / len(l)
+    equal_highs = (max(h) - min(h)) <= avg_h * (ZONE_WIDTH_MIN_PCT / 100)
+    equal_lows = (max(l) - min(l)) <= avg_l * (ZONE_WIDTH_MIN_PCT / 100)
+    if equal_highs and equal_lows:
+        out.update(type="range", label="range (равные хаи/лои — накопление в диапазоне)")
+        return out
+
+    last_hh = h[2] > h[1]
+    last_ll = l[2] < l[1]
+    if not last_hh and not last_ll:
+        return out
+
+    break_dir = "long" if last_hh else "short"
+    break_word = "вверх" if last_hh else "вниз"
+
+    if last_hh:
+        old_level, old_i, new_i = h[1], h_idx[1], h_idx[2]
+        closed_beyond = any(c["close"] > old_level for c in candles_4h[old_i + 1:new_i + 1])
+    else:
+        old_level, old_i, new_i = l[1], l_idx[1], l_idx[2]
+        closed_beyond = any(c["close"] < old_level for c in candles_4h[old_i + 1:new_i + 1])
+
+    if not closed_beyond:
+        out.update(type="invalid_break_wick_only",
+                    label=f"Пробой {break_word} только тенью, без закрытия за уровнем "
+                          f"{old_level:.6g} -- по критерию \"Урок 2. Structure\" это SFP, "
+                          f"не валидный слом структуры")
+        return out
+
+    if bias_direction is None:
+        out.update(type=("break_up" if last_hh else "break_down"),
+                    label=f"Пробой структуры {break_word}, закрытие подтверждено "
+                          f"(bias NEUTRAL — BOS/CHoCH не размечены)")
+        return out
+
+    if break_dir == bias_direction:
+        out.update(type=("BOS_bull" if last_hh else "BOS_bear"),
+                    label=f"BOS — пробой структуры {break_word} по тренду, закрытие "
+                          f"подтверждено (согласовано с bias {bias_direction.upper()})",
+                    aligned=True)
+    else:
+        out.update(type=("CHoCH_bull" if last_hh else "CHoCH_bear"),
+                    label=f"CHoCH — пробой {break_word} ПРОТИВ bias {bias_direction.upper()}, "
+                          f"закрытие подтверждено — возможный разворот",
+                    aligned=False)
+    return out
+
+
 def find_fvg_zones(candles_4h: list, price: float) -> list:
     """Блок 4 ТЗ: незакрытые FVG на 4h — гэпы между свечами i-1 и i+1, ещё не
     "закрытые" (цена не возвращалась внутрь гэпа после его формирования).

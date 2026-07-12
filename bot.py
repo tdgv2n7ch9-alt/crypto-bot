@@ -8267,6 +8267,35 @@ def real_full_analysis(coin: dict) -> dict:
     except Exception as e:
         structural_primitives_shadow = {"error": str(e)}
 
+    # --- Пакет 11 М1 (владелец "да" -- A/B тело-vs-фитиль, НЕ live) -----------------
+    # Находка ночного цикла (knowledge/METHODOLOGY_CORE.md §1): "Урок 2. Structure.pdf"
+    # (cryptomannn.com) требует ЗАКРЫТИЯ свечи за уровнем для валидного слома структуры,
+    # иначе это SFP -- прямо противоречит уже реализованному в боте критерию (Инструктор
+    # B, только тень/экстремум, см. smc_setup_type() выше). Считает ОБА варианта на тех
+    # же 4h-свечах (переиспользует c4h_shadow/bias_dir, без новых сетевых вызовов) и
+    # логирует расхождение -- SHADOW ONLY, ta_extra.smc_setup_type() (боевая) не тронута.
+    # Не зависит от переменных предыдущего блока (тот блок может упасть независимо --
+    # см. его собственный try/except) -- пересчитывает c4h/bias и обе версии здесь же,
+    # это чистые функции без сети, повторный вызов дёшев.
+    try:
+        c4h_bc = ta.get("candles_4h", []) if ta["ok"] else []
+        bias_bc = "long" if is_long else "short"
+        wick_variant = (ta_extra.smc_setup_type(c4h_bc, bias_bc) if c4h_bc
+                         else {"type": None, "label": "н/д -- нет 4h-свечей", "aligned": None})
+        body_variant = (ta_extra.smc_setup_type_body_close_variant(c4h_bc, bias_bc) if c4h_bc
+                         else {"type": None, "label": "н/д -- нет 4h-свечей", "aligned": None})
+        wick_type = wick_variant.get("type")
+        body_type = body_variant.get("type")
+        bos_body_close_shadow = {
+            "wick_only_type": wick_type,
+            "body_close_type": body_type,
+            "disagree": wick_type != body_type,
+            "downgraded_to_invalid": body_type == "invalid_break_wick_only" and wick_type not in (None, "range"),
+            "body_close_label": body_variant.get("label"),
+        }
+    except Exception as e:
+        bos_body_close_shadow = {"error": str(e)}
+
     # --- Пакет 10 М2 (владелец "да" -- shadow-патч 09, НЕ live): OI/funding/L-S ----
     # Бэклог-баг "AUTO-путь слеп к OI/funding/L-S" (ENGINE_UNIFICATION.md §4 Блок 7,
     # §5 Шаг 5 -- самый рискованный шаг по площади воздействия, поэтому владелец
@@ -8356,6 +8385,7 @@ def real_full_analysis(coin: dict) -> dict:
         "candles_4h": ta.get("candles_4h", []) if ta["ok"] else [],
         "structural_primitives_shadow": structural_primitives_shadow,
         "oi_funding_ls_shadow": oi_funding_ls_shadow,
+        "bos_body_close_shadow": bos_body_close_shadow,
     }
 
 

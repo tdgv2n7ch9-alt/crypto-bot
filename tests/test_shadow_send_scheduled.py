@@ -155,6 +155,48 @@ def test_log_send_scheduled_shadow_async_missing_oi_funding_ls_shadow_is_none(mo
     assert captured["record"]["oi_funding_ls_shadow"] is None
 
 
+# --- Пакет 11 М1: bos_body_close_shadow передаётся через в запись ---
+
+def test_log_send_scheduled_shadow_async_carries_bos_body_close_shadow(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)
+    a["bos_body_close_shadow"] = {
+        "wick_only_type": "BOS_bull", "body_close_type": "invalid_break_wick_only",
+        "disagree": True, "downgraded_to_invalid": True,
+        "body_close_label": "SFP, не валидный слом структуры",
+    }
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert captured["record"]["bos_body_close_shadow"]["disagree"] is True
+    assert captured["record"]["bos_body_close_shadow"]["downgraded_to_invalid"] is True
+
+
+def test_log_send_scheduled_shadow_async_missing_bos_body_close_shadow_is_none(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)  # no bos_body_close_shadow key
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert captured["record"]["bos_body_close_shadow"] is None
+
+
 def test_log_send_scheduled_shadow_async_compute_failure_returns_false(monkeypatch):
     # bot_module без ожидаемых методов -- compute_shadow должен упасть внутри
     # try/except патча 01, но НЕ уронить всю функцию (уже проверено в compute_shadow
