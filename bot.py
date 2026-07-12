@@ -5363,6 +5363,29 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     results.sort(key=lambda x: x[2]["ps"], reverse=True)
     top = results[:5]  #  -5
 
+    # Пакет 10 М3 (владелец "да" -- миграция с deprecated full_analysis()):
+    # отбор top-5 по всем 500 монетам ОСТАЁТСЯ на лёгком full_analysis() --
+    # precision_shot_analysis() classifies по %-паттернам из quote-данных
+    # (ch1h/ch24h/vol_ratio/rank), это не тот баг, что был у /coin ("карточка
+    # показывала LONG с R:R 1:0.3" -- фиксированные TP/SL из full_analysis()).
+    # Замена ВСЕХ 500 на real_full_analysis() стоила бы 500 реальных Binance-
+    # фетчей за вызов -- не оправдано ради pattern-classification, который не
+    # меняется от источника (проверено: full_analysis()/real_full_analysis()
+    # читают ch1h/ch24h/vol_ratio/rank из ОДНИХ и тех же quote-полей напрямую,
+    # см. real_full_analysis() строки после `q = coin["quote"]["USDT"]`).
+    # ТОЛЬКО для уже отобранных 5 финалистов -- пересчёт через
+    # real_full_analysis() ради честных TP/SL/R:R/entry (та же логика,
+    # что уже исправила /coin), карточка ниже РЕНДЕРИТСЯ уже с новым `a`.
+    top_fixed = []
+    for coin, a_old, ps_data in top:
+        try:
+            a_new = real_full_analysis(coin)
+        except Exception as e:
+            log.error(f"[PRECISION] real_full_analysis {coin['symbol']}: {e}")
+            a_new = a_old  # честный фоллбек на старое значение при сбое, не молчание
+        top_fixed.append((coin, a_new, ps_data))
+    top = top_fixed
+
     if not top:
         await msg.edit_text(
             " *PRECISION SHOTS*\n\n"
