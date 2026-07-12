@@ -44,6 +44,7 @@ import matplotlib.patches as patches
 import requests
 import websockets
 
+import etherscan_whale
 import live_prices
 import rug_radar
 import shadow_engine
@@ -1018,7 +1019,8 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
         # НЕ подано в _try_promote_pump()/боевой гейт (уже решается независимо).
         if coin and ctx.get_cg_detail:
             cg_detail = ctx.get_cg_detail(sym) or {}
-            rug_risk = rug_radar.compute_rug_risk(sym, coin, cg_detail=cg_detail)
+            transfer_data = etherscan_whale.fetch_transfer_data(cg_detail, price) or None
+            rug_risk = rug_radar.compute_rug_risk(sym, coin, cg_detail=cg_detail, transfer_data=transfer_data)
             rug_line_text = rug_radar.format_rug_risk_line(rug_risk)
             if rug_line_text:
                 rug_line = f"\n{html.escape(rug_line_text)}"

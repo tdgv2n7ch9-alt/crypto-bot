@@ -120,6 +120,7 @@ import onchain_metrics
 import shadow_engine
 import chart_patterns
 import rug_radar
+import etherscan_whale
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -9010,7 +9011,9 @@ async def _cmd_x100_scanner_body(update, ctx):
                             "volume_24h": mc_val * c["vol_ratio"] / 100 if mc_val else 0,
                             "percent_change_30d": c["ch30d"],
                         }}}
-                        rug_risk = rug_radar.compute_rug_risk(c["sym"], rug_coin, cg_detail=rug_cg_detail)
+                        rug_transfer_data = etherscan_whale.fetch_transfer_data(rug_cg_detail, p) or None
+                        rug_risk = rug_radar.compute_rug_risk(c["sym"], rug_coin, cg_detail=rug_cg_detail,
+                                                               transfer_data=rug_transfer_data)
                         rug_line = rug_radar.format_rug_risk_line(rug_risk)
                     except Exception as e:
                         log.info(f"[RUG-RADAR] x100 {c['sym']}: {e}")
