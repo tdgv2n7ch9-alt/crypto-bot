@@ -3919,3 +3919,15 @@ ta_extra.py` -- чисто. Полный `pytest -q`: **457 passed, 1 skipped** 
 шагом. Реальное сравнение появится в `SHADOW_ANALYSIS.md`, когда исходов
 наберётся >=20 -- пока преждевременно, честно об этом сказано, не
 натягиваю вывод на 0 данных.
+
+Деплой подтверждён живьём (`deployment ID 63e6276d`):
+```
+railway run python3 -c "import shadow_outcome_analysis as soa, bot, inspect; \
+  print(hasattr(soa, 'build_live_vs_shadow_comparison')); \
+  print('live_journal_id=journal_id' in inspect.getsource(bot.send_scheduled))"
+-> True True
+```
+**Статус М2: ГОТОВ, код + тесты + деплой подтверждены живьём.** С этого
+момента КАЖДЫЙ новый promoted-кандидат `send_scheduled()` получает прямую
+связь с journal-записью -- класс проблемы "молчаливый сбой log_signal, id
+потерян" (см. `TRUMP`/`2Z` выше) для будущих записей больше не актуален.
