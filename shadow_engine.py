@@ -116,6 +116,13 @@ def _load_local() -> list:
         return []
 
 
+def get_local_records() -> list:
+    """Публичная обёртка над _load_local() -- Пакет 11, для внешних вызывающих
+    (bot._startup_integrity_check и т.п.), чтобы не тянуть private-функцию через
+    границу модуля."""
+    return _load_local()
+
+
 def _dedup_key(rec: dict):
     return (rec.get("symbol"), rec.get("ts"))
 
@@ -452,6 +459,55 @@ def _write_local(record: dict) -> bool:
     records = _load_local()
     records.append(record)
     return _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
+
+
+def integrity_report(records: list) -> dict:
+    """Пакет 11 (owner-запрос "целостность shadow-окон", находка ночного цикла с
+    разрывом в GitHub-копии) -- чистая функция, без сети/файлов, проверяет уже
+    загруженный список записей на честные структурные проблемы (не выдумывает
+    "всё ок" -- тот же принцип, что и bot._startup_integrity_check):
+      - schema_ok: каждая запись -- dict с непустыми symbol/ts.
+      - duplicate_count/duplicate_keys: повторяющиеся (symbol, ts) -- при корректной
+        работе _dedup_key() в _sync_to_github_sync() дублей быть не должно; находка
+        означает баг где-то в цепочке записи, не в самом чек-скрипте.
+      - out_of_order_count: сколько записей идут с ts МЕНЬШЕ предыдущей (записи
+        пишутся последовательно по времени -- нарушение подряд подсказывает на
+        неупорядоченный merge при синке).
+      - total: общее количество записей.
+    Пустой/None список -- честно total=0, без ошибок."""
+    records = records or []
+    total = len(records)
+    schema_bad = [i for i, r in enumerate(records)
+                  if not isinstance(r, dict) or not r.get("symbol") or r.get("ts") is None]
+    seen = {}
+    dup_keys = []
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        key = _dedup_key(r)
+        seen[key] = seen.get(key, 0) + 1
+    for key, count in seen.items():
+        if count > 1:
+            dup_keys.append({"key": key, "count": count})
+    out_of_order = 0
+    prev_ts = None
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        ts = r.get("ts")
+        if ts is None:
+            continue
+        if prev_ts is not None and ts < prev_ts:
+            out_of_order += 1
+        prev_ts = ts
+    return {
+        "total": total,
+        "schema_ok": len(schema_bad) == 0,
+        "schema_bad_indices": schema_bad,
+        "duplicate_count": len(dup_keys),
+        "duplicate_keys": dup_keys[:20],  # честный кап на размер отчёта, не на сам подсчёт
+        "out_of_order_count": out_of_order,
+    }
 
 
 def log_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,

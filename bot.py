@@ -10897,6 +10897,23 @@ async def _startup_integrity_check(bot: Bot, owner_id: int):
         lines.append(f"🔴 CoinGecko: {str(e)[:150]}")
 
     try:
+        # Пакет 11 (owner-запрос "целостность shadow-окон", находка ночного цикла --
+        # разрыв в GitHub-копии journal/shadow_signals.json, см. SHADOW_ANALYSIS.md
+        # 23:42 и PROGRESS.md Пакет 11 М1): честный отчёт при каждом старте, не
+        # только по запросу -- дублей/нарушения порядка быть не должно при
+        # корректной работе синка, находка здесь means баг где-то в цепочке записи.
+        shadow_records = shadow_engine.get_local_records()
+        rep = shadow_engine.integrity_report(shadow_records)
+        shadow_ok = rep["schema_ok"] and rep["duplicate_count"] == 0
+        shadow_emoji = "🟢" if shadow_ok else "🔴"
+        lines.append(f"{shadow_emoji} Shadow-журнал: {rep['total']} записей, "
+                      f"дублей {rep['duplicate_count']}, вне порядка {rep['out_of_order_count']}")
+        if not rep["schema_ok"]:
+            lines.append(f"  ⚠️ битых записей (нет symbol/ts): {len(rep['schema_bad_indices'])}")
+    except Exception as e:
+        lines.append(f"🔴 Shadow-журнал: проверка упала ({str(e)[:150]})")
+
+    try:
         await bot.send_message(owner_id, "\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         print(f"_startup_integrity_check: не удалось отправить сообщение владельцу: {e}")

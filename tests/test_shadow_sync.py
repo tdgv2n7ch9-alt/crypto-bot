@@ -179,3 +179,64 @@ def test_sync_retries_once_on_conflict_then_succeeds(monkeypatch):
     assert ok is True
     assert calls["get"] == 2
     assert calls["put"] == 2
+
+
+# --- Пакет 11 (owner-запрос "целостность shadow-окон"): integrity_report() ---
+
+def test_integrity_report_empty_records_is_honest_not_fabricated():
+    report = se.integrity_report([])
+    assert report["total"] == 0
+    assert report["schema_ok"] is True
+    assert report["duplicate_count"] == 0
+    assert report["out_of_order_count"] == 0
+
+
+def test_integrity_report_none_records_treated_as_empty():
+    report = se.integrity_report(None)
+    assert report["total"] == 0
+
+
+def test_integrity_report_clean_records_no_false_positives():
+    records = [
+        {"symbol": "BTCUSDT", "ts": 100},
+        {"symbol": "ETHUSDT", "ts": 101},
+        {"symbol": "BNBUSDT", "ts": 102},
+    ]
+    report = se.integrity_report(records)
+    assert report["total"] == 3
+    assert report["schema_ok"] is True
+    assert report["duplicate_count"] == 0
+    assert report["out_of_order_count"] == 0
+
+
+def test_integrity_report_detects_duplicate_symbol_ts_key():
+    records = [
+        {"symbol": "BTCUSDT", "ts": 100},
+        {"symbol": "BTCUSDT", "ts": 100},  # дубль
+        {"symbol": "ETHUSDT", "ts": 101},
+    ]
+    report = se.integrity_report(records)
+    assert report["duplicate_count"] == 1
+    assert report["duplicate_keys"][0]["key"] == ("BTCUSDT", 100)
+    assert report["duplicate_keys"][0]["count"] == 2
+
+
+def test_integrity_report_detects_out_of_order_ts():
+    records = [
+        {"symbol": "BTCUSDT", "ts": 100},
+        {"symbol": "ETHUSDT", "ts": 50},   # раньше предыдущей -- нарушение порядка
+        {"symbol": "BNBUSDT", "ts": 102},
+    ]
+    report = se.integrity_report(records)
+    assert report["out_of_order_count"] == 1
+
+
+def test_integrity_report_detects_missing_symbol_or_ts():
+    records = [
+        {"symbol": "BTCUSDT", "ts": 100},
+        {"symbol": None, "ts": 101},
+        {"symbol": "ETHUSDT", "ts": None},
+    ]
+    report = se.integrity_report(records)
+    assert report["schema_ok"] is False
+    assert set(report["schema_bad_indices"]) == {1, 2}
