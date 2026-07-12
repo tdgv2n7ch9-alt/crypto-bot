@@ -683,6 +683,49 @@ _deploy_check_boot_sha = {"sha": None, "date": None}
 _deploy_alerted_shas = set()  # анти-спам: один алерт на конкретный "застрявший" коммит
 
 
+# Пакет 6 М2 (владелец, "ДА"): пути, которые бот сам автосинкает в GitHub через
+# Contents API (journal/watch_zones.json, journal/signals.json,
+# journal/shadow_signals.json, data/chat_ids.json, backups/<date>/...) -- ДОЛЖНЫ
+# совпадать по смыслу с исключением из railway.json build.watchPatterns
+# (watchPatterns там задан позитивным списком кода, эти пути в него НЕ входят =>
+# Railway их не деплоит по дизайну). check_deploy_freshness() ниже использует
+# этот же список, чтобы не путать "деплой не нужен" с "деплой застрял".
+_DEPLOY_IRRELEVANT_PREFIXES = ("journal/", "backups/")
+_DEPLOY_IRRELEVANT_EXACT = ("data/chat_ids.json",)
+
+
+def _is_deploy_irrelevant_diff(filenames: list) -> bool:
+    """True, только если diff НЕ пуст И ВСЕ изменённые файлы попадают под пути,
+    которые railway.json намеренно исключает из деплоя (см. _DEPLOY_IRRELEVANT_*
+    выше). Пустой/неизвестный список -- честно False, не считаем безопасным, если
+    не знаем наверняка (лучше редкий ложный алерт, чем тихо пропущенный код-пуш)."""
+    if not filenames:
+        return False
+    return all(
+        f.startswith(_DEPLOY_IRRELEVANT_PREFIXES) or f in _DEPLOY_IRRELEVANT_EXACT
+        for f in filenames
+    )
+
+
+def _compare_commits_sync(base_sha: str, head_sha: str):
+    """GET /repos/{owner}/{repo}/compare/{base}...{head} -- список путей файлов,
+    изменённых между двумя коммитами (GitHub Compare API). None при ошибке/
+    недоступности -- честно, не выдумываем список файлов, если GitHub недоступен
+    (вызывающая сторона тогда падает обратно на прежнее age-based поведение)."""
+    if not signal_journal._github_configured():
+        return None
+    try:
+        r = requests.get(
+            f"{signal_journal._github_api_base()}/compare/{base_sha}...{head_sha}",
+            headers=signal_journal._github_headers(), timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return [f.get("filename", "") for f in data.get("files", [])]
+    except Exception as e:
+        log.error(f"[DEPLOY-CHECK] compare commits failed: {e}")
+        return None
+
+
 def _fetch_main_head_sync():
     """GET /repos/{owner}/{repo}/commits/main -- (sha, committer_date_iso) либо
     (None, None), если GitHub не настроен/недоступен. Переиспользует
@@ -721,6 +764,15 @@ async def check_deploy_freshness(bot: Bot):
     if not sha or not date_str or sha == _deploy_check_boot_sha["sha"]:
         return
     if sha in _deploy_alerted_shas:
+        return
+    # Пакет 6 М2 (владелец, "ДА"): journal-автосинк коммиты (railway.json
+    # watchPatterns намеренно их не деплоит) не должны считаться "застрявшим
+    # деплоем" -- если ВСЕ новые коммиты с момента boot затрагивают только
+    # journal/data/backups, сдвигаем точку отсчёта и не алертим.
+    filenames = _compare_commits_sync(_deploy_check_boot_sha["sha"], sha)
+    if filenames is not None and _is_deploy_irrelevant_diff(filenames):
+        _deploy_check_boot_sha["sha"] = sha
+        _deploy_check_boot_sha["date"] = date_str
         return
     try:
         commit_dt = _dt.datetime.fromisoformat(date_str.replace("Z", "+00:00"))

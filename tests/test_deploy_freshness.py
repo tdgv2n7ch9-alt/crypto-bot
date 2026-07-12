@@ -117,3 +117,87 @@ def test_malformed_date_is_honest_no_crash_no_alert():
         fake_bot.send_message = AsyncMock()
         asyncio.run(bot.check_deploy_freshness(fake_bot))
     fake_bot.send_message.assert_not_called()
+
+
+# ── _is_deploy_irrelevant_diff() -- Пакет 6 М2 ──
+
+def test_irrelevant_diff_empty_list_is_false():
+    assert bot._is_deploy_irrelevant_diff([]) is False
+
+
+def test_irrelevant_diff_journal_only_is_true():
+    assert bot._is_deploy_irrelevant_diff(["journal/signals.json", "journal/shadow_signals.json"]) is True
+
+
+def test_irrelevant_diff_chat_ids_is_true():
+    assert bot._is_deploy_irrelevant_diff(["data/chat_ids.json"]) is True
+
+
+def test_irrelevant_diff_backups_is_true():
+    assert bot._is_deploy_irrelevant_diff(["backups/2026-07-12/signals.json"]) is True
+
+
+def test_irrelevant_diff_mixed_with_code_is_false():
+    assert bot._is_deploy_irrelevant_diff(["journal/signals.json", "bot.py"]) is False
+
+
+def test_irrelevant_diff_pure_code_is_false():
+    assert bot._is_deploy_irrelevant_diff(["bot.py", "ta_extra.py"]) is False
+
+
+# ── _compare_commits_sync() ──
+
+def test_compare_commits_none_when_github_not_configured():
+    with patch("bot.signal_journal._github_configured", return_value=False):
+        result = bot._compare_commits_sync("aaa", "bbb")
+    assert result is None
+
+
+def test_compare_commits_parses_filenames():
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {"files": [{"filename": "journal/signals.json"}, {"filename": "bot.py"}]}
+    fake_resp.raise_for_status = lambda: None
+    with patch("bot.signal_journal._github_configured", return_value=True), \
+         patch("bot.requests.get", return_value=fake_resp):
+        result = bot._compare_commits_sync("aaa", "bbb")
+    assert result == ["journal/signals.json", "bot.py"]
+
+
+def test_compare_commits_network_failure_is_honest_none():
+    with patch("bot.signal_journal._github_configured", return_value=True), \
+         patch("bot.requests.get", side_effect=Exception("network down")):
+        result = bot._compare_commits_sync("aaa", "bbb")
+    assert result is None
+
+
+# ── check_deploy_freshness() -- journal-only diff advances baseline, no alert ──
+
+def test_no_alert_and_boot_sha_advances_when_diff_is_journal_only():
+    with patch("bot._fetch_main_head_sync", return_value=("bbb2222", _iso(20 * 60))), \
+         patch("bot._compare_commits_sync", return_value=["journal/signals.json"]):
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+        asyncio.run(bot.check_deploy_freshness(fake_bot))
+    fake_bot.send_message.assert_not_called()
+    assert bot._deploy_check_boot_sha["sha"] == "bbb2222"
+
+
+def test_alert_still_fires_when_diff_includes_code_file():
+    with patch("bot._fetch_main_head_sync", return_value=("bbb2222", _iso(20 * 60))), \
+         patch("bot._compare_commits_sync", return_value=["journal/signals.json", "bot.py"]):
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+        asyncio.run(bot.check_deploy_freshness(fake_bot))
+    fake_bot.send_message.assert_called_once()
+    assert bot._deploy_check_boot_sha["sha"] == "aaa1111"  # НЕ сдвинулся -- деплой реально нужен
+
+
+def test_alert_still_fires_when_compare_unavailable():
+    # GitHub compare недоступен (None) -- честно падаем обратно на прежнее
+    # age-based поведение, не считаем безопасным по умолчанию.
+    with patch("bot._fetch_main_head_sync", return_value=("bbb2222", _iso(20 * 60))), \
+         patch("bot._compare_commits_sync", return_value=None):
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock()
+        asyncio.run(bot.check_deploy_freshness(fake_bot))
+    fake_bot.send_message.assert_called_once()

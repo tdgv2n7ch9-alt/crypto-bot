@@ -3600,3 +3600,55 @@ B-shadow-only (тот же безопасный паттерн, что М3) вм
 `5e64542`(М6) + чекпоинты после каждого модуля.
 
 Стоп до приёмки владельца.
+
+## 2026-07-12 -- Пакет 6, М2: Railway Watch Paths -- journal-коммиты не деплоятся (ГОТОВ, проверка живьём после пуша)
+
+Владелец: "ДА" -- настроить Watch Paths, journal-автосинк не триггерит
+деплой, код-пуши триггерят, watchdog не должен ложно алертить на
+journal-пуши.
+
+**Проверено ПЕРЕД настройкой (Truth Protocol)**: живьём запросил
+`https://railway.com/railway.schema.json` -- подтвердил, что поле
+`build.watchPatterns` реально существует ("Array of patterns used to
+conditionally trigger a deploys"). Живьём прочитал
+`docs.railway.com/builds/build-configuration` (WebFetch) -- подтверждено:
+gitignore-style паттерны, "when specified, any changes that don't match the
+patterns will skip creating a new deployment" — точное подтверждение
+механизма, который нужен.
+
+**Реализация**:
+1. `railway.json` -- добавлен `build.watchPatterns` (позитивный список, не
+   негативный -- проще и надёжнее, чем `**` + `!исключения`): `*.py`,
+   `requirements.txt`, `Dockerfile`, `railway.json`, `backtest/**`,
+   `tests/**`, `patches/**`. Пути, которые бот сам автосинкает
+   (`journal/*.json`, `data/chat_ids.json`, `backups/**`) -- НЕ в списке,
+   значит по умолчанию не триггерят деплой.
+2. `bot.py` -- `check_deploy_freshness()` теперь честно ОТЛИЧАЕТ "journal-
+   only коммит, деплой не нужен по дизайну" от "код застрял, деплой не
+   прошёл": новая `_compare_commits_sync()` (GitHub Compare API) получает
+   список изменённых файлов между boot_sha и текущим HEAD,
+   `_is_deploy_irrelevant_diff()` проверяет, что ВСЕ файлы попадают под
+   `journal/`/`data/chat_ids.json`/`backups/` -- если да, сдвигает
+   `_deploy_check_boot_sha` на новый SHA и НЕ алертит (нечего чинить). Если
+   среди файлов есть хоть один код-файл -- алертит как раньше. Список путей
+   в `_DEPLOY_IRRELEVANT_PREFIXES`/`_DEPLOY_IRRELEVANT_EXACT` должен
+   совпадать по смыслу с `railway.json` (задокументировано в комментарии
+   рядом с обоими местами).
+
+py_compile (`bot.py`, тестовый файл) отдельно -- чисто. 12 новых тестов
+(`tests/test_deploy_freshness.py`): `_is_deploy_irrelevant_diff` (пусто/
+только-journal/chat_ids/backups/смешанное с кодом/чистый код),
+`_compare_commits_sync` (github не настроен/парсинг/сетевая ошибка),
+`check_deploy_freshness` (journal-only сдвигает baseline без алерта, код в
+дифе алертит как раньше, недоступный compare честно падает на старое
+поведение). 422 passed, 1 skipped (было 410).
+
+**Честно, что НЕ проверено этим прогоном**: живая проверка "journal-коммит
+→ реально нет деплоя, код-коммит → реально есть деплой" требует ДВУХ живых
+событий после деплоя этого самого изменения -- код-коммит (этот самый пуш,
+проверю ниже) и следующий естественный journal-автосинк бота (жду, не могу
+форсировать вручную без нарушения границы "не трогать боевую рассылку/
+данные"). Второе подтвержу в следующем чекпоинте этого же пакета, как
+только увижу хотя бы один автосинк journal ПОСЛЕ деплоя этого кода.
+
+**Статус М2: код/тесты ГОТОВЫ**, живая проверка код-пуша -- следующим шагом.
