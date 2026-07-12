@@ -118,6 +118,7 @@ import daily_metrics
 import morning_metrics
 import onchain_metrics
 import shadow_engine
+import chart_patterns
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -8536,6 +8537,39 @@ def _signal_kb(symbol: str, msg_id: int = 0, chat_id: int = 0, mode: str = "long
     return InlineKeyboardMarkup(rows)
 
 
+def _format_chart_pattern_line(a: dict, fp) -> str:
+    """Патч 08 (Пакет 8 М3, владелец: "НОВЫЙ модуль, вывод в shadow-скоринг +
+    отдельная строка в карточке ТА (информационно). Бой не трогать") --
+    классические чарт-паттерны Bulkowski (chart_patterns.py) на тех же
+    candles_4h, что уже посчитаны боевым анализом. ТОЛЬКО текстовая строка --
+    ничего не пишет ни в score/grade, ни в gate_reasons, ни в trade_plan.
+    Пустая строка, если паттерн не найден или candles_4h недоступны (никогда
+    не выдумывает результат)."""
+    candles_4h = a.get("candles_4h") or []
+    if not candles_4h:
+        return ""
+    try:
+        hs = chart_patterns.detect_head_and_shoulders(candles_4h)
+        if hs["top"]:
+            return f"  Паттерн:       `Голова и плечи (вершина) — цель {fp(hs['target'])}`"
+        if hs["bottom"]:
+            return f"  Паттерн:       `Голова и плечи (дно) — цель {fp(hs['target'])}`"
+        flag = chart_patterns.detect_flag(candles_4h)
+        if flag["bull"]:
+            return f"  Паттерн:       `Бычий флаг — цель {fp(flag['target'])}`"
+        if flag["bear"]:
+            return f"  Паттерн:       `Медвежий флаг — цель {fp(flag['target'])}`"
+        tri = chart_patterns.detect_triangle(candles_4h)
+        tri_names = {"symmetric": "Симметричный треугольник",
+                     "ascending": "Восходящий треугольник",
+                     "descending": "Нисходящий треугольник"}
+        if tri["type"] in tri_names:
+            return f"  Паттерн:       `{tri_names[tri['type']]}`"
+    except Exception:
+        return ""
+    return ""
+
+
 def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
                        mode: str = "long", section: str = "") -> str:
     is_long = mode in ("long", "spot")
@@ -8815,6 +8849,10 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
     _sweep_line = ta_extra.format_sweep_line(a.get("sweep_1h"), a.get("sweep_4h"), price_fmt=fp)
     if _sweep_line:
         lines.append(f"  {_sweep_line}")
+
+    _pattern_line = _format_chart_pattern_line(a, fp)
+    if _pattern_line:
+        lines.append(_pattern_line)
 
     lines += [
         f"  {vol_note[0]}  {vol_note[1]}",
@@ -10387,6 +10425,34 @@ async def cmd_whales(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only: /patterns <symbol> -- классические чарт-паттерны Булковского
+    (chart_patterns.py, Пакет 8 М3: "отдельная строка в карточке ТА
+    (информационно). Бой не трогать") на 4h-свечах символа. Только показ данных --
+    не влияет ни на какой боевой сигнал/гейт (shadow_engine пишет то же самое поле
+    "chart_patterns" в journal/shadow_signals.json, эта команда -- ручной просмотр
+    по запросу для любого символа, не только по уже отправленным сигналам)."""
+    import os
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    if not ctx.args:
+        await update.message.reply_text("Использование: `/patterns BTC`", parse_mode="Markdown")
+        return
+    symbol = ctx.args[0].upper().replace("USDT", "") + "USDT"
+    candles_4h = get_binance_ohlc(symbol, "4h", 200)
+    if not candles_4h or len(candles_4h) < 15:
+        await update.message.reply_text(f"📐 *{symbol}* — недостаточно 4h-свечей для анализа паттернов.",
+                                         parse_mode="Markdown")
+        return
+    line = chart_patterns.format_line(candles_4h)
+    await update.message.reply_text(
+        f"📐 *Классические паттерны — {symbol}* (4h)\n\n{line}\n\n"
+        f"_Источник: Bulkowski, «Энциклопедия графических моделей» (Trading/). "
+        f"Только информация — не влияет ни на какой боевой сигнал/гейт._",
+        parse_mode="Markdown")
+
+
 async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only: /zones -- активные зоны дневной разметки (level_watch.py,
     journal/watch_zones.json) + дата/источник разметки. Только показ данных -- не
@@ -10888,6 +10954,7 @@ def main():
     app.add_handler(CommandHandler("myid",      cmd_myid))
     app.add_handler(CommandHandler("radar_status", cmd_radar_status))
     app.add_handler(CommandHandler("whales",       cmd_whales))
+    app.add_handler(CommandHandler("patterns",     cmd_patterns))
     app.add_handler(CommandHandler("zones",        cmd_zones))
     app.add_handler(CommandHandler("zones_set",    cmd_zones_set))
     app.add_handler(CommandHandler("health",       cmd_health))
