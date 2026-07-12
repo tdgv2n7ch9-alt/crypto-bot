@@ -1,0 +1,23 @@
+#!/bin/sh
+# Пакет SECURITY-HARDENING М2 (владелец "да") -- секрет-скан перед КАЖДЫМ коммитом.
+# Использует gitleaks напрямую (без Python pre-commit-фреймворка -- меньше зависимостей).
+# Если gitleaks не установлен локально -- честно предупреждает и пропускает, не блокирует
+# коммит (чтобы не ломать работу на машинах без gitleaks), но печатает явное предупреждение.
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "⚠️  gitleaks не установлен -- секрет-скан пропущен для этого коммита."
+    echo "    Установить: brew install gitleaks (macOS) -- см. SECRETS_AUDIT.md."
+    exit 0
+fi
+
+gitleaks protect --staged --source "$(git rev-parse --show-toplevel)" -v
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo ""
+    echo "🔴 gitleaks нашёл потенциальный секрет в staged-изменениях -- коммит остановлен."
+    echo "    Если это ложное срабатывание -- см. gitleaks:allow комментарий или .gitleaksignore."
+    exit 1
+fi
+
+exit 0
