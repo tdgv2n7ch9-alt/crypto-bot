@@ -22,6 +22,7 @@ import glob
 import json
 import os
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import level_watch
@@ -83,14 +84,45 @@ def level_watch_touches_today(now_ts: float = None, window_sec: float = DIGEST_W
     return _read_jsonl_events(level_watch.EVENTS_DIR, "level_watch_events", now_ts, window_sec)
 
 
+def _format_top_discrepancy(records: list) -> dict:
+    """Пакет 6 М3 (владелец, "ДА"): один самый заметный shadow-кандидат окна --
+    приоритет (1) promoted_live=true (реально ушёл в бой -- самое редкое и значимое
+    расхождение), (2) больше всего patches_affected (наиболее насыщенный
+    расхождениями кандидат), (3) первый попавшийся, если ни у кого нет ни того,
+    ни другого. None, если записей нет -- честно, не выдумываем пример на пустых
+    данных."""
+    if not records:
+        return None
+    promoted = [r for r in records if r.get("promoted_live") is True]
+    pool = promoted if promoted else records
+    pool = sorted(pool, key=lambda r: len(r.get("patches_affected") or []), reverse=True)
+    top = pool[0]
+    discrepancy_list = top.get("discrepancy") or []
+    detail = discrepancy_list[0] if discrepancy_list else (
+        "нет явного текстового расхождения (patches_affected: "
+        f"{', '.join(top.get('patches_affected') or []) or 'нет'})"
+    )
+    return {
+        "symbol": top.get("symbol"),
+        "direction": top.get("direction"),
+        "promoted_live": top.get("promoted_live"),
+        "detail": detail,
+    }
+
+
 def shadow_vs_live_today(now_ts: float = None, window_sec: float = DIGEST_WINDOW_SEC) -> dict:
     """journal/shadow_signals.json -- локальный файл читается напрямую (тот же файл,
     что shadow_engine.py пишет/синкает в GitHub), без сети. promoted_live=False
     означает: shadow нашёл кандидата, который НЕ прошёл в боевую выдачу -- это и
-    есть "расхождение shadow vs live" в буквальном смысле ТЗ."""
+    есть "расхождение shadow vs live" в буквальном смысле ТЗ.
+
+    Пакет 6 М3 (владелец, "ДА"): расширено срезами по гейтам/патчам и топ-1
+    расхождением -- то, чего не хватало INSIGHTS-разборам Блока 12/Пакета 5 М5 в
+    самих ежедневных сводках, не только в ручных чекпоинтах PROGRESS.md."""
     now = now_ts if now_ts is not None else time.time()
     cutoff = now - window_sec
-    result = {"total": 0, "promoted": 0, "not_promoted": 0, "dead_zone_penalized": 0}
+    result = {"total": 0, "promoted": 0, "not_promoted": 0, "dead_zone_penalized": 0,
+              "gate_reasons": {}, "patches_affected": {}, "top_discrepancy": None}
     try:
         if not os.path.exists(shadow_engine_file()):
             return result
@@ -102,6 +134,17 @@ def shadow_vs_live_today(now_ts: float = None, window_sec: float = DIGEST_WINDOW
         result["promoted"] = sum(1 for r in todays if r.get("promoted_live") is True)
         result["not_promoted"] = sum(1 for r in todays if r.get("promoted_live") is False)
         result["dead_zone_penalized"] = sum(1 for r in todays if r.get("dead_zone"))
+
+        gate_counter = Counter()
+        patch_counter = Counter()
+        for r in todays:
+            for g in (r.get("gate_reasons") or []):
+                gate_counter[g] += 1
+            for p in (r.get("patches_affected") or []):
+                patch_counter[p] += 1
+        result["gate_reasons"] = dict(gate_counter)
+        result["patches_affected"] = dict(patch_counter)
+        result["top_discrepancy"] = _format_top_discrepancy(todays)
     except Exception as e:
         print(f"daily_metrics: shadow_vs_live_today failed: {e}")
     return result
@@ -162,6 +205,16 @@ def build_daily_digest(bot_module, now_ts: float = None) -> str:
                       f"(в бой: {shadow['promoted']}, только shadow: {shadow['not_promoted']})")
         if shadow["dead_zone_penalized"]:
             lines.append(f"  Из них в Мёртвой зоне: {shadow['dead_zone_penalized']}")
+        if shadow["gate_reasons"]:
+            top_gates = sorted(shadow["gate_reasons"].items(), key=lambda kv: kv[1], reverse=True)[:3]
+            lines.append("  Топ причин отказа: " + ", ".join(f"{g} ({c})" for g, c in top_gates))
+        if shadow["patches_affected"]:
+            top_patches = sorted(shadow["patches_affected"].items(), key=lambda kv: kv[1], reverse=True)
+            lines.append("  Патчи 02-05: " + ", ".join(f"{p} ({c})" for p, c in top_patches))
+        td = shadow.get("top_discrepancy")
+        if td:
+            mark = "✅ promoted" if td["promoted_live"] else "теневой"
+            lines.append(f"  Топ-1 расхождение ({mark}): {td['symbol']} {td['direction']} — {td['detail']}")
 
     lines += ["", "🐋 *Whale-события, топ-3:*"]
     if not whales:

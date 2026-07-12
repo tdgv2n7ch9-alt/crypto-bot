@@ -141,7 +141,94 @@ def test_shadow_vs_live_counts_promoted_and_not(tmp_path, monkeypatch):
 def test_shadow_vs_live_missing_file_is_honest_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     result = daily_metrics.shadow_vs_live_today(now_ts=time.time())
-    assert result == {"total": 0, "promoted": 0, "not_promoted": 0, "dead_zone_penalized": 0}
+    assert result == {"total": 0, "promoted": 0, "not_promoted": 0, "dead_zone_penalized": 0,
+                       "gate_reasons": {}, "patches_affected": {}, "top_discrepancy": None}
+
+
+# ── shadow_vs_live_today() -- Пакет 6 М3: gate_reasons/patches_affected/top_discrepancy ──
+
+def test_shadow_vs_live_gate_reasons_and_patches_counted(tmp_path, monkeypatch):
+    now = 1_000_000.0
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({
+        "schema_version": 1,
+        "records": [
+            {"ts": now - 10, "promoted_live": False, "dead_zone": False,
+             "gate_reasons": ["rr_gate", "rocket_or_grade"], "patches_affected": ["02-rr-gate"]},
+            {"ts": now - 20, "promoted_live": False, "dead_zone": False,
+             "gate_reasons": ["rocket_or_grade"], "patches_affected": ["02-rr-gate", "03-breaker-mitigation"]},
+        ],
+    }))
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    result = daily_metrics.shadow_vs_live_today(now_ts=now)
+    assert result["gate_reasons"] == {"rr_gate": 1, "rocket_or_grade": 2}
+    assert result["patches_affected"] == {"02-rr-gate": 2, "03-breaker-mitigation": 1}
+
+
+def test_shadow_vs_live_top_discrepancy_prefers_promoted(tmp_path, monkeypatch):
+    now = 1_000_000.0
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({
+        "schema_version": 1,
+        "records": [
+            {"ts": now - 10, "symbol": "AAA", "direction": "long", "promoted_live": False,
+             "dead_zone": False, "patches_affected": ["02-rr-gate", "03-breaker-mitigation",
+                                                        "04-rsi-divergence"], "discrepancy": ["много патчей"]},
+            {"ts": now - 20, "symbol": "BEAT", "direction": "short", "promoted_live": True,
+             "dead_zone": False, "patches_affected": ["02-rr-gate"],
+             "discrepancy": ["R:R 1.53 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"]},
+        ],
+    }))
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    result = daily_metrics.shadow_vs_live_today(now_ts=now)
+    td = result["top_discrepancy"]
+    assert td["symbol"] == "BEAT"  # promoted побеждает даже с меньшим числом patches_affected
+    assert td["promoted_live"] is True
+    assert "shadow-гейт" in td["detail"]
+
+
+def test_shadow_vs_live_top_discrepancy_falls_back_to_most_patches(tmp_path, monkeypatch):
+    now = 1_000_000.0
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({
+        "schema_version": 1,
+        "records": [
+            {"ts": now - 10, "symbol": "AAA", "direction": "long", "promoted_live": False,
+             "dead_zone": False, "patches_affected": ["02-rr-gate"], "discrepancy": []},
+            {"ts": now - 20, "symbol": "ZZZ", "direction": "short", "promoted_live": False,
+             "dead_zone": False, "patches_affected": ["02-rr-gate", "03-breaker-mitigation",
+                                                        "05-bpr"], "discrepancy": []},
+        ],
+    }))
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    result = daily_metrics.shadow_vs_live_today(now_ts=now)
+    td = result["top_discrepancy"]
+    assert td["symbol"] == "ZZZ"  # без promoted -- побеждает больше patches_affected
+    assert td["promoted_live"] is False
+
+
+def test_shadow_vs_live_top_discrepancy_none_when_no_records(tmp_path, monkeypatch):
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({"schema_version": 1, "records": []}))
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    result = daily_metrics.shadow_vs_live_today(now_ts=time.time())
+    assert result["top_discrepancy"] is None
+
+
+def test_shadow_vs_live_top_discrepancy_honest_detail_when_no_discrepancy_text(tmp_path, monkeypatch):
+    now = 1_000_000.0
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({
+        "schema_version": 1,
+        "records": [
+            {"ts": now - 10, "symbol": "AAA", "direction": "long", "promoted_live": False,
+             "dead_zone": False, "patches_affected": [], "discrepancy": []},
+        ],
+    }))
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    result = daily_metrics.shadow_vs_live_today(now_ts=now)
+    td = result["top_discrepancy"]
+    assert "нет" in td["detail"]  # честно, не выдумывает текст расхождения, которого нет
 
 
 # ── build_daily_digest() (интеграционно, всё замокано) ──
@@ -170,3 +257,30 @@ def test_build_daily_digest_shows_down_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
     text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "yahoo_finance: down" in text
+
+
+def test_build_daily_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path):
+    now = 1_000_000.0
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({
+        "schema_version": 1,
+        "records": [
+            {"ts": now - 10, "symbol": "BEAT", "direction": "short", "promoted_live": True,
+             "dead_zone": False, "gate_reasons": [], "patches_affected": ["02-rr-gate"],
+             "discrepancy": ["R:R 1.53 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"]},
+            {"ts": now - 20, "symbol": "AAA", "direction": "long", "promoted_live": False,
+             "dead_zone": False, "gate_reasons": ["rocket_or_grade"],
+             "patches_affected": ["03-breaker-mitigation"], "discrepancy": []},
+        ],
+    }))
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=now)
+    assert "Топ причин отказа" in text
+    assert "rocket_or_grade" in text
+    assert "Патчи 02-05" in text
+    assert "02-rr-gate" in text
+    assert "Топ-1 расхождение" in text
+    assert "BEAT" in text

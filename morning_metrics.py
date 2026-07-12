@@ -74,6 +74,16 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
                       f"(в бой: {shadow['promoted']}, только shadow: {shadow['not_promoted']})")
         if shadow["dead_zone_penalized"]:
             lines.append(f"  Из них в Мёртвой зоне: {shadow['dead_zone_penalized']}")
+        if shadow.get("gate_reasons"):
+            top_gates = sorted(shadow["gate_reasons"].items(), key=lambda kv: kv[1], reverse=True)[:3]
+            lines.append("  Топ причин отказа: " + ", ".join(f"{g} ({c})" for g, c in top_gates))
+        if shadow.get("patches_affected"):
+            top_patches = sorted(shadow["patches_affected"].items(), key=lambda kv: kv[1], reverse=True)
+            lines.append("  Патчи 02-05: " + ", ".join(f"{p} ({c})" for p, c in top_patches))
+        td = shadow.get("top_discrepancy")
+        if td:
+            mark = "✅ promoted" if td["promoted_live"] else "теневой"
+            lines.append(f"  Топ-1 расхождение ({mark}): {td['symbol']} {td['direction']} — {td['detail']}")
 
     lines += ["", "🐋 *Whale-события, топ-3:*"]
     if not whales:

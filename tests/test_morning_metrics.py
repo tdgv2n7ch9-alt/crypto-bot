@@ -100,3 +100,27 @@ def test_build_morning_digest_includes_deploy_section(monkeypatch, tmp_path):
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "Деплой" in text
     assert "актуален" in text
+
+
+def test_build_morning_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path):
+    """Пакет 6 М3 -- та же обогащённая shadow-секция, что «Метрики дня», через
+    переиспользованный daily_metrics.shadow_vs_live_today()."""
+    import json
+    now = 1_000_000.0
+    shadow_file = tmp_path / "shadow_signals.json"
+    shadow_file.write_text(json.dumps({
+        "schema_version": 1,
+        "records": [
+            {"ts": now - 10, "symbol": "BEAT", "direction": "short", "promoted_live": True,
+             "dead_zone": False, "gate_reasons": [], "patches_affected": ["02-rr-gate"],
+             "discrepancy": ["R:R 1.53 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"]},
+        ],
+    }))
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
+    assert "Топ-1 расхождение" in text
+    assert "BEAT" in text
+    assert "Патчи 02-05" in text
