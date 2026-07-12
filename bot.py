@@ -7349,12 +7349,21 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
 
         result["ict_liquidity_sweep"] = liq_bull_sweep or liq_bear_sweep
 
-        #  AMD  (ICT Power of Three) 
-        # Accumulation (Asia)  Manipulation (London sweep)  Distribution (NY move)
-        #      + price action
+        # AMD-фаза (ICT Power of Three): Accumulation (Asia) / Manipulation
+        # (London Open, sweep) / Distribution (NY Open) + price action.
+        # Пакет 9, Шаг 2 кусок 1 (владелец, "ДА" -- "оживить без боевого
+        # эффекта"): часы больше НЕ свой inline-литерал, а единый источник
+        # bot.get_killzone_status() (METHODOLOGY_CORE.md §8, те же часы, что
+        # патч 01 в бою) -- единственный источник времени killzone во всём
+        # боте. amd_phase/amd_label по-прежнему НЕ читаются нигде (проверено
+        # grep -n "amd_label\|amd_phase\b" bot.py -- только это присвоение),
+        # НЕ участвуют в bull_pts/bear_pts/pro_score -- подача в скоринг
+        # осталась бы отдельным будущим "да" после накопления shadow-данных
+        # (см. ta_extra.classify_amd_phase(), уже подключена в shadow_engine,
+        # Пакет 5 М3).
         amd_phase = None
         amd_label = None
-        now_h = datetime.now(TZ).hour
+        kz_active_name = get_killzone_status()["active"]["name"]
 
         if len(c4h) >= 6:
             high_6  = max(c["high"]  for c in c4h[-6:])
@@ -7362,32 +7371,32 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
             mid_6   = (high_6 + low_6) / 2
             last_close = c4h[-1]["close"]
 
-            # Asia (01-09 UTC+3):    
-            if 1 <= now_h < 9:
+            # Азиатская сессия (00:00-08:00 §8): накопление
+            if "Азиатская" in kz_active_name:
                 amd_phase = "accumulation"
-                amd_label = " AMD:   (Asia)   "
-            # London open (09-13 UTC+3):   sweep
-            elif 9 <= now_h < 13:
-                if last_close < low_6 * 1.001:  #  
+                amd_label = "🌏 AMD: Аккумуляция (Asia) -- накопление диапазона"
+            # Лондон Open (09:00-12:00 §8): манипуляция, свип диапазона
+            elif "Лондон Open" in kz_active_name:
+                if last_close < low_6 * 1.001:  # свип вниз
                     amd_phase = "manipulation_bear"
-                    amd_label = " AMD:   (London sweep)    "
+                    amd_label = "🇬🇧 AMD: Манипуляция (London sweep) -- снятие лоу"
                 elif last_close > high_6 * 0.999:
                     amd_phase = "manipulation_bull"
-                    amd_label = " AMD:   (London sweep)    "
+                    amd_label = "🇬🇧 AMD: Манипуляция (London sweep) -- снятие хая"
                 else:
                     amd_phase = "manipulation"
-                    amd_label = " AMD:      "
-            # NY (15-22 UTC+3):    
-            elif 15 <= now_h < 22:
+                    amd_label = "🇬🇧 AMD: Манипуляция -- в диапазоне, свипа нет"
+            # NY Open (14:00-17:00 §8): дистрибуция, направленное движение
+            elif "NY Open" in kz_active_name:
                 if last_close > mid_6:
                     amd_phase = "distribution_bull"
-                    amd_label = " AMD:   (NY )   "
+                    amd_label = "🇺🇸 AMD: Дистрибуция (NY) -- движение вверх"
                 else:
                     amd_phase = "distribution_bear"
-                    amd_label = " AMD:   (NY )   "
+                    amd_label = "🇺🇸 AMD: Дистрибуция (NY) -- движение вниз"
             else:
                 amd_phase = "dead_zone"
-                amd_label = " AMD: Dead Zone   "
+                amd_label = "⚪ AMD: Dead Zone -- вне активных фаз"
 
         result["amd_phase"] = amd_phase
         result["amd_label"] = amd_label
