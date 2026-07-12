@@ -110,3 +110,38 @@ def test_fetch_transfer_data_returns_empty_dict_without_api_key():
 def test_fetch_transfer_data_returns_empty_dict_without_contracts():
     result = ew.fetch_transfer_data({}, token_price_usd=1.0, api_key="fake_key_for_test")
     assert result == {}
+
+
+# --- владелец 2026-07-12: free-tier лимиты (1000 записей/запрос, не 10000), троттлинг ---
+
+def test_fetch_token_transfers_clamps_limit_to_max_records_per_request(monkeypatch):
+    captured = {}
+
+    class _FakeResp:
+        def json(self):
+            return {"status": "1", "result": []}
+
+    def _fake_get(url, params=None, timeout=None):
+        captured["offset"] = params["offset"]
+        return _FakeResp()
+
+    monkeypatch.setattr(ew.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ew.requests, "get", _fake_get)
+    ew.fetch_token_transfers("0xcontract", "ethereum", api_key="fake_key", limit=5000)
+    assert captured["offset"] == ew.MAX_RECORDS_PER_REQUEST
+
+
+def test_fetch_token_transfers_throttles_between_calls(monkeypatch):
+    sleeps = []
+
+    class _FakeResp:
+        def json(self):
+            return {"status": "1", "result": []}
+
+    monkeypatch.setattr(ew.requests, "get", lambda *a, **k: _FakeResp())
+    monkeypatch.setattr(ew.time, "sleep", lambda s: sleeps.append(s))
+    # прогреть _ETHERSCAN_LAST_CALL_TS сразу перед вторым вызовом -- второй вызов
+    # должен упереться в _ETHERSCAN_MIN_INTERVAL и запросить паузу > 0
+    ew._ETHERSCAN_LAST_CALL_TS = ew.time.time()
+    ew.fetch_token_transfers("0xcontract", "ethereum", api_key="fake_key")
+    assert any(s > 0 for s in sleeps)
