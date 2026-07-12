@@ -602,6 +602,9 @@ async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
     # Пакет 11 М1 (владелец "да" -- A/B тело-vs-фитиль, НЕ live): аналогично, уже
     # посчитан внутри bot.real_full_analysis(), здесь только переносится.
     record["bos_body_close_shadow"] = a.get("bos_body_close_shadow")
+    # Пакет 11 М2 (ТЗ Блок 4 -- Order Block, ранее полностью отсутствовал в
+    # real_full_analysis(), см. ENGINE_UNIFICATION.md §4): аналогично, переносится.
+    record["order_block_shadow"] = a.get("order_block_shadow")
     ok_local = _write_local(record)
     if not ok_local:
         return False

@@ -8296,6 +8296,20 @@ def real_full_analysis(coin: dict) -> dict:
     except Exception as e:
         bos_body_close_shadow = {"error": str(e)}
 
+    # --- Пакет 11 М2 (ТЗ Блок 4 -- POI/Order Block, ранее полностью отсутствовал --
+    # см. ENGINE_UNIFICATION.md §4 "Блок 4 (POI/K-LVL)... real_full_analysis НЕ
+    # включает Order Block вообще"): переиспользует уже существующий и
+    # протестированный ta_extra.detect_order_block() (Патч 07, Пакет 7 М1) на тех же
+    # 4h-свечах. SHADOW ONLY -- rocket/is_long не читают это поле.
+    # Не зависит от переменных соседних блоков (та же причина, что у bos_body_close_
+    # shadow выше) -- пересчитывает c4h здесь же, чисто, без сети.
+    try:
+        c4h_ob = ta.get("candles_4h", []) if ta["ok"] else []
+        ob_shadow_result = ta_extra.detect_order_block(c4h_ob, price) if c4h_ob else None
+        order_block_shadow = ob_shadow_result if ob_shadow_result else {"error": "нет 4h-свечей"}
+    except Exception as e:
+        order_block_shadow = {"error": str(e)}
+
     # --- Пакет 10 М2 (владелец "да" -- shadow-патч 09, НЕ live): OI/funding/L-S ----
     # Бэклог-баг "AUTO-путь слеп к OI/funding/L-S" (ENGINE_UNIFICATION.md §4 Блок 7,
     # §5 Шаг 5 -- самый рискованный шаг по площади воздействия, поэтому владелец
@@ -8386,6 +8400,7 @@ def real_full_analysis(coin: dict) -> dict:
         "structural_primitives_shadow": structural_primitives_shadow,
         "oi_funding_ls_shadow": oi_funding_ls_shadow,
         "bos_body_close_shadow": bos_body_close_shadow,
+        "order_block_shadow": order_block_shadow,
     }
 
 

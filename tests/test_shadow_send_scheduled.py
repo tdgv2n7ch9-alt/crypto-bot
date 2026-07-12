@@ -197,6 +197,47 @@ def test_log_send_scheduled_shadow_async_missing_bos_body_close_shadow_is_none(m
     assert captured["record"]["bos_body_close_shadow"] is None
 
 
+# --- Пакет 11 М2: order_block_shadow передаётся через в запись ---
+
+def test_log_send_scheduled_shadow_async_carries_order_block_shadow(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)
+    a["order_block_shadow"] = {
+        "live": {"bull": True, "bull_zone": (100.0, 105.0), "bear": False, "bear_zone": None},
+        "methodology": {"bull": False, "bull_zone": None, "bear": False, "bear_zone": None},
+    }
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert captured["record"]["order_block_shadow"]["live"]["bull"] is True
+    assert captured["record"]["order_block_shadow"]["methodology"]["bull"] is False
+
+
+def test_log_send_scheduled_shadow_async_missing_order_block_shadow_is_none(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)  # no order_block_shadow key
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert captured["record"]["order_block_shadow"] is None
+
+
 def test_log_send_scheduled_shadow_async_compute_failure_returns_false(monkeypatch):
     # bot_module без ожидаемых методов -- compute_shadow должен упасть внутри
     # try/except патча 01, но НЕ уронить всю функцию (уже проверено в compute_shadow
