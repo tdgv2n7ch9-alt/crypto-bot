@@ -4,6 +4,8 @@ pytest для rug_radar.py (Пакет 9, модуль RUG-RADAR -- кейс LAB
 данных -- без сети (fetch_coingecko_detail не тестируется здесь, тривиальный
 best-effort HTTP-враппер по образцу get_binance_alltime_low()).
 """
+import pytest
+
 import rug_radar as rr
 
 
@@ -81,22 +83,53 @@ def test_vertical_growth_no_trigger_below_200pct():
     assert r["points"] == 0
 
 
-# --- detect_exchange_transfers ---
+# --- detect_exchange_transfers (Пакет 10: масштабирование от transfer/MCap, владелец 2026-07-12) ---
 
 def test_exchange_transfers_na_without_provider():
-    r = rr.detect_exchange_transfers(None)
+    r = rr.detect_exchange_transfers(None, market_cap=1e8)
     assert r["available"] is False
     assert r["points"] == 0
 
 
-def test_exchange_transfers_triggers_when_positive():
-    r = rr.detect_exchange_transfers({"large_transfer_usd_recent": 18_300_000})
-    assert r["points"] == rr.EXCHANGE_TRANSFER_POINTS_MAX
+def test_exchange_transfers_na_without_market_cap():
+    # transfer data present but no MCap to compute ratio -- honestly н/д, not a guess
+    r = rr.detect_exchange_transfers({"large_transfer_usd_recent": 18_300_000}, market_cap=None)
+    assert r["available"] is False
+    assert r["points"] == 0
 
 
 def test_exchange_transfers_no_trigger_at_zero():
-    r = rr.detect_exchange_transfers({"large_transfer_usd_recent": 0})
+    r = rr.detect_exchange_transfers({"large_transfer_usd_recent": 0}, market_cap=1e8)
     assert r["points"] == 0
+
+
+def test_exchange_transfers_no_trigger_below_warn_ratio():
+    # $1M transfer on $1B MCap = 0.1% -- well below TRANSFER_MCAP_RATIO_WARN_PCT
+    r = rr.detect_exchange_transfers({"large_transfer_usd_recent": 1_000_000}, market_cap=1e9)
+    assert r["points"] == 0
+    assert r["ratio_pct"] < rr.TRANSFER_MCAP_RATIO_WARN_PCT
+
+
+def test_exchange_transfers_scales_between_warn_and_max_ratio():
+    lo = rr.detect_exchange_transfers({"large_transfer_usd_recent": 3_000_000}, market_cap=1e8)   # 3%
+    hi = rr.detect_exchange_transfers({"large_transfer_usd_recent": 20_000_000}, market_cap=1e8)  # 20%
+    assert 0 < lo["points"] < hi["points"] < rr.EXCHANGE_TRANSFER_POINTS_MAX
+
+
+def test_exchange_transfers_caps_at_max_ratio_and_beyond():
+    at_cap = rr.detect_exchange_transfers({"large_transfer_usd_recent": 25_000_000}, market_cap=1e8)   # exactly 25%
+    beyond = rr.detect_exchange_transfers({"large_transfer_usd_recent": 500_000_000}, market_cap=1e8)  # 500%
+    assert at_cap["points"] == rr.EXCHANGE_TRANSFER_POINTS_MAX
+    assert beyond["points"] == rr.EXCHANGE_TRANSFER_POINTS_MAX  # clipped, not runaway
+
+
+def test_exchange_transfers_lab_reference_case_08_04_2026_hits_max():
+    # Эталонный тест калибровки (владелец, 2026-07-12): подтверждённый перевод
+    # 100M токенов LAB на Bitget 08.04.2026 -- $39.25M на MCap $29.95M = 131%.
+    # Обязан давать МАКСИМУМ баллов детектора.
+    r = rr.detect_exchange_transfers({"large_transfer_usd_recent": 39_246_315.32}, market_cap=29_954_773.55)
+    assert r["ratio_pct"] > 100
+    assert r["points"] == rr.EXCHANGE_TRANSFER_POINTS_MAX
 
 
 # --- detect_age_and_narrow_listing ---
@@ -195,3 +228,68 @@ def test_compute_rug_risk_missing_cg_detail_only_uses_free_coin_fields():
     assert result["detectors"]["age_listing"]["available"] is False
     assert result["detectors"]["vertical_growth"]["available"] is True
     assert result["detectors"]["vertical_growth"]["points"] == rr.VERTICAL_GROWTH_POINTS
+
+
+# --- Пакет 10: калибровка exchange_transfers, эталонный тест владельца ---
+# "кейс LAB ($39.25M = 131% MCap = максимум баллов) -- после калибровки скор LAB
+# на 08.04 обязан пересечь WARN-порог. Показать до/после на LAB и на 3 здоровых
+# токенах (ложных срабатываний быть не должно)."
+
+def _lab_08_04_2026():
+    # Реальные рыночные данные на дату подтверждённого перевода (см. PROGRESS.md
+    # "Пакет 9 М4"): цена $0.3925, MCap $29.95M, объём $25.51M/24ч, FDV≈$392.5M.
+    coin = {"quote": {"USDT": {
+        "market_cap": 29_954_773.55, "volume_24h": 25_512_042.38,
+        "percent_change_30d": 159.1,
+    }}}
+    cg_detail = {
+        "market_data": {"fully_diluted_valuation": {"usd": 392_463_153.17},
+                         "atl_date": {"usd": "2025-12-02T03:30:39.644Z"}},
+        "genesis_date": None,
+        "tickers": [{"market": {"name": f"Ex{i}"}} for i in range(21)],
+    }
+    transfer_data = {"large_transfer_usd_recent": 39_246_315.32}  # 100M токенов x $0.3925
+    return coin, cg_detail, transfer_data
+
+
+def test_lab_08_04_2026_before_recalibration_transfer_data_missing_stays_below_warn():
+    # "До" -- без данных о переводе (как было бы без Etherscan-ключа) -- 20/55,
+    # ниже WARN. Подтверждает, что рост скора "после" целиком из transfer-детектора.
+    coin, cg_detail, _ = _lab_08_04_2026()
+    before = rr.compute_rug_risk("LAB", coin, cg_detail=cg_detail, transfer_data=None)
+    assert before["score"] == 20
+    assert before["warn"] is False
+
+
+def test_lab_08_04_2026_after_recalibration_crosses_warn_threshold():
+    # "После" -- эталонный тест владельца: с реальным подтверждённым переводом
+    # скор ОБЯЗАН пересечь WARN(40).
+    coin, cg_detail, transfer_data = _lab_08_04_2026()
+    after = rr.compute_rug_risk("LAB", coin, cg_detail=cg_detail, transfer_data=transfer_data)
+    assert after["detectors"]["exchange_transfers"]["points"] == rr.EXCHANGE_TRANSFER_POINTS_MAX
+    assert after["score"] == 45  # 20 (fdv/mcap) + 0 + 0 + 25 (transfer, максимум)
+    assert after["warn"] is True
+    assert after["score"] >= rr.RUG_RISK_WARN_THRESHOLD
+
+
+@pytest.mark.parametrize("symbol,mcap,transfer_usd", [
+    ("BTC", 1_283_741_231_638, 50_000_000),   # $50M transfer -- routine exchange flow for BTC
+    ("ETH", 400_000_000_000, 20_000_000),
+    ("SOL", 44_903_632_193, 10_000_000),
+])
+def test_healthy_large_caps_no_false_positive_after_recalibration(symbol, mcap, transfer_usd):
+    # Ключевое доказательство калибровки: тот же ($ >100K) старый бинарный порог
+    # раньше давал ЭТИМ ЖЕ токенам максимум баллов (ложное срабатывание) --
+    # теперь, отнормировав на MCap, ни один не пересекает WARN.
+    coin = {"quote": {"USDT": {"market_cap": mcap, "volume_24h": mcap * 0.05, "percent_change_30d": 5.0}}}
+    cg_detail = {
+        "market_data": {"fully_diluted_valuation": {"usd": mcap * 1.05},
+                         "atl_date": {"usd": "2015-01-01T00:00:00.000Z"}},
+        "genesis_date": "2015-01-01",
+        "tickers": [{"market": {"name": f"Ex{i}"}} for i in range(20)],
+    }
+    transfer_data = {"large_transfer_usd_recent": transfer_usd}
+    result = rr.compute_rug_risk(symbol, coin, cg_detail=cg_detail, transfer_data=transfer_data)
+    assert result["detectors"]["exchange_transfers"]["points"] == 0
+    assert result["score"] == 0
+    assert result["warn"] is False

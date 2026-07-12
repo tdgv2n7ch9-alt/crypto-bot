@@ -50,10 +50,19 @@ YOUNG_TOKEN_MAX_DAYS = 183      # ~6 месяцев
 AGE_LISTING_POINTS_MAX = 10
 
 CONCENTRATION_POINTS_MAX = 30   # н/д сейчас -- Etherscan holder-list PRO-only
-EXCHANGE_TRANSFER_POINTS_MAX = 15  # н/д сейчас -- зависит от Пакета 9 М4
 
-MAX_SCORE_TODAY = FDV_MCAP_POINTS_MAX + VERTICAL_GROWTH_POINTS + AGE_LISTING_POINTS_MAX
-# = 55 из теоретических 100 -- честно ниже 100, т.к. 2 из 5 детекторов "н/д"
+TRANSFER_MCAP_RATIO_WARN_PCT = 2.0    # % MCap -- перевод ниже этого порога не в счёт
+TRANSFER_MCAP_RATIO_MAX_PCT = 25.0    # % MCap -- перевод НА этом уровне и выше = максимум баллов
+EXCHANGE_TRANSFER_POINTS_MAX = 25     # калибровка владельца 2026-07-12 (поднято с 15):
+# бинарный 0/15 (>$100K -- сразу максимум) давал LAB одинаковый счёт что на $100K,
+# что на $39.25M (131% тогдашнего MCap, реальный кейс 08.04.2026) -- честная дыра,
+# найденная на живом бэктесте (см. PROGRESS.md "Пакет 9 М4"). Теперь масштабируется
+# от (transfer_usd / market_cap), тот же принцип, что detect_fdv_mcap_ratio() ниже.
+# Эталонный тест калибровки: LAB 08.04.2026 (131% MCap) обязан давать МАКСИМУМ --
+# 131% >> TRANSFER_MCAP_RATIO_MAX_PCT (25%), проверено в tests/test_rug_radar.py.
+
+MAX_SCORE_TODAY = FDV_MCAP_POINTS_MAX + VERTICAL_GROWTH_POINTS + AGE_LISTING_POINTS_MAX + EXCHANGE_TRANSFER_POINTS_MAX
+# = 80 из теоретических 100 -- честно ниже 100, т.к. concentration (30) остаётся "н/д"
 
 
 def detect_concentration(holders_data=None) -> dict:
@@ -102,19 +111,42 @@ def detect_vertical_growth_thin_volume(percent_change_30d: float, volume_24h: fl
             "volume_mcap_ratio_pct": round(vol_ratio, 2), "reason": reason}
 
 
-def detect_exchange_transfers(transfer_data=None) -> dict:
-    """Крупные переводы токена проекта на биржи -- н/д без Etherscan
-    whale-tracking (Пакет 9 М4, не построен в рамках этой задачи). Принимает
-    `transfer_data` для будущей проводки -- см. докстринг detect_concentration."""
+def detect_exchange_transfers(transfer_data=None, market_cap: float = None) -> dict:
+    """Крупные переводы токена проекта на биржи -- масштабируется от
+    (transfer_usd / market_cap) * 100, тот же принцип, что detect_fdv_mcap_ratio().
+    Н/д без Etherscan whale-tracking данных (transfer_data) ИЛИ без market_cap
+    (нужен для отношения) -- см. докстринг detect_concentration про паттерн
+    "задел под будущую проводку".
+
+    Калибровка (владелец, 2026-07-12, кейс LAB): бинарный 0/15 при пороге >$100K
+    давал ОДИНАКОВЫЙ счёт и на $100K-переводе, и на LAB-масштабе перевода
+    ($39.25M = 131% тогдашнего MCap) -- явная слепота к РАЗМЕРУ относительно
+    капитализации. Линейная шкала: ratio<=WARN_PCT -> 0, ratio>=MAX_PCT ->
+    максимум, между -- линейно."""
     if transfer_data is None:
-        return {"available": False, "points": 0, "reason": "н/д -- зависит от Etherscan whale-tracking (Пакет 9 М4)"}
+        return {"available": False, "points": 0, "ratio_pct": None,
+                "reason": "н/д -- зависит от Etherscan whale-tracking (Пакет 9 М4)"}
     large_transfer_usd = transfer_data.get("large_transfer_usd_recent")
     if large_transfer_usd is None:
-        return {"available": False, "points": 0, "reason": "н/д -- данных о переводах нет"}
-    triggered = large_transfer_usd > 0
-    points = EXCHANGE_TRANSFER_POINTS_MAX if triggered else 0
-    return {"available": True, "points": points, "large_transfer_usd": large_transfer_usd,
-            "reason": f"крупный перевод на биржу ${large_transfer_usd:,.0f}" if triggered else "переводов не найдено"}
+        return {"available": False, "points": 0, "ratio_pct": None,
+                "reason": "н/д -- данных о переводах нет"}
+    if not market_cap or market_cap <= 0:
+        return {"available": False, "points": 0, "ratio_pct": None,
+                "reason": "н/д -- нет MCap для расчёта отношения перевода к капитализации"}
+    if large_transfer_usd <= 0:
+        return {"available": True, "points": 0, "ratio_pct": 0.0, "large_transfer_usd": 0,
+                "reason": "переводов на известные биржевые адреса не найдено"}
+    ratio_pct = large_transfer_usd / market_cap * 100
+    if ratio_pct <= TRANSFER_MCAP_RATIO_WARN_PCT:
+        return {"available": True, "points": 0, "ratio_pct": round(ratio_pct, 2),
+                "large_transfer_usd": large_transfer_usd,
+                "reason": f"перевод ${large_transfer_usd:,.0f} ({ratio_pct:.1f}% MCap, в пределах нормы)"}
+    points = min(EXCHANGE_TRANSFER_POINTS_MAX, round(
+        (ratio_pct - TRANSFER_MCAP_RATIO_WARN_PCT) /
+        (TRANSFER_MCAP_RATIO_MAX_PCT - TRANSFER_MCAP_RATIO_WARN_PCT) * EXCHANGE_TRANSFER_POINTS_MAX))
+    return {"available": True, "points": points, "ratio_pct": round(ratio_pct, 2),
+            "large_transfer_usd": large_transfer_usd,
+            "reason": f"перевод ${large_transfer_usd:,.0f} ({ratio_pct:.1f}% MCap -- крупный относительно капитализации)"}
 
 
 def detect_age_and_narrow_listing(age_days, age_is_approx: bool, num_exchanges) -> dict:
@@ -177,7 +209,7 @@ def compute_rug_risk(symbol: str, coin: dict, cg_detail: dict = None,
         "concentration": detect_concentration(holders_data),
         "fdv_mcap": detect_fdv_mcap_ratio(fdv, market_cap),
         "vertical_growth": detect_vertical_growth_thin_volume(pct_30d, volume_24h, market_cap),
-        "exchange_transfers": detect_exchange_transfers(transfer_data),
+        "exchange_transfers": detect_exchange_transfers(transfer_data, market_cap),
         "age_listing": detect_age_and_narrow_listing(age_days, age_is_approx, num_exchanges),
     }
     score = sum(d["points"] for d in detectors.values())
