@@ -8121,8 +8121,13 @@ def real_full_analysis(coin: dict) -> dict:
         ema_ctx = ta_extra.ema_context(ta.get("candles_1h", []), ta.get("candles_4h", []))
         sweep_1h = ta_extra.detect_sweep(ta.get("candles_1h", []))
         sweep_4h = ta_extra.detect_sweep(ta.get("candles_4h", []))
+        try:
+            divergence = ta_extra.detect_price_indicator_divergence(ta.get("candles_4h", []))
+        except Exception:
+            divergence = {}
     else:
         ema_ctx, sweep_1h, sweep_4h = None, None, None
+        divergence = {}
 
     if ta["ok"] and ta["price"] > 0:
         price, price_fresh = ta["price"], ta.get("price_fresh", "")
@@ -8225,12 +8230,14 @@ def real_full_analysis(coin: dict) -> dict:
     if rsi_4h > 80 and is_long:  rocket -= 5
     rocket = max(0, min(100, rocket))
 
-    # EMA-стек + свежий свип ликвидности -- новые факторы, чисто additive (существующие
-    # веса выше не трогали), см. ta_extra.py.
+    # EMA-стек + свежий свип ликвидности + RSI-дивергенция против направления (патч 04,
+    # Пакет 9, владелец "ДА" -- штраф, не гейт) -- чисто additive (существующие веса
+    # выше не трогали), см. ta_extra.py.
     _direction = "long" if is_long else "short"
     rocket = max(0, min(100, rocket
                          + ta_extra.ema_stack_score_delta(ema_ctx, _direction)
-                         + ta_extra.sweep_score_delta(sweep_1h, sweep_4h, _direction)))
+                         + ta_extra.sweep_score_delta(sweep_1h, sweep_4h, _direction)
+                         + ta_extra.divergence_score_delta(divergence, _direction)))
 
     # Вход/SL/TP от реальной структуры (find_sr_zones + build_trade_from_structure,
     # ta_extra.py) вместо фиксированных процентов от цены -- см. модульный докстринг
@@ -8350,7 +8357,7 @@ def real_full_analysis(coin: dict) -> dict:
         "ema20_1h": ema20_v, "ema50_1h": ema50_v, "ema200_1h": ema200_v,
         "ema20_1d": ema20_v, "ema50_1d": ema50_v, "ema200_1d": ema200_v,
         "rsi_1h": rsi_1h, "rsi_1d": rsi_1d,
-        "ema_ctx": ema_ctx, "sweep_1h": sweep_1h, "sweep_4h": sweep_4h,
+        "ema_ctx": ema_ctx, "sweep_1h": sweep_1h, "sweep_4h": sweep_4h, "divergence": divergence,
         "entry1": entry1, "entry2": entry2, "entry3": entry3,
         "rr_tp1": rr_tp1, "rr_tp2": rr_tp2, "rr_tp3": rr_tp3,
         "rr_gate_pass": rr_gate_pass, "levels_source": levels_source, "zones": zones,
@@ -9403,11 +9410,13 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             sc_grade = "A+" if spot_score >= 6 else ("A" if spot_score >= 5 else ("B" if spot_score >= 3 else "C"))
             spot_rocket = min(100, max(0, spot_score * 14))
-            # EMA-стек + свежий свип ликвидности (спот всегда "long") -- аддитивно к уже
+            # EMA-стек + свежий свип ликвидности + RSI-дивергенция против направления
+            # (патч 04, Пакет 9, владелец "ДА") (спот всегда "long") -- аддитивно к уже
             # посчитанному spot_rocket, существующую формулу выше не трогаем.
             spot_rocket = max(0, min(100, spot_rocket
                                       + ta_extra.ema_stack_score_delta(a.get("ema_ctx"), "long")
-                                      + ta_extra.sweep_score_delta(a.get("sweep_1h"), a.get("sweep_4h"), "long")))
+                                      + ta_extra.sweep_score_delta(a.get("sweep_1h"), a.get("sweep_4h"), "long")
+                                      + ta_extra.divergence_score_delta(a.get("divergence"), "long")))
 
             def ri_spot(v): return "\U0001f7e2" if v < 30 else ("\U0001f534" if v > 70 else "\U0001f7e1")
 

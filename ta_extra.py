@@ -1068,6 +1068,34 @@ def detect_price_indicator_divergence(candles: list, period: int = 14) -> dict:
     return result
 
 
+RSI_DIVERGENCE_AGAINST_PENALTY = 5  # Пакет 9 (владелец, "ДА" -- патч 04 в бой как штраф
+# скоринга, НЕ жёсткий гейт, порог гейта не менять). ЧЕСТНО: в теневом конфиге
+# НЕ было заранее заданного числового штрафа для этого патча (в отличие от
+# DEAD_ZONE_SHADOW_SCORE_PENALTY в shadow_engine.py, который существовал для патча
+# 01 до перевода в бой) -- владелец предполагал обратное, это расхождение
+# зафиксировано в PROGRESS.md. Величина 5 баллов подобрана здесь как консервативный
+# первый шаг (для сравнения: ema_stack_score_delta/sweep_score_delta дают +-8/+-10) на
+# основе изоляции 03/04/05 (`PATCH_IMPACT.md`): affected win rate 49.2% vs
+# не-affected 54.3% (-5.1 п.п.), avg R +0.565 vs +0.874, PF 2.15 vs 2.99 -- реальный,
+# но не экстремальный эффект. Легко перенастраивается одной константой, включая до 0
+# (эффективный откат) или пересчёт от новых shadow-данных.
+
+
+def divergence_score_delta(divergence: dict, direction: str) -> int:
+    """-RSI_DIVERGENCE_AGAINST_PENALTY, если КЛАССИЧЕСКАЯ RSI-дивергенция (см.
+    detect_price_indicator_divergence()) направлена ПРОТИВ направления сигнала
+    (bearish_classical при long, bullish_classical при short), иначе 0. Только штраф,
+    без бонуса за дивергенцию "за" направление и без учёта скрытой (hidden)
+    дивергенции -- источник трактует классическую контрарианской (сигнал возможной
+    коррекции), скрытую как подтверждение продолжения тренда, разные интерпретации
+    смешивать не даём (см. detect_price_indicator_divergence() докстринг)."""
+    if not divergence:
+        return 0
+    against = (direction == "long" and divergence.get("bearish_classical")) or \
+              (direction == "short" and divergence.get("bullish_classical"))
+    return -RSI_DIVERGENCE_AGAINST_PENALTY if against else 0
+
+
 BPR_MAX_BAR_GAP = 5   # макс. расстояние между формированием двух противоположных FVG,
                        # чтобы считать их "друг за другом" (BPR-пара), не случайным совпадением
 

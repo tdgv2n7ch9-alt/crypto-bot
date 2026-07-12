@@ -412,6 +412,12 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
         score += d_sweep
         factors.append((f"Свип ликвидности {'за' if d_sweep>0 else 'против' if d_sweep<0 else '(нет свежего)'}", d_sweep))
 
+        # Патч 04 (RSI-дивергенция, Пакет 9, владелец "ДА" -- штраф скоринга, не гейт).
+        divergence = _safe("RSI-дивергенция", ta_extra.detect_price_indicator_divergence, c4h)
+        d_divergence = ta_extra.divergence_score_delta(divergence, direction) if direction and divergence.get("ok", True) else 0
+        score += d_divergence
+        factors.append((f"RSI-дивергенция классическая {'против направления' if d_divergence else '(нет/за)'}", d_divergence))
+
         d_elliott = b2.get("score_delta", 0) if b2.get("ok", True) else 0
         score += d_elliott
         factors.append((f"Elliott: {b2.get('label','н/д')}", d_elliott))
