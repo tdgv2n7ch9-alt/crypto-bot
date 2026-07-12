@@ -2874,7 +2874,22 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # невалидный/уже использованный код -- молчаливый отказ, тот же принцип,
             # что и для команд без доступа (не подтверждаем существование бота никому,
             # кто не предъявил рабочий код).
+            # Пакет SECURITY-HARDENING М3 (владелец "да") -- анти-абьюз: считаем
+            # неудачные попытки, автобан + алерт владельцу при переборе кодов.
+            banned = access_control.record_invite_failure(cid)
+            if banned:
+                await subscribers.set_role(cid, access_control.ROLE_NONE)
+                try:
+                    await ctx.bot.send_message(
+                        access_control._owner_id(),
+                        f"🚨 *Автобан*: chat_id `{cid}` перебирал инвайт-коды "
+                        f"({access_control.INVITE_FAIL_BAN_THRESHOLD}+ неудачных попыток подряд) "
+                        f"-- заблокирован.",
+                        parse_mode="Markdown")
+                except Exception as e:
+                    log.error(f"[SEC] автобан-алерт владельцу не отправлен: {e}")
             return
+        access_control.reset_invite_failures(cid)
         # успешный редемпшн -- дальше падаем в обычный welcome-flow ниже.
     else:
         role = access_control.get_role(cid)

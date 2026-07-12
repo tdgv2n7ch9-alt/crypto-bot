@@ -197,3 +197,131 @@ def test_role_allows_hierarchy():
     assert ac.role_allows(ac.ROLE_VIP, ac.ROLE_OWNER) is False
     assert ac.role_allows(ac.ROLE_VIP, ac.ROLE_VIP) is True
     assert ac.role_allows(ac.ROLE_NONE, ac.ROLE_TRIAL) is False
+
+
+# --- Пакет SECURITY-HARDENING М3: анти-абьюз (rate-limit/flood-guard/автобан) ---
+
+def _reset_abuse_state(monkeypatch):
+    monkeypatch.setattr(ac, "_command_history", {})
+    monkeypatch.setattr(ac, "_cooldown_until", {})
+    monkeypatch.setattr(ac, "_invite_fail_count", {})
+    monkeypatch.setattr(ac, "_global_command_history", [])
+    monkeypatch.setattr(ac, "_last_flood_alert_ts", 0.0)
+
+
+def test_prune_window_removes_old_entries():
+    ts = [9.0, 10.0, 20.0, 59.0, 60.0]
+    result = ac._prune_window(ts, now=70.0, window_sec=60.0)
+    # cutoff = now - window_sec = 10.0, граница ВКЛЮЧИТЕЛЬНО (t >= cutoff)
+    assert result == [10.0, 20.0, 59.0, 60.0]  # 9.0 -- строго старше границы, вычищен
+
+
+def test_check_rate_limit_allows_under_threshold(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    now = 1000.0
+    for i in range(ac.RATE_LIMIT_MAX_PER_MIN):
+        assert ac.check_rate_limit(111, now=now + i * 0.1) is True
+
+
+def test_check_rate_limit_blocks_over_threshold(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    now = 1000.0
+    for i in range(ac.RATE_LIMIT_MAX_PER_MIN):
+        ac.check_rate_limit(222, now=now + i * 0.1)
+    # следующий запрос в том же окне -- превышение
+    assert ac.check_rate_limit(222, now=now + 1.0) is False
+
+
+def test_check_rate_limit_cooldown_persists_until_expiry(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    now = 1000.0
+    for i in range(ac.RATE_LIMIT_MAX_PER_MIN + 1):
+        ac.check_rate_limit(333, now=now + i * 0.1)
+    # ещё внутри кулдауна -- заблокирован, даже если формально окно истории пустое
+    assert ac.check_rate_limit(333, now=now + 5.0) is False
+    # после истечения кулдауна -- снова разрешено
+    assert ac.check_rate_limit(333, now=now + ac.RATE_LIMIT_COOLDOWN_SEC + 10.0) is True
+
+
+def test_check_rate_limit_independent_per_chat_id(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    now = 1000.0
+    for i in range(ac.RATE_LIMIT_MAX_PER_MIN + 1):
+        ac.check_rate_limit(444, now=now + i * 0.1)
+    assert ac.check_rate_limit(444, now=now + 1.0) is False
+    assert ac.check_rate_limit(555, now=now + 1.0) is True  # другой chat_id -- свежий лимит
+
+
+def test_check_global_flood_triggers_over_threshold(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    now = 2000.0
+    triggered = False
+    for i in range(ac.GLOBAL_FLOOD_THRESHOLD_PER_MIN + 5):
+        triggered = ac.check_global_flood(now=now + i * 0.01)
+    assert triggered is True
+
+
+def test_check_global_flood_not_triggered_under_threshold(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    now = 2000.0
+    triggered = False
+    for i in range(10):
+        triggered = ac.check_global_flood(now=now + i * 0.01)
+    assert triggered is False
+
+
+def test_record_invite_failure_reaches_ban_threshold(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    banned = False
+    for _ in range(ac.INVITE_FAIL_BAN_THRESHOLD):
+        banned = ac.record_invite_failure(666)
+    assert banned is True
+
+
+def test_record_invite_failure_not_banned_below_threshold(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    banned = False
+    for _ in range(ac.INVITE_FAIL_BAN_THRESHOLD - 1):
+        banned = ac.record_invite_failure(777)
+    assert banned is False
+
+
+def test_reset_invite_failures_clears_counter(monkeypatch):
+    _reset_abuse_state(monkeypatch)
+    ac.record_invite_failure(888)
+    ac.record_invite_failure(888)
+    ac.reset_invite_failures(888)
+    assert ac._invite_fail_count.get(888, 0) == 0
+
+
+def test_owner_exempt_from_rate_limit_in_enforce(monkeypatch):
+    """OWNER не подлежит rate-limit вообще -- enforce() не должен звать
+    check_rate_limit для OWNER-роли (иначе даже владелец мог бы себя
+    зарейтлимитить частыми командами)."""
+    _reset_state(monkeypatch)
+    _reset_abuse_state(monkeypatch)
+    owner_id = ac._owner_id()
+    calls = {"count": 0}
+    orig = ac.check_rate_limit
+
+    def _spy(*a, **kw):
+        calls["count"] += 1
+        return orig(*a, **kw)
+
+    monkeypatch.setattr(ac, "check_rate_limit", _spy)
+    for _ in range(ac.RATE_LIMIT_MAX_PER_MIN + 5):
+        update = _FakeUpdate(chat_id=owner_id, text="/market")
+        asyncio.run(_run_enforce(update))
+    assert calls["count"] == 0
+
+
+def test_non_owner_gets_rate_limited_in_enforce(monkeypatch):
+    _reset_state(monkeypatch)
+    _reset_abuse_state(monkeypatch)
+    _set_role(999123, sub.ROLE_VIP, monkeypatch)
+    results = []
+    for _ in range(ac.RATE_LIMIT_MAX_PER_MIN + 3):
+        update = _FakeUpdate(chat_id=999123, text="/market")
+        results.append(asyncio.run(_run_enforce(update)))
+    assert results[0] == "ALLOWED"
+    assert "DENIED" in results  # где-то после превышения лимита должен появиться отказ

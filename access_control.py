@@ -37,6 +37,100 @@ def _owner_id() -> int:
     return int(os.getenv("OWNER_CHAT_ID", "7009350191"))
 
 
+# --- Пакет SECURITY-HARDENING М3 (владелец "да") -- анти-абьюз ---------------------
+# In-memory (не персистентное) состояние -- rate-limit/flood-guard окна короткие
+# (десятки секунд-минуты), рестарт процесса естественно "прощает" временный абьюз.
+# Единственное, что персистентно -- сам БАН (role=NONE через subscribers.set_role(),
+# та же персистентная роль, что и везде), не счётчики к нему.
+
+RATE_LIMIT_MAX_PER_MIN = 20        # команд/мин на пользователя, дальше -- кулдаун
+RATE_LIMIT_WINDOW_SEC = 60.0
+RATE_LIMIT_COOLDOWN_SEC = 60.0     # молчаливый отказ на это время после превышения
+
+INVITE_FAIL_BAN_THRESHOLD = 5      # неудачных инвайт-кодов подряд -> автобан + алерт
+GLOBAL_FLOOD_THRESHOLD_PER_MIN = 200   # суммарно по всем chat_id -- алерт владельцу
+GLOBAL_FLOOD_ALERT_COOLDOWN_SEC = 300.0  # не спамить владельца при продолжающемся флуде
+
+_command_history: dict = {}    # chat_id -> [timestamps] (только не-OWNER роли)
+_cooldown_until: dict = {}     # chat_id -> ts, до которого молчаливый отказ (rate-limit)
+_invite_fail_count: dict = {}  # chat_id -> число неудачных инвайт-попыток подряд
+_global_command_history: list = []  # timestamps апдейтов всех non-OWNER chat_id
+_last_flood_alert_ts = 0.0
+
+
+def _prune_window(timestamps: list, now: float, window_sec: float) -> list:
+    """Чистая функция -- убирает записи старше window_sec от now. Тестируется без
+    состояния модуля."""
+    cutoff = now - window_sec
+    return [t for t in timestamps if t >= cutoff]
+
+
+def check_rate_limit(chat_id: int, now: float = None) -> bool:
+    """True, если chat_id разрешено выполнить команду прямо сейчас (в пределах
+    лимита), False -- если превышен лимит (и chat_id уже поставлен на кулдаун).
+    OWNER не подлежит рейт-лимиту вообще -- вызывающая сторона (enforce()) не
+    вызывает эту функцию для OWNER-ролей, но и сама функция безопасна для любого
+    chat_id, если вызвана."""
+    now = now if now is not None else time.time()
+    cooldown = _cooldown_until.get(chat_id)
+    if cooldown is not None and now < cooldown:
+        return False
+    hist = _prune_window(_command_history.get(chat_id, []), now, RATE_LIMIT_WINDOW_SEC)
+    hist.append(now)
+    _command_history[chat_id] = hist
+    if len(hist) > RATE_LIMIT_MAX_PER_MIN:
+        _cooldown_until[chat_id] = now + RATE_LIMIT_COOLDOWN_SEC
+        return False
+    return True
+
+
+def check_global_flood(now: float = None) -> bool:
+    """True, если сработал глобальный flood-guard (суммарная нагрузка всех
+    non-OWNER chat_id превысила порог за минуту) -- вызывающая сторона решает,
+    алертить владельца или нет (см. _maybe_alert_flood)."""
+    global _global_command_history
+    now = now if now is not None else time.time()
+    _global_command_history = _prune_window(_global_command_history, now, 60.0)
+    _global_command_history.append(now)
+    return len(_global_command_history) > GLOBAL_FLOOD_THRESHOLD_PER_MIN
+
+
+def record_invite_failure(chat_id: int) -> bool:
+    """Учитывает неудачную попытку инвайт-кода для chat_id. Возвращает True, если
+    достигнут порог автобана (INVITE_FAIL_BAN_THRESHOLD) -- вызывающая сторона
+    (bot.py cmd_start) сама вызывает subscribers.set_role(chat_id, ROLE_NONE) и
+    алертит владельца, эта функция только считает."""
+    count = _invite_fail_count.get(chat_id, 0) + 1
+    _invite_fail_count[chat_id] = count
+    return count >= INVITE_FAIL_BAN_THRESHOLD
+
+
+def reset_invite_failures(chat_id: int):
+    """Успешный редемпшн -- сбросить счётчик неудач (иначе легитимный пользователь,
+    пару раз ошибившийся в коде, а потом введший верный, всё равно копил бы счётчик
+    к следующему разу)."""
+    _invite_fail_count.pop(chat_id, None)
+
+
+async def _maybe_alert_owner_flood(context) -> None:
+    """Best-effort алерт владельцу при глобальном флуде -- не чаще раза в
+    GLOBAL_FLOOD_ALERT_COOLDOWN_SEC, чтобы не заспамить владельца тем же алертом
+    раз в секунду, пока атака продолжается."""
+    global _last_flood_alert_ts
+    now = time.time()
+    if now - _last_flood_alert_ts < GLOBAL_FLOOD_ALERT_COOLDOWN_SEC:
+        return
+    _last_flood_alert_ts = now
+    try:
+        await context.bot.send_message(
+            _owner_id(),
+            f"🚨 *Flood-guard*: >{GLOBAL_FLOOD_THRESHOLD_PER_MIN} команд/мин суммарно "
+            f"по всем не-OWNER чатам -- возможна скоординированная атака.",
+            parse_mode="Markdown")
+    except Exception as e:
+        print(f"access_control: flood alert failed: {e}")
+
+
 def get_role(chat_id: int) -> str:
     """Роль chat_id С учётом hardcoded OWNER_CHAT_ID-обхода -- владелец ВСЕГДА OWNER,
     независимо от состояния хранилища (см. докстринг модуля)."""
@@ -92,11 +186,36 @@ def _extract_command(update) -> str:
     return cmd.lower()
 
 
+def _role_check(role: str, update, context) -> bool:
+    """Чистая (без побочных эффектов) проверка "разрешает ли роль этот апдейт" --
+    вынесена отдельно от enforce(), чтобы анти-абьюз (rate-limit/flood-guard) в
+    enforce() применялся ЕДИНООБРАЗНО ко всем веткам (callback/текст/команда),
+    не дублируя код в каждой ветке."""
+    if update.callback_query is not None:
+        return role_allows(role, ROLE_TRIAL)
+
+    cmd = _extract_command(update)
+    if cmd is None:
+        return role_allows(role, ROLE_TRIAL)
+
+    if cmd == "start":
+        args = context.args or []
+        if args:
+            return True  # инвайт-редемпшн -- пропускаем всегда, cmd_start сам решит
+        return role_allows(role, ROLE_TRIAL)
+
+    min_role = COMMAND_ROLE_MAP.get(cmd, DEFAULT_MIN_ROLE)
+    return role_allows(role, min_role)
+
+
 async def enforce(update, context):
     """PTB group=-1 хендлер -- вызывается ДО любого другого хендлера (см. install()).
     Молчаливо останавливает обработку (ApplicationHandlerStop) для недостаточной роли
-    -- никакого ответа пользователю, чтобы не подтверждать существование бота (кроме
-    инвайт-редемпшна через /start, который сам по себе честный ответ по дизайну)."""
+    ИЛИ превышенного rate-limit (Пакет SECURITY-HARDENING М3) -- никакого ответа
+    пользователю в обоих случаях, чтобы не подтверждать существование бота (кроме
+    инвайт-редемпшна через /start, который сам по себе честный ответ по дизайну).
+    Снаружи rate-limit и "недостаточная роль" выглядят одинаково (тишина) -- так и
+    задумано, не раскрываем причину отказа."""
     from telegram.ext import ApplicationHandlerStop
 
     chat = update.effective_chat
@@ -105,35 +224,17 @@ async def enforce(update, context):
     chat_id = chat.id
     role = get_role(chat_id)
 
-    # callback_query (inline-кнопки) -- разрешено любой известной роли (TRIAL+), это
-    # навигация внутри уже показанного меню, не новая точка входа в команду.
-    if update.callback_query is not None:
-        if role_allows(role, ROLE_TRIAL):
-            return
+    if not _role_check(role, update, context):
         raise ApplicationHandlerStop
 
-    cmd = _extract_command(update)
-    if cmd is None:
-        # свободный текст (не команда) -- тот же принцип, что callback: разрешено
-        # уже известной роли (ввод символа для /coin и т.п.), молчаливый отказ NONE.
-        if role_allows(role, ROLE_TRIAL):
-            return
-        raise ApplicationHandlerStop
-
-    if cmd == "start":
-        args = context.args or []
-        if args:
-            # попытка инвайт-редемпшна -- обрабатывается отдельно в cmd_start самим
-            # ботом (см. bot.py) -- здесь просто пропускаем дальше, не блокируем.
-            return
-        if role_allows(role, ROLE_TRIAL):
-            return  # уже есть роль -- обычный /start (повторный визит), пропускаем
-        raise ApplicationHandlerStop  # NONE без инвайт-кода -- молчаливый отказ
-
-    min_role = COMMAND_ROLE_MAP.get(cmd, DEFAULT_MIN_ROLE)
-    if role_allows(role, min_role):
-        return
-    raise ApplicationHandlerStop
+    # Анти-абьюз (М3) -- ТОЛЬКО для прошедших ролевую проверку, OWNER полностью
+    # исключён (владелец не может сам себя случайно зарейтлимитить).
+    if role != ROLE_OWNER:
+        now = time.time()
+        if check_global_flood(now):
+            await _maybe_alert_owner_flood(context)
+        if not check_rate_limit(chat_id, now):
+            raise ApplicationHandlerStop
 
 
 def install(app):
