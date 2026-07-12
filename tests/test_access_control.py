@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("OWNER_CHAT_ID", "7009350191")
 
 import access_control as ac
+import security_log as sl
 import subscribers as sub
 
 
@@ -39,6 +40,11 @@ class _FakeContext:
 def _reset_state(monkeypatch):
     monkeypatch.setattr(sub, "_subscribers", {})
     monkeypatch.setattr(sub, "_invite_codes", {})
+    # enforce() пишет в security_log.log_event() на каждый вызов -- эти тесты не должны
+    # трогать реальный локальный journal/security_log.json (найдено живьём: pytest-прогон
+    # молча писал туда тестовые chat_id вроде 123456/555/666/777, которые позже утекли на
+    # GitHub через ручной sync_to_github() при живой проверке SEC М4 -- см. PROGRESS.md).
+    monkeypatch.setattr(sl, "log_event", lambda *a, **kw: None)
 
 
 def _set_role(chat_id, role, monkeypatch, expires_ts=None):
