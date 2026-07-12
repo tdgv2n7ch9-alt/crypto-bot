@@ -4074,8 +4074,20 @@ None вход, тип и знак константы). `py_compile` чист (`b
 `bot`/`fa_engine`/`ta_extra` импортируются, `divergence_score_delta()`
 вызывается на синтетических данных без исключений.
 
-**Статус М1 (частичный, только патч 04 из плана "конвейер как патч 01"):
-код+тесты готовы, деплой -- следующим шагом.**
+Деплой подтверждён живьём (`deployment ID 5cfad844`, commit `0a9e8cf`,
+`railway deployment list` -- SUCCESS, не SKIPPED):
+```
+railway run python3 -c "import ta_extra, fa_engine, bot, inspect; ..."
+-> divergence_score_delta exists: True
+-> RSI_DIVERGENCE_AGAINST_PENALTY: 5
+-> wired in fa_engine: True
+-> wired in bot.real_full_analysis: True
+-> wired in bot._cmd_top_spot_body: True
+-> pro_analysis untouched (expected False): False
+```
+
+**Статус: патч 04 в бою -- ГОТОВ (код+тесты+py_compile+pytest без
+регрессий+коммит/пуш+живой деплой подтверждены).**
 
 ## Фоновый агент (Пакет 8 М1, Two-Engines Audit) -- статус координации
 
