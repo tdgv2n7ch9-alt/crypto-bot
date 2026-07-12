@@ -106,6 +106,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
 import signal_journal
 import subscribers
+import access_control
 import ta_extra
 import fa_engine
 import signal_loop
@@ -2858,7 +2859,28 @@ async def send_signals_batch(bot, chat_id, coins):
 # HANDLERS
 # 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Пакет SECURITY-HARDENING М1 (владелец "да"): раньше /start автоматически
+    подписывал ЛЮБОГО, кто написал боту -- самозапись. Теперь: /start <инвайт-код>
+    (Telegram deep-link ?start=<код>) -- единственный способ впервые получить доступ,
+    код одноразовый, выдаёт владелец через /invite. Без валидного кода и без уже
+    существующей роли -- access_control.enforce() (group=-1, см. install()) блокирует
+    апдейт МОЛЧАЛИВО ещё до того, как этот хендлер вообще вызывается -- сюда мы
+    попадаем только если (а) роль уже есть, либо (б) есть код-аргумент для редемпшна."""
     cid = update.effective_chat.id
+    if ctx.args:
+        code = ctx.args[0]
+        role = await subscribers.redeem_invite_code(code, cid)
+        if role is None:
+            # невалидный/уже использованный код -- молчаливый отказ, тот же принцип,
+            # что и для команд без доступа (не подтверждаем существование бота никому,
+            # кто не предъявил рабочий код).
+            return
+        # успешный редемпшн -- дальше падаем в обычный welcome-flow ниже.
+    else:
+        role = access_control.get_role(cid)
+        if role == access_control.ROLE_NONE:
+            return  # защита в глубину -- сюда не должны попадать без роли/кода вообще
+
     await subscribers.subscribe(cid)
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     name = update.effective_user.first_name or "трейдер"
@@ -2892,6 +2914,109 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Чтобы снова подписаться -- пришли /start.",
         parse_mode="Markdown"
     )
+
+
+# --- Пакет SECURITY-HARDENING М1 (владелец "да") -- владельческие команды доступа ---
+# Все три гейтятся access_control.COMMAND_ROLE_MAP (ROLE_OWNER) -- сюда физически не
+# попадёт никто, кроме владельца, но проверка здесь тоже не помешает (defense in depth).
+
+async def cmd_grant(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/grant <chat_id> <ROLE> [expires_days] -- выдать роль напрямую (без инвайт-кода),
+    для случаев, когда владелец уже знает chat_id (например, /myid прислали лично)."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    args = ctx.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Использование: `/grant <chat_id> <VIP|TRIAL|OWNER|NONE> [expires_days]`",
+            parse_mode="Markdown")
+        return
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ chat_id должен быть числом.")
+        return
+    role = args[1].upper()
+    if role not in (access_control.ROLE_VIP, access_control.ROLE_TRIAL,
+                    access_control.ROLE_OWNER, access_control.ROLE_NONE):
+        await update.message.reply_text("❌ Роль: VIP, TRIAL, OWNER или NONE.")
+        return
+    expires_ts = None
+    if len(args) >= 3:
+        try:
+            expires_ts = time.time() + int(args[2]) * 86400
+        except ValueError:
+            await update.message.reply_text("❌ expires_days должен быть числом.")
+            return
+    await subscribers.set_role(target_id, role, expires_ts)
+    await update.message.reply_text(f"✅ chat_id `{target_id}` -- роль `{role}`"
+                                     f"{f', истекает через {args[2]}д' if expires_ts else ''}.",
+                                     parse_mode="Markdown")
+
+
+async def cmd_revoke(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/revoke <chat_id> -- отозвать доступ (роль -> NONE)."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    args = ctx.args or []
+    if not args:
+        await update.message.reply_text("Использование: `/revoke <chat_id>`", parse_mode="Markdown")
+        return
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ chat_id должен быть числом.")
+        return
+    await subscribers.set_role(target_id, access_control.ROLE_NONE)
+    await update.message.reply_text(f"🔒 Доступ chat_id `{target_id}` отозван.", parse_mode="Markdown")
+
+
+async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/users -- список всех известных chat_id с ролью/подпиской."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    users = subscribers.list_users()
+    if not users:
+        await update.message.reply_text("Пока никого нет в хранилище.")
+        return
+    lines = ["👥 *Пользователи:*"]
+    for u in users[:50]:  # честный кап на размер сообщения, не на сам список
+        sub_mark = "🔔" if u["subscribed"] else "🔕"
+        lines.append(f"`{u['chat_id']}` -- {u['role']} {sub_mark}")
+    if len(users) > 50:
+        lines.append(f"... и ещё {len(users) - 50}")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_invite(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/invite generate [VIP|TRIAL] [expires_days] -- одноразовый инвайт-код.
+    Единственный способ впервые попасть в систему (не самозапись) -- владелец
+    отправляет ссылку вида t.me/<bot_username>?start=<код>."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    args = ctx.args or []
+    if not args or args[0].lower() != "generate":
+        await update.message.reply_text(
+            "Использование: `/invite generate [VIP|TRIAL] [expires_days]`", parse_mode="Markdown")
+        return
+    role = args[1].upper() if len(args) >= 2 else access_control.ROLE_VIP
+    if role not in (access_control.ROLE_VIP, access_control.ROLE_TRIAL):
+        await update.message.reply_text("❌ Роль инвайт-кода: VIP или TRIAL.")
+        return
+    expires_days = None
+    if len(args) >= 3:
+        try:
+            expires_days = int(args[2])
+        except ValueError:
+            await update.message.reply_text("❌ expires_days должен быть числом.")
+            return
+    code = await subscribers.generate_invite_code(role, expires_days)
+    bot_username = (await ctx.bot.get_me()).username
+    await update.message.reply_text(
+        f"🎟 Инвайт-код на роль `{role}` создан (одноразовый):\n"
+        f"`{code}`\n\n"
+        f"Ссылка: `https://t.me/{bot_username}?start={code}`",
+        parse_mode="Markdown")
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
@@ -11144,8 +11269,16 @@ def main():
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
     app.add_handler(CommandHandler("precision", cmd_precision))
     app.add_handler(CommandHandler("x100",      cmd_x100_scanner))
+    # Пакет SECURITY-HARDENING М1 (владелец "да") -- владельческие команды доступа.
+    app.add_handler(CommandHandler("grant",     cmd_grant))
+    app.add_handler(CommandHandler("revoke",    cmd_revoke))
+    app.add_handler(CommandHandler("users",     cmd_users))
+    app.add_handler(CommandHandler("invite",    cmd_invite))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
+    # Deny-by-default auth (group=-1, обрабатывается ДО всех хендлеров выше) --
+    # регистрируется ПОСЛЕДНИМ в коде, но реально исполняется ПЕРВЫМ (группа -1 < 0).
+    access_control.install(app)
 
     # Планировщик регистрируется в post_init (_start_pump_detector), ПОСЛЕ
     # subscribers.startup_sync()/signal_journal.startup_sync() -- см. комментарий там же
