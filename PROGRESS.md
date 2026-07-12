@@ -3858,3 +3858,16 @@ bull, и bear случаи) + интеграция в `compute_shadow()` (пол
 `pytest -q`: **443 passed, 1 skipped** (было 429, +14, без регрессий).
 
 **Статус М1: код/тесты ГОТОВЫ**, деплой -- следующим шагом.
+
+Деплой подтверждён живьём (`deployment ID 77d4948b`, промежуточные
+journal-автокоммиты корректно дали SKIPPED -- Watch Paths из Пакета 6 М2
+продолжает работать под нагрузкой):
+```
+railway run python3 -c "import ta_extra, shadow_engine, inspect; \
+  print('detect_order_block' in dir(ta_extra)); \
+  print('07-order-block-body' in inspect.getsource(shadow_engine))"
+-> True True
+```
+**Статус М1: ГОТОВ, код + тесты + деплой подтверждены живьём.** Накопление
+shadow-данных начато -- частота расхождения live/methodology geometry будет
+видна в следующих INSIGHTS-проходах по `journal/shadow_signals.json`.
