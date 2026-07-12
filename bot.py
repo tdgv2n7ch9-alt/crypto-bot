@@ -121,6 +121,7 @@ import shadow_engine
 import chart_patterns
 import rug_radar
 import etherscan_whale
+import derivatives_extra
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -4221,6 +4222,11 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             opts_i = get_options_data()
             pcr = opts_i.get("put_call_ratio", 0) if opts_i.get("ok") else 0
             max_pain_btc = opts_i.get("max_pain")
+            skew_i = opts_i.get("skew")  # Пакет 9 М3, тот же fetch, см. get_options_data()
+
+            # Liquidation Heatmap -- Пакет 9 М3 (Фаза B добивка)
+            liqs_i = get_liq_data()
+            heatmap_i = liqs_i.get("heatmap")
 
             # Perp/Spot премия BTC -- Этап 3.2 (АПГРЕЙД 11.07)
             premium_i = get_perp_spot_premium("BTC")
@@ -4367,6 +4373,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "  Funding ETH: "+str(round(fund_eth,4))+"%",
                 "  Put/Call (BTC): "+(str(pcr) if opts_i.get("ok") else "н/д"),
                 "  Max Pain (BTC): "+(f"${max_pain_btc:,.0f}" if max_pain_btc else "н/д"),
+                "  Skew (BTC, "+(skew_i.get("expiry","?") if skew_i and skew_i.get("ok") else "н/д")+"): "
+                    +(f"{skew_i['skew']:+.1f} — {skew_i['note']}" if skew_i and skew_i.get("ok") else "н/д"),
                 "  L/S Ratio: "+str(round(ls_ratio,2)),"",
                 "🌐 ДЕРИВАТИВЫ (Фаза B)",
                 "  Perp/Spot премия BTC: "+(fpct(premium_i["premium_pct"])+" — "+premium_i["signal"]
@@ -4375,6 +4383,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "  CVD ETH 1ч: "+f"${cvd_eth['cvd_1h']:+,.0f}"+"  4ч: "+f"${cvd_eth['cvd_4h']:+,.0f}"+"  — "+cvd_eth["direction_1h"],
                 "  CVD SOL 1ч: "+f"${cvd_sol['cvd_1h']:+,.0f}"+"  4ч: "+f"${cvd_sol['cvd_4h']:+,.0f}"+"  — "+cvd_sol["direction_1h"],
                 "  _CVD ещё копится с момента последнего рестарта бота -- значения растут со временем_","",
+                "  🗺 Liquidation Heatmap BTC (ретроспектива, топ-3 зоны недавних ликвидаций):",
+                *([f"    ${b['price_lo']:,.0f}–${b['price_hi']:,.0f} ({b['pct_from_now']:+.1f}%): ${b['notional_usd']:,.0f}"
+                   for b in heatmap_i["buckets"][:3]] if heatmap_i and heatmap_i.get("ok") else ["    н/д"]),
+                "",
                 "🧠 ТЕХНИЧЕСКИЙ АНАЛИЗ",
                 "  "+ema_cross,
                 "  Fear&Greed: "+str(fv)+"/100 — "+fl,
@@ -10992,7 +11004,7 @@ def get_options_data():
     import time as _t, requests as _r
     global _opts_cache, _opts_ts
     if _t.time()-_opts_ts<600 and _opts_cache: return _opts_cache
-    res={'ok':False,'put_call_ratio':1.0,'iv_1m':0,'options_signal':'neutral','total_oi_calls':0,'total_oi_puts':0,'max_pain':None}
+    res={'ok':False,'put_call_ratio':1.0,'iv_1m':0,'options_signal':'neutral','total_oi_calls':0,'total_oi_puts':0,'max_pain':None,'skew':None}
     try:
         r=_r.get('https://www.deribit.com/api/v2/public/get_book_summary_by_currency',params={'currency':'BTC','kind':'option'},timeout=8)
         if r.status_code==200:
@@ -11005,6 +11017,10 @@ def get_options_data():
             if items:
                 res['iv_1m']=round(items[0].get('mark_iv',0),1)
                 res['max_pain']=compute_max_pain(items)  # Этап 3.3 -- тот же fetch, без доп. запроса
+                # Пакет 9 М3 -- Options Skew, тот же fetch, без доп. запроса. Информационно
+                # (moneyness-band approximation, см. derivatives_extra.py докстринг) -- не
+                # подано ни в pro_score/rocket, ни в options_signal выше.
+                res['skew']=derivatives_extra.compute_options_skew(items)
     except: pass
     _opts_cache=res; _opts_ts=_t.time(); return res
 
@@ -11046,7 +11062,7 @@ def get_liq_data():
     import time as _t, requests as _r
     global _liq_cache, _liq_ts
     if _t.time()-_liq_ts<300 and _liq_cache: return _liq_cache
-    res={'ok':False,'liq_long':0,'liq_short':0,'liq_ratio':1.0,'liq_signal':'neutral'}
+    res={'ok':False,'liq_long':0,'liq_short':0,'liq_ratio':1.0,'liq_signal':'neutral','heatmap':None}
     try:
         # OKX liquidation-orders (замена fapi.binance.com/allForceOrders, заблокированного на Railway)
         r=_r.get('https://www.okx.com/api/v5/public/liquidation-orders',
@@ -11063,6 +11079,15 @@ def get_liq_data():
             rt=ll/ls if ls>0 else 1.0
             res.update({'liq_long':round(ll),'liq_short':round(ls),'liq_ratio':round(rt,2),'ok':True})
             res['liq_signal']='bearish' if rt>2 else ('bullish' if rt<0.5 else 'neutral')
+            # Пакет 9 М3 -- Liquidation Heatmap, информационно (retrospective, см.
+            # derivatives_extra.py докстринг). Не подано в liq_ratio/liq_signal выше.
+            try:
+                tk=_r.get('https://www.okx.com/api/v5/market/ticker',params={'instId':'BTC-USDT-SWAP'},timeout=6)
+                px_now=float(tk.json().get('data',[{}])[0].get('last',0) or 0) if tk.status_code==200 else 0
+                if px_now>0:
+                    res['heatmap']=derivatives_extra.compute_liquidation_heatmap(od, px_now)
+            except Exception:
+                pass
     except: pass
     _liq_cache=res; _liq_ts=_t.time(); return res
 
