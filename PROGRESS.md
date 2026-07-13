@@ -6566,3 +6566,37 @@ FakeUpdate-паттерн, тот же, что уже использует top_s
 
 **Статус: код готов и задеплоен, ЖДЁТ решения владельца о включении флага**
 (`MENU_V2_ENABLED=true` на Railway) для живой проверки/приёмки.
+
+## 2026-07-13 -- Разметка BTCUSDT (Королев 13.07) + включение Меню v2 на живом Railway
+
+**watch_zones.json**: BTCUSDT полностью заменён (6 зон, source "Королев 13.07"),
+старая разметка 12.07 архивирована в `journal/watch_zones_history/2026-07-12.json`
+через `level_watch.replace_watch_zones()` -- тот же путь, что живая команда
+`/zones_set`. ETHUSDT не тронут (осталась разметка 11.07), добавлена только
+note к LONG 1694.49-1705.87. MORPHOUSDT/WLDUSDT/JASMYUSDT не изменены. Честная
+находка: архивная копия 2026-07-12.json в git была неполной (не содержала
+WLDUSDT/JASMYUSDT) -- архивация сейчас корректно перезаписала её полной живой
+копией. Commit `6b49be0`.
+
+**MENU_V2_ENABLED включён на живом Railway** (владелец, вариант 2, подтверждено
+явно). Порядок: (1) добавлена строка `log.info(f"[MENU-V2] MENU_V2_ENABLED=...")`
+при старте процесса (её раньше не было) -- commit `75f542d`, задеплоено
+(deployment `a67224ee` из README... -- фактически commit `75f542d`, deployment
+`9f9d9425` SUCCESS), живьём подтверждено в логах `MENU_V2_ENABLED=False` ДО
+включения; (2) `railway variable set "MENU_V2_ENABLED=true" --service crypto-bot`
+(сервис называется `crypto-bot`, не `worker`, как было в черновике команды --
+свежая проверка `railway status`) -- вызвало автоматический рестарт (deployment
+`a67224ee`, SUCCESS, без ребилда); (3) живая проверка логов НОВОГО контейнера:
+`[MENU-V2] MENU_V2_ENABLED=True`, никаких Traceback/ImportError/NameError.
+
+Тот же деплой (изменение bot.py триггерит редеплой, в отличие от journal/-путей)
+заодно подтянул обновлённый watch_zones.json из GitHub через `level_watch.
+startup_sync()` -- обе задачи этой сессии довезены до живого контейнера одним
+циклом деплоя.
+
+**Откат Меню v2 при проблемах**: `railway variable delete MENU_V2_ENABLED
+--service crypto-bot` -- старое меню вернётся автоматически (флаг default false).
+
+**Статус: обе задачи ГОТОВЫ, флаг живой на true.** Дальше -- владелец проверяет
+`/zones` и новое меню в Telegram лично (агент не может сделать скриншоты
+Telegram-клиента, честно озвучено ранее).
