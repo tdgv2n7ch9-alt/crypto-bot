@@ -116,6 +116,75 @@ def test_zones_unified_flag_switches_source(monkeypatch):
     assert called["old"] is True
 
 
+class _FakeUser:
+    def __init__(self, uid):
+        self.id = uid
+
+
+class _FakeReply:
+    def __init__(self):
+        self.calls = []
+
+    async def __call__(self, text, **kw):
+        self.calls.append(text)
+
+
+class _FakeMessage:
+    def __init__(self, text):
+        self.text = text
+        self.reply_text = _FakeReply()
+
+
+class _FakeZonesSetUpdate:
+    def __init__(self, uid, text):
+        self.effective_user = _FakeUser(uid)
+        self.message = _FakeMessage(text)
+
+
+def test_zones_set_accepts_brand_new_symbol_not_only_updates_existing(monkeypatch):
+    """Владелец (2026-07-13, п.3 Задачи D): /zones_set должен принимать символ,
+    которого ещё нет в watch_zones.json -- создание, не только апдейт (нужно для
+    AVAX/AAVE, чьи старые границы из WATCHLIST_ZONES решено не переносить как
+    протухшие). replace_watch_zones() -- полный реплейс присланного JSON
+    (см. test_level_watch.py::test_replace_watch_zones_is_full_replace_not_merge),
+    поэтому у cmd_zones_set нет отдельного пути "апдейт существующего символа" --
+    любой ключ в присланном JSON, старый или новый, просто становится частью
+    активного конфига. Тест проверяет это на реальном хендлере команды, не только
+    на нижнем уровне level_watch."""
+    import asyncio
+    import os as _os
+
+    _os.environ.setdefault("OWNER_CHAT_ID", "7009350191")
+    owner_id = int(_os.getenv("OWNER_CHAT_ID", "7009350191"))
+
+    captured = {}
+
+    def _fake_replace(new_config, *a, **kw):
+        captured["config"] = new_config
+        return True
+
+    async def _fake_github_sync(config):
+        return False  # best-effort, не критично для теста
+
+    monkeypatch.setattr(level_watch, "replace_watch_zones", _fake_replace)
+    monkeypatch.setattr(level_watch, "sync_watch_zones_to_github", _fake_github_sync)
+
+    # AVAXUSDT ранее НЕ было в конфиге -- проверяем именно создание нового символа
+    payload = (
+        '{"updated":"2026-07-13","source":"владелец /zones_set",'
+        '"AVAXUSDT":[{"side":"LONG","lo":18.5,"hi":19.2,"prio":1}]}'
+    )
+    update = _FakeZonesSetUpdate(owner_id, f"/zones_set {payload}")
+
+    asyncio.run(bot.cmd_zones_set(update, None))
+
+    assert "config" in captured, "replace_watch_zones не был вызван"
+    assert "AVAXUSDT" in captured["config"]
+    assert captured["config"]["AVAXUSDT"][0]["lo"] == 18.5
+    assert captured["config"]["AVAXUSDT"][0]["hi"] == 19.2
+    assert any("✅" in c for c in update.message.reply_text.calls)
+
+
 def test_zones_set_style_config_change_reflected_without_restart(monkeypatch):
     """load_watch_zones() читает диск на КАЖДЫЙ вызов (см. level_watch.py) --
     /zones_set-подобное изменение подхватывается немедленно, без рестарта
