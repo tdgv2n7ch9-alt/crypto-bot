@@ -2512,7 +2512,7 @@ def format_watchlist_rug_line(symbol: str, coin: dict) -> str:
     алерты"): ОБЩИЙ хелпер rug-строки для ЛЮБОГО пользовательского алерта, не
     только zone-touch watchlist -- имя сохранено ради обратной совместимости
     (уже используется/протестировано в check_watchlist()), но вызывающая сторона
-    может быть любой (Памп-радар, Whale Monitor, Supertrend, карточки сетапов),
+    может быть любой (Памп-радар, Whale Radar, Supertrend, карточки сетапов),
     сигнатура (symbol, coin) для всех одинаковая. Best-effort: сетевой
     CoinGecko-фетч (тот же паттерн, что _mv2_show_razbor()) -- любая ошибка
     (сеть/рейт-лимит/нет coin) -> тихая пустая строка, не блокирует и не портит
@@ -5687,7 +5687,7 @@ async def whale_monitor(bot: Bot):
             if not w: continue
 
             # Мини-пакет (владелец, 2026-07-13, "rug-строка во ВСЕ алерты"):
-            # Whale Monitor -- score >= 40 добавляет "🛑 RUG-RADAR: ..." строку
+            # Whale Radar -- score >= 40 добавляет "🛑 RUG-RADAR: ..." строку
             # (тот же общий хелпер, что watchlist/Памп-радар/Supertrend).
             whale_rug_line = ""
             try:
@@ -11462,9 +11462,11 @@ async def cmd_radar_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_whales(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only: /whales <symbol> -- топ whale-зоны символа (Whale Radar Блок 3,
-    см. WHALE_RADAR_NOTES.md). НЕ путать с существующим "🐋 Whale Monitor"
-    (callback_data=whale_status) -- та фича про OI/funding/L-S-ratio институциональный
-    скоринг, эта -- про крупные лимитки/сделки в стакане, независимые источники данных.
+    см. WHALE_RADAR_NOTES.md). Пакет 18, п.9 (владелец): брендинг слит с
+    whale_status-экраном (OI/funding/L-S-ratio институциональный скоринг) --
+    обе фичи теперь показывают "🐋 WHALE RADAR", но остаются РАЗНЫМИ системами
+    под капотом (разные источники данных: эта -- про крупные лимитки/сделки в
+    стакане, whale_status -- про OI/funding).
     Читает ТЕКУЩЕЕ состояние Whale Radar (что накоплено с момента старта процесса), не
     делает новых сетевых запросов -- если контур только что стартовал или символ вне
     топ-N по обороту, зон может не быть, честно об этом сказано, не выдумано.
