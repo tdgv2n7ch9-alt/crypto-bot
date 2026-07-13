@@ -6669,3 +6669,36 @@ WLDUSDT/...). `level_watch.py` тут вообще не участвовал -- 
 Вопрос владельцу вынесен отдельно.
 
 py_compile чист, полный pytest 809 passed/1 skipped.
+
+## 2026-07-13 -- "Пятый движок" устранён: zone-touch алерты подписчикам унифицированы на watch_zones.json
+
+Владелец решил: объединить. `journal/watch_zones.json` -- единственный
+источник правды для zone-touch алертов, и владельцу, и подписчикам.
+
+- `bot.check_watchlist_alerts_from_level_watch(coins)` -- новая функция,
+  границы из `level_watch.load_watch_zones()` (перечитывается с диска на
+  каждый вызов -- `/zones_set` подхватывается БЕЗ рестарта процесса, тот же
+  принцип, что уже был у `level_watch.run_level_watch()` для владельца).
+  Формат alert-словарей ИДЕНТИЧЕН старой `check_watchlist_alerts()`
+  (symbol/price/lo/hi/bias/emoji/note/source) -- `check_watchlist()`
+  структурно не менялся, поменялся только источник границ.
+- Флаг `ZONES_UNIFIED` (env, default `true`) -- `false` мгновенно откатывает
+  на старый `WATCHLIST_ZONES`-путь без редеплоя (только смена переменной на
+  Railway). `WATCHLIST_ZONES` НЕ удалён физически -- помечен LEGACY, новые
+  монеты в него больше не добавляются.
+- **Честная находка (не выкинуто молча)**: 16 из 18 символов WATCHLIST_ZONES
+  не имеют аналога в watch_zones.json -- AAVE, ACH, APT, AVAX, BEAT, DYDX,
+  EIGEN, ENA, HYPE, LINK, ORDI, PIPPIN, PYTH, SOL, UNI, ZK. После унификации
+  эти 16 монет перестают алертить подписчикам, пока владелец не перенесёт
+  нужные зоны через `/zones_set`. Даже для ETH (пересечение с watch_zones.json
+  есть) сторона отличалась -- WATCHLIST_ZONES держал SHORT 1710-1737,
+  watch_zones.json имеет только LONG-зоны для ETHUSDT.
+- Запись сделана в `ENGINE_UNIFICATION.md` ("Приложение: Пятый движок") --
+  тот же документ, где Пакет 8 М1 нашёл 4 движка анализа + 1 мёртвый путь,
+  теперь + этот случай (не движок анализа, но та же болезнь параллельных
+  систем).
+- 9 новых тестов (`tests/test_watchlist_zones_unification.py`), включая
+  явную проверку "границы из watch_zones.json, НЕ из хардкода" и "/zones_set-
+  подобное изменение подхватывается без рестарта".
+
+py_compile чист, полный pytest 818 passed/1 skipped.

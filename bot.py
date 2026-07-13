@@ -2283,6 +2283,15 @@ BTC_ZONES = {
 
 #         
 # : symbol  {"long": [lo, hi], "short": [lo, hi], "note": str, "source": str}
+# LEGACY (владелец, 2026-07-13, "пятый движок" -- см. ENGINE_UNIFICATION.md):
+# больше НЕ ведущий источник для zone-touch алертов подписчикам -- им стал
+# journal/watch_zones.json (level_watch.load_watch_zones()). Этот словарь
+# оставлен ТОЛЬКО как путь мгновенного отката через ZONES_UNIFIED=false (без
+# редеплоя) на время обкатки унификации -- новые монеты сюда НЕ добавлять,
+# правьте /zones_set. 16 из 18 символов здесь не имеют аналога в
+# watch_zones.json (см. PROGRESS.md, "пятый движок" -- полный список) --
+# честно, unification их не переносит автоматически, решение по каждому за
+# владельцем.
 WATCHLIST_ZONES = {
     #    (  19.06.2026) 
     "LINK": {
@@ -2449,6 +2458,52 @@ def check_watchlist_alerts(coins: list) -> list:
             })
 
     return alerts
+
+
+def check_watchlist_alerts_from_level_watch(coins: list) -> list:
+    """ЕДИНЫЙ ИСТОЧНИК ПРАВДЫ для zone-touch алертов подписчикам (владелец,
+    2026-07-13, "пятый движок" -- см. ENGINE_UNIFICATION.md): границы -- из
+    journal/watch_zones.json (level_watch.load_watch_zones(), ПЕРЕЧИТЫВАЕТСЯ
+    С ДИСКА на каждый вызов -- дёшево, маленький локальный JSON, зато
+    /zones_set подхватывается без рестарта процесса, тот же принцип, что
+    level_watch.run_level_watch()). Формат возвращаемых alert-словарей --
+    ТОТ ЖЕ, что у check_watchlist_alerts() (symbol/price/lo/hi/bias/emoji/
+    note/source), чтобы check_watchlist() не менялся структурно -- меняется
+    только источник границ. INFO-зоны (маркеры уровня, не торговые зоны)
+    пропускаются -- у них нет стороны LONG/SHORT для алерта."""
+    config = level_watch.load_watch_zones()
+    source = config.get("source") or ""
+    coin_map = {c["symbol"]: c for c in coins}
+    alerts = []
+
+    for pair_symbol, zones in config.items():
+        if pair_symbol in ("updated", "source") or not isinstance(zones, list):
+            continue
+        base_sym = pair_symbol.upper().replace("USDT", "")
+        coin = coin_map.get(base_sym)
+        if not coin:
+            continue
+        price = coin["quote"]["USDT"].get("price", 0)
+        if not price:
+            continue
+
+        for zone in zones:
+            bias = zone.get("side")
+            if bias not in ("LONG", "SHORT"):
+                continue
+            lo, hi = zone.get("lo"), zone.get("hi")
+            if lo is None or hi is None:
+                continue
+            if lo <= price <= hi:
+                alerts.append({
+                    "symbol": base_sym, "price": price,
+                    "lo": lo, "hi": hi,
+                    "bias": bias, "emoji": "🟢" if bias == "LONG" else "🔴",
+                    "note": zone.get("note", ""), "source": source,
+                })
+
+    return alerts
+
 
 def analyze_market(btc, eth, gm, coins):
     bp = btc.get("price", 0); ep = eth.get("price", 0)
@@ -2696,6 +2751,13 @@ def main_kb():
 # старое main_kb() остаётся дефолтным fallback до явного включения владельцем
 # (env-переменная на Railway, не хардкод в коде -- обратимо без деплоя).
 MENU_V2_ENABLED = os.getenv("MENU_V2_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
+# "Пятый движок" (владелец, 2026-07-13, ENGINE_UNIFICATION.md): унификация
+# источника границ zone-touch алертов подписчикам -- WATCHLIST_ZONES (хардкод
+# ниже, оставлен ТОЛЬКО как путь мгновенного отката) больше НЕ ведущий источник,
+# им стал journal/watch_zones.json (тот же level_watch.load_watch_zones(), что
+# /zones и /zones_set уже используют). default true после приёмки владельцем.
+ZONES_UNIFIED = os.getenv("ZONES_UNIFIED", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 def main_kb_v2():
@@ -6319,7 +6381,8 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def check_watchlist(bot, chat_ids, coins):
     """       5 """
     now_ts   = datetime.now(TZ).timestamp()
-    alerts   = check_watchlist_alerts(coins)
+    alerts   = (check_watchlist_alerts_from_level_watch(coins) if ZONES_UNIFIED
+                else check_watchlist_alerts(coins))
     for al in alerts:
         sym = al["symbol"]
         last = watchlist_alerted.get(sym, 0)
