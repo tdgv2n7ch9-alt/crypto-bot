@@ -10206,6 +10206,7 @@ async def _cmd_x100_scanner_body(update, ctx):
             shown_x100 = 0
             rejected_x100 = 0
             skipped_x100 = 0
+            no_structure_x100 = 0
             if top:
                 for c in top:
                     grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
@@ -10263,7 +10264,42 @@ async def _cmd_x100_scanner_body(update, ctx):
                         # top_long/top_short/fa_engine и её владелец менять не просил.
                         rr_w = ta_extra.rr_from_base(trade_x100, ta_extra.weighted_dca_entry(trade_x100)) if trade_x100 else None
 
-                        if not trade_x100 or not rr_w["rr_gate_pass"]:
+                        # Пакет 18, п.5 (владелец): "если структурной зоны нет --
+                        # честная строка 'вход по рынку не предлагаем, ждать
+                        # отката к {уровень}'". Различаем ДВА разных случая
+                        # отброса, раньше слитых в один silent continue:
+                        # (a) trade_x100 is None -- НЕТ ни одной зоны структуры
+                        #     ниже цены вообще (build_trade_from_structure()
+                        #     буквально нечего строить) -- честный фоллбек-
+                        #     уровень (52-недельный минимум, реальные данные,
+                        #     не выдумка) вместо полного молчания;
+                        # (b) trade_x100 есть, но R:R по TP1 не прошёл гейт --
+                        #     поведение НЕ меняется (уже честно посчитано в
+                        #     агрегатной строке "отброшено по R:R" ниже),
+                        #     структура НАЙДЕНА, просто невыгодная -- другой
+                        #     случай, не тот, что просил владелец.
+                        if trade_x100 is None:
+                            no_structure_x100 += 1
+                            fallback_level = (min((cc["low"] for cc in candles_1d_x100), default=None)
+                                               if candles_1d_x100 else None)
+                            shown_x100 += 1
+                            grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
+                            fallback_note = (f"⚠️ Вход по рынку не предлагаем — нет структурной зоны "
+                                              f"ниже цены. Ждать отката к {fp(fallback_level)} (52н минимум)"
+                                              if fallback_level else
+                                              "⚠️ Вход по рынку не предлагаем — нет структурной зоны "
+                                              "ниже цены, уровень для отката н/д")
+                            card_blocks += [
+                                SEP,
+                                f"{grade} #{shown_x100} {c['sym']} — {c['name']}",
+                                f"💰 Цена: {fp(p)}  _{p_fresh}_ | МКап: {c['mcap']}",
+                                f"📊 24ч: {sign(c['ch24'])} | 7д: {sign(c['ch7d'])} | 30д: {sign(c['ch30d'])}",
+                                fallback_note,
+                                f"⚡ {' · '.join(c['reasons'])}",
+                                f"🎯 Скор: {c['score']}/12",
+                            ]
+                            continue
+                        if not rr_w["rr_gate_pass"]:
                             rr_dbg = rr_w["rr_tp1"] if rr_w else "n/a"
                             log.info(f"[SR-GATE] x100: {c['sym']} отброшен -- "
                                      f"R:R по TP1 (DCA-база) {rr_dbg} < {ta_extra.SR_MIN_RR_TP1}")
@@ -10362,9 +10398,12 @@ async def _cmd_x100_scanner_body(update, ctx):
                         _journal_footer_line("x100"),
                     ]
             _x100_skip_note = f", {skipped_x100} skip без live-цены/EMA" if skipped_x100 else ""
+            _x100_struct_note = (f", {no_structure_x100} без структурной зоны (см. карточки ниже)"
+                                  if no_structure_x100 else "")
             if card_blocks:
                 lines.append(f"\n💎 *Найдено: {shown_x100} кандидатов*"
-                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note})_" if (rejected_x100 or skipped_x100) else "") + "\n")
+                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note}{_x100_struct_note})_"
+                                 if (rejected_x100 or skipped_x100 or no_structure_x100) else "") + "\n")
                 lines += card_blocks
             elif rejected_x100 or skipped_x100:
                 lines.append(f"\n❌ Кандидатов не найдено -- {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note}")
