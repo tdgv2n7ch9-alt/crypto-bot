@@ -342,3 +342,56 @@ def test_format_onchain_card_text_eth_notes_btc_only_metrics(monkeypatch):
     text = ocm.format_onchain_card_text("ETH")
     assert "только для BTC" in text
     assert "KNOWLEDGE_GAPS.md" in text
+
+
+# ── format_liquidity_summary_text() -- НОЧЬ#3 Н3 (EVENT-RADAR М5) ──
+
+def test_format_liquidity_summary_text_full_success(monkeypatch):
+    monkeypatch.setattr(ocm, "fetch_defillama_stablecoin_flow_30d",
+                         lambda: {"ok": True, "now_usd": 2.1e11, "usd_30d_ago": 2.0e11,
+                                   "flow_30d_usd": 1e10, "flow_30d_pct": 5.0})
+    monkeypatch.setattr(ocm, "fetch_usdt_dominance",
+                         lambda: {"ok": True, "usdt_dominance_pct": 4.8,
+                                   "note": "только текущее значение"})
+    text = ocm.format_liquidity_summary_text()
+    assert "Стейблкоины (30д): +$10,000,000,000 (+5.0%)" in text
+    assert "USDT.D сейчас: 4.80%" in text
+    assert "Liquidation heatmap" in text
+    assert "н/д" not in text
+
+
+def test_format_liquidity_summary_text_partial_failure_is_honest(monkeypatch):
+    monkeypatch.setattr(ocm, "fetch_defillama_stablecoin_flow_30d",
+                         lambda: {"ok": False, "reason": "меньше 31 точки в ряду"})
+    monkeypatch.setattr(ocm, "fetch_usdt_dominance",
+                         lambda: {"ok": True, "usdt_dominance_pct": 4.8})
+    text = ocm.format_liquidity_summary_text()
+    assert "Стейблкоины (30д): н/д (меньше 31 точки в ряду)" in text
+    assert "USDT.D сейчас: 4.80%" in text
+
+
+def test_format_liquidity_summary_text_both_fail_is_honest():
+    """Полный отказ обоих источников -- честный н/д по каждому, функция не падает."""
+    import onchain_metrics as ocm2
+    def _fail(*a, **kw):
+        return {"ok": False, "reason": "network error"}
+    orig_flow = ocm2.fetch_defillama_stablecoin_flow_30d
+    orig_dom = ocm2.fetch_usdt_dominance
+    ocm2.fetch_defillama_stablecoin_flow_30d = _fail
+    ocm2.fetch_usdt_dominance = _fail
+    try:
+        text = ocm2.format_liquidity_summary_text()
+        assert "Стейблкоины (30д): н/д (network error)" in text
+        assert "USDT.D: н/д (network error)" in text
+    finally:
+        ocm2.fetch_defillama_stablecoin_flow_30d = orig_flow
+        ocm2.fetch_usdt_dominance = orig_dom
+
+
+def test_get_liquidity_summary_any_ok_true_if_one_source_works(monkeypatch):
+    monkeypatch.setattr(ocm, "fetch_defillama_stablecoin_flow_30d",
+                         lambda: {"ok": False, "reason": "x"})
+    monkeypatch.setattr(ocm, "fetch_usdt_dominance",
+                         lambda: {"ok": True, "usdt_dominance_pct": 5.0})
+    result = ocm.get_liquidity_summary()
+    assert result["ok"] is True

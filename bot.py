@@ -4931,8 +4931,17 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # по смыслу то же, что было -- просто дальше готово принять реальные
             # SOPR/MVRV/NVT/Puell/LTH-STH после решения владельца по источнику.
             body = onchain_metrics.format_onchain_card_text("BTC")
+            # НОЧЬ#3, Н3 (владелец, "следующий модуль по плану"): EVENT-RADAR
+            # М5 -- сводка ликвидности рынка (NEXT_PACKAGE.md п.4). Best-effort
+            # отдельным try -- сбой этого блока не должен ронять уже рабочую
+            # On-Chain карточку выше.
+            liquidity_block = ""
+            try:
+                liquidity_block = "\n\n" + onchain_metrics.format_liquidity_summary_text()
+            except Exception as e:
+                log.info(f"[ONCHAIN] liquidity summary: {e}")
             await q.edit_message_text(
-                f"🔗 *On-Chain*\n\n{body}\n\n🕐 {now_utc3()}",
+                f"🔗 *On-Chain*\n\n{body}{liquidity_block}\n\n🕐 {now_utc3()}",
                 parse_mode="Markdown", reply_markup=nav
             )
         except Exception as e:

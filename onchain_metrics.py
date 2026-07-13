@@ -399,3 +399,40 @@ def format_onchain_card_text(symbol: str = "BTC") -> str:
     lines.append("SOPR / MVRV / NVT / Puell / LTH-STH supply — недоступны бесплатно, "
                   "см. KNOWLEDGE_GAPS.md.")
     return "\n".join(lines)
+
+
+def format_liquidity_summary_text() -> str:
+    """НОЧЬ#3, Н3 (владелец, "следующий модуль по плану" после Пакета 3 М2):
+    EVENT-RADAR М5 -- сводка ликвидности рынка (`NEXT_PACKAGE.md`, п.4,
+    "НЕ начато"). `get_liquidity_summary()` (Пакет 12/13) уже существовал в
+    коде, но был мёртвым -- ни одна карточка его не вызывала. Эта функция --
+    первый реальный потребитель, добавлена в существующий "🔗 On-Chain"
+    экран (bot.py, `callback_data="onchain_info"`) -- уже информационный,
+    не боевой/сигнальный путь, ничего в нём не гейтует сделки/алерты
+    подписчикам. Liquidation heatmap НАМЕРЕННО не включён сюда (см.
+    докстринг `get_liquidity_summary()` -- решение уже принято раньше,
+    привязан к конкретному символу, здесь только рыночные метрики)."""
+    summary = get_liquidity_summary()
+    lines = ["💧 Ликвидность рынка"]
+
+    flow = summary["stablecoin_flow_30d"]
+    if flow.get("ok"):
+        pct = flow.get("flow_30d_pct")
+        usd = flow.get("flow_30d_usd")
+        sign = "+" if (pct or 0) >= 0 else ""
+        pct_txt = f"{sign}{pct:.1f}%" if pct is not None else "н/д"
+        lines.append(f"Стейблкоины (30д): {sign}${usd:,.0f} ({pct_txt})" if usd is not None
+                      else "Стейблкоины (30д): н/д")
+    else:
+        lines.append(f"Стейблкоины (30д): н/д ({flow.get('reason', 'источник недоступен')})")
+
+    dom = summary["usdt_dominance"]
+    if dom.get("ok") and dom.get("usdt_dominance_pct") is not None:
+        lines.append(f"USDT.D сейчас: {dom['usdt_dominance_pct']:.2f}% "
+                      f"(30д тренд недоступен бесплатно, см. докстринг)")
+    else:
+        lines.append(f"USDT.D: н/д ({dom.get('reason', 'источник недоступен')})")
+
+    lines.append("Liquidation heatmap — по символам отдельно (карточка монеты), "
+                  "не входит в эту рыночную сводку.")
+    return "\n".join(lines)
