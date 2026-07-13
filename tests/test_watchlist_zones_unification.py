@@ -88,16 +88,22 @@ def test_source_field_propagated_from_config(monkeypatch):
     assert alerts[0]["source"] == "Королев 13.07"
 
 
-def test_zones_unified_flag_switches_source(monkeypatch):
-    """Флаг ZONES_UNIFIED=False -- мгновенный откат на старый WATCHLIST_ZONES
-    (без редеплоя, только смена значения переменной окружения на Railway)."""
-    monkeypatch.setattr(bot, "ZONES_UNIFIED", True)
-    called = {"new": False, "old": False}
+def test_check_watchlist_always_calls_unified_path(monkeypatch):
+    """Пакет 18, п.1 (владелец): диагностика подтвердила живой alert BTC
+    13.07 20:49 шёл через unified-путь (ZONES_UNIFIED=true на Railway, без
+    override) -- LEGACY-ветка (check_watchlist_alerts() на WATCHLIST_ZONES)
+    и сам флаг ZONES_UNIFIED удалены из check_watchlist(), функция теперь
+    БЕЗУСЛОВНО вызывает check_watchlist_alerts_from_level_watch(). Откат
+    через переменную окружения больше недоступен -- сознательное решение
+    владельца после подтверждённой обкатки, не случайная потеря отката."""
+    called = {"new": False}
     monkeypatch.setattr(bot, "check_watchlist_alerts_from_level_watch",
                          lambda coins: called.__setitem__("new", True) or [])
-    monkeypatch.setattr(bot, "check_watchlist_alerts",
-                         lambda coins: called.__setitem__("old", True) or [])
     monkeypatch.setattr(bot, "watchlist_alerted", {})
+    assert not hasattr(bot, "check_watchlist_alerts"), \
+        "check_watchlist_alerts() (LEGACY) должна быть физически удалена, не просто неиспользуема"
+    assert not hasattr(bot, "ZONES_UNIFIED"), \
+        "ZONES_UNIFIED-флаг должен быть удалён вместе с LEGACY-веткой, не оставлен мёртвым"
 
     import asyncio
 
@@ -107,13 +113,6 @@ def test_zones_unified_flag_switches_source(monkeypatch):
 
     asyncio.run(bot.check_watchlist(_FakeBot(), {123}, []))
     assert called["new"] is True
-    assert called["old"] is False
-
-    called["new"] = called["old"] = False
-    monkeypatch.setattr(bot, "ZONES_UNIFIED", False)
-    asyncio.run(bot.check_watchlist(_FakeBot(), {123}, []))
-    assert called["new"] is False
-    assert called["old"] is True
 
 
 class _FakeUser:
@@ -244,7 +243,6 @@ def test_check_watchlist_alert_includes_rug_line_for_lab_not_for_btc(monkeypatch
         "BTCUSDT": [{"side": "LONG", "lo": 61840.9, "hi": 62285.0, "note": "поддержка"}],
     }
     monkeypatch.setattr(level_watch, "load_watch_zones", lambda *a, **kw: cfg)
-    monkeypatch.setattr(bot, "ZONES_UNIFIED", True)
     monkeypatch.setattr(bot, "watchlist_alerted", {})
     monkeypatch.setattr(level_watch, "format_liquidation_cluster_line",
                          lambda *a, **kw: "🗺 Ликвидации рядом: н/д")
