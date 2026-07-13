@@ -153,6 +153,91 @@ def test_fetch_defillama_stablecoins_success(monkeypatch):
     assert r == {"ok": True, "stablecoin_supply_usd": 123.0}
 
 
+def test_fetch_defillama_stablecoin_flow_30d_success(monkeypatch):
+    series = [{"date": str(i), "totalCirculatingUSD": {"peggedUSD": 100.0 + i}}
+              for i in range(40)]
+    monkeypatch.setattr(ocm.requests, "get", lambda url, timeout: _FakeResponse(series))
+    r = ocm.fetch_defillama_stablecoin_flow_30d()
+    assert r["ok"] is True
+    assert r["now_usd"] == 139.0  # index 39
+    assert r["usd_30d_ago"] == 109.0  # index 39-30=9 -> 100+9
+    assert r["flow_30d_usd"] == 30.0
+    assert round(r["flow_30d_pct"], 4) == round(30.0 / 109.0 * 100, 4)
+
+
+def test_fetch_defillama_stablecoin_flow_30d_insufficient_history(monkeypatch):
+    series = [{"date": str(i), "totalCirculatingUSD": {"peggedUSD": 100.0}} for i in range(10)]
+    monkeypatch.setattr(ocm.requests, "get", lambda url, timeout: _FakeResponse(series))
+    r = ocm.fetch_defillama_stablecoin_flow_30d()
+    assert r == {"ok": False, "reason": "DeFiLlama stablecoincharts: меньше 31 точки в ряду"}
+
+
+def test_fetch_defillama_stablecoin_flow_30d_missing_field(monkeypatch):
+    series = [{"date": str(i), "totalCirculatingUSD": {}} for i in range(40)]
+    monkeypatch.setattr(ocm.requests, "get", lambda url, timeout: _FakeResponse(series))
+    r = ocm.fetch_defillama_stablecoin_flow_30d()
+    assert r["ok"] is False
+
+
+def test_fetch_defillama_stablecoin_flow_30d_network_error(monkeypatch):
+    monkeypatch.setattr(ocm.requests, "get",
+                         lambda url, timeout: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = ocm.fetch_defillama_stablecoin_flow_30d()
+    assert r["ok"] is False
+
+
+def test_fetch_usdt_dominance_success(monkeypatch):
+    monkeypatch.setattr(ocm.requests, "get", lambda url, timeout: _FakeResponse(
+        {"data": {"market_cap_percentage": {"usdt": 8.12, "btc": 55.0}}}))
+    r = ocm.fetch_usdt_dominance()
+    assert r["ok"] is True
+    assert r["usdt_dominance_pct"] == 8.12
+    assert "недоступен бесплатно" in r["note"]
+
+
+def test_fetch_usdt_dominance_missing_field(monkeypatch):
+    monkeypatch.setattr(ocm.requests, "get", lambda url, timeout: _FakeResponse(
+        {"data": {"market_cap_percentage": {"btc": 55.0}}}))
+    r = ocm.fetch_usdt_dominance()
+    assert r["ok"] is False
+
+
+def test_fetch_usdt_dominance_network_error(monkeypatch):
+    monkeypatch.setattr(ocm.requests, "get",
+                         lambda url, timeout: (_ for _ in ()).throw(RuntimeError("boom")))
+    r = ocm.fetch_usdt_dominance()
+    assert r["ok"] is False
+
+
+def test_get_liquidity_summary_both_ok(monkeypatch):
+    monkeypatch.setattr(ocm, "fetch_defillama_stablecoin_flow_30d",
+                         lambda: {"ok": True, "flow_30d_usd": 1000.0})
+    monkeypatch.setattr(ocm, "fetch_usdt_dominance",
+                         lambda: {"ok": True, "usdt_dominance_pct": 8.0})
+    r = ocm.get_liquidity_summary()
+    assert r["ok"] is True
+    assert r["stablecoin_flow_30d"]["flow_30d_usd"] == 1000.0
+    assert r["usdt_dominance"]["usdt_dominance_pct"] == 8.0
+
+
+def test_get_liquidity_summary_partial_degradation(monkeypatch):
+    monkeypatch.setattr(ocm, "fetch_defillama_stablecoin_flow_30d",
+                         lambda: {"ok": False, "reason": "н/д"})
+    monkeypatch.setattr(ocm, "fetch_usdt_dominance",
+                         lambda: {"ok": True, "usdt_dominance_pct": 8.0})
+    r = ocm.get_liquidity_summary()
+    assert r["ok"] is True  # хотя бы один источник жив
+
+
+def test_get_liquidity_summary_both_fail(monkeypatch):
+    monkeypatch.setattr(ocm, "fetch_defillama_stablecoin_flow_30d",
+                         lambda: {"ok": False, "reason": "н/д"})
+    monkeypatch.setattr(ocm, "fetch_usdt_dominance",
+                         lambda: {"ok": False, "reason": "н/д"})
+    r = ocm.get_liquidity_summary()
+    assert r["ok"] is False
+
+
 def test_fetch_fear_greed_success(monkeypatch):
     monkeypatch.setattr(ocm.requests, "get", lambda url, timeout: _FakeResponse(
         {"data": [{"value": "26", "value_classification": "Fear"}]}))

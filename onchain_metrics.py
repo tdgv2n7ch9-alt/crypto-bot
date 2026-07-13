@@ -226,6 +226,62 @@ def fetch_defillama_stablecoins() -> dict:
     return {"ok": True, "stablecoin_supply_usd": usd}
 
 
+def fetch_defillama_stablecoin_flow_30d() -> dict:
+    """DeFiLlama -- изменение суммарного supply стейблкоинов за 30д (EVENT-RADAR
+    М5, "stablecoin flows"). Тот же эндпоинт, что fetch_defillama_stablecoins()
+    (уже отдаёт полный дневной ряд -- не нужен отдельный запрос), просто берём
+    точку 30 записей назад вместо только последней. Честно ok=False, если в
+    ряду меньше 31 точки (не выдумываем дельту без данных)."""
+    r = _safe_get_json("https://stablecoins.llama.fi/stablecoincharts/all")
+    if not r["ok"]:
+        return r
+    values = r["data"]
+    if not values or len(values) < 31:
+        return {"ok": False, "reason": "DeFiLlama stablecoincharts: меньше 31 точки в ряду"}
+    now_usd = (values[-1].get("totalCirculatingUSD") or {}).get("peggedUSD")
+    past_usd = (values[-31].get("totalCirculatingUSD") or {}).get("peggedUSD")
+    if now_usd is None or past_usd is None:
+        return {"ok": False, "reason": "DeFiLlama stablecoincharts: peggedUSD отсутствует в одной из точек"}
+    flow_usd = now_usd - past_usd
+    flow_pct = (flow_usd / past_usd * 100) if past_usd else None
+    return {"ok": True, "now_usd": now_usd, "usd_30d_ago": past_usd,
+            "flow_30d_usd": flow_usd, "flow_30d_pct": flow_pct}
+
+
+def fetch_usdt_dominance() -> dict:
+    """CoinGecko /global -- ТЕКУЩАЯ (не историческая) доля USDT в общей
+    рыночной капитализации крипторынка. ЧЕСТНО: 30-дневный тренд USDT.D
+    недоступен бесплатно -- историю глобальной капитализации CoinGecko отдаёт
+    только на платном Pro-тире (проверено при разработке этой функции,
+    /global возвращает только снэпшот на текущий момент, без исторического
+    ряда). Возвращаем только текущее значение, не выдумываем тренд."""
+    r = _safe_get_json("https://api.coingecko.com/api/v3/global")
+    if not r["ok"]:
+        return r
+    data = (r["data"] or {}).get("data") or {}
+    pct = (data.get("market_cap_percentage") or {}).get("usdt")
+    if pct is None:
+        return {"ok": False, "reason": "CoinGecko /global: market_cap_percentage.usdt отсутствует"}
+    return {"ok": True, "usdt_dominance_pct": pct,
+            "note": "только текущее значение -- 30д тренд недоступен бесплатно"}
+
+
+def get_liquidity_summary() -> dict:
+    """EVENT-RADAR М5 (Пакет 12/13) -- сводка ликвидности рынка: 30д поток
+    стейблкоинов (DeFiLlama) + текущая доминация USDT (CoinGecko). Каждый
+    источник деградирует независимо -- отказ одного не валит другой. НЕ
+    включает liquidation heatmap (тот уже существует отдельно в
+    derivatives_extra.compute_liquidation_heatmap()/bot.get_liq_data() --
+    привязан к конкретному символу и деривативному OKX-эндпоинту, здесь
+    только рыночные метрики без привязки к символу, тот же принцип
+    разделения, что get_free_onchain_snapshot()."""
+    stablecoin_flow = fetch_defillama_stablecoin_flow_30d()
+    usdt_dominance = fetch_usdt_dominance()
+    any_ok = stablecoin_flow.get("ok") or usdt_dominance.get("ok")
+    return {"ok": any_ok, "stablecoin_flow_30d": stablecoin_flow,
+            "usdt_dominance": usdt_dominance}
+
+
 def fetch_fear_greed() -> dict:
     """alternative.me -- Fear & Greed Index. Тот же публичный бесплатный
     эндпоинт, что уже используется в других карточках bot.py (Обзор,
