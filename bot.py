@@ -127,6 +127,7 @@ import etherscan_whale
 import derivatives_extra
 import event_radar
 import new_coin_scan
+import glossary
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -10993,6 +10994,12 @@ async def cmd_zones_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{github_note}")
 
 
+async def cmd_terminology(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Карточка v2 (Пакет 13) -- статический справочник терминов, см. glossary.py.
+    Публичная команда (не owner-only) -- это просто справка, не боевые данные."""
+    await update.message.reply_text(glossary.format_glossary_text(), parse_mode="Markdown")
+
+
 async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only общий health-check процесса (в отличие от /radar_status -- тот покрывает
     только памп-радар). Аптайм + heartbeat всех фоновых задач + источники данных +
@@ -11498,6 +11505,11 @@ def main():
     app.add_handler(CommandHandler("whales",       cmd_whales))
     app.add_handler(CommandHandler("patterns",     cmd_patterns))
     app.add_handler(CommandHandler("zones",        cmd_zones))
+    # "/терминология" из спецификации владельца -- Telegram bot_command entity
+    # надёжно распознаётся только для ASCII-имён команд (тот же принцип, что все
+    # остальные команды проекта -- /start, /health, /zones), поэтому ASCII-имя,
+    # текст ответа при этом на русском (см. glossary.format_glossary_text()).
+    app.add_handler(CommandHandler("terminology",  cmd_terminology))
     app.add_handler(CommandHandler("zones_set",    cmd_zones_set))
     app.add_handler(CommandHandler("health",       cmd_health))
     app.add_handler(CommandHandler("journal",   cmd_journal))
