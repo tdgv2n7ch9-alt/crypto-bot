@@ -4144,12 +4144,15 @@ def author_zones_status_summary() -> dict:
         symbol = it["symbol"]
         zone = it["zone"]
         price = price_map.get(symbol) or 0
+        dist = None
         if price:
-            status, _ = _limitki_zone_status(zone["side"], zone["lo"], zone["hi"], price)
+            status, dist = _limitki_zone_status(zone["side"], zone["lo"], zone["hi"], price)
         else:
             status = "н/д (нет цены)"
         counts[status] = counts.get(status, 0) + 1
-        by_symbol.append({"symbol": symbol, "side": zone["side"], "status": status})
+        by_symbol.append({"symbol": symbol, "side": zone["side"], "status": status,
+                           "price": price, "distance_pct": dist,
+                           "lo": zone["lo"], "hi": zone["hi"]})
 
     return {"total": len(items), "counts": counts, "zones": by_symbol}
 
