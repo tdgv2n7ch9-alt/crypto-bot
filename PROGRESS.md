@@ -7065,3 +7065,94 @@ traceback, только уже известный CoinGecko 429 (rate-limit на
 `/zones` в Telegram для финальной проверки с его стороны.
 
 py_compile чист, полный pytest 890 passed/1 skipped.
+
+## 2026-07-13 -- Пакет 15: миграция /precision финалист-шага на fa_engine + analyze_market() удалён
+
+**Диф-отчёт ДО переключения** (по инструкции владельца, тот же принцип, что
+и EMA-стек diff): живой прогон `full_analysis()` (OLD) vs
+`fa_engine.build_full_analysis()` (NEW) на 5 реальных символах
+(BTC/ETH/SOL + 2 мелких по рангу >300, живой список топ-500): BTC LONG→
+NEUTRAL, ETH LONG→LONG (R:R 0.27→2.2), SOL LONG(actionable)→LONG(no-setup,
+R:R-гейт), BEAM LONG rocket76(!)→SHORT score12(!), LOUZI ok:False
+(CoinGecko 429 в момент fa_engine-фетча). Владелец: "флипы -- аргумент ЗА
+миграцию, не против: старый путь показывал фиктивный R:R 0.27 и
+завышенные ракеты". Больше символов смотреть не потребовалось.
+
+**Честная находка ДО работы**: `/coin` уже был мигрирован на `fa_engine`
+РАНЕЕ (Пакет 10 М3, 2026-07-12) -- `ENGINE_UNIFICATION.md` §3.6 был
+устаревшим на этот счёт (писался до той миграции). `/precision` был
+частично мигрирован в Пакете 10 М3, но НЕ на `fa_engine` -- финалист-шаг
+шёл через `real_full_analysis()` (третий по счёту движок для одной и той
+же карточки). Реальный объём Пакета 15 -- перевести именно этот шаг на
+ЕДИНЫЙ путь с `/full`/`/coin`.
+
+**Решения владельца** (полностью, см. предыдущее сообщение в диалоге):
+1. ДА -- финалист-шаг `/precision` на `fa_engine`, флипы BTC/SOL/BEAM --
+   аргумент за, не против.
+2. 500-монетный скан остаётся на дешёвом `full_analysis()` (Пакет 10 М3,
+   стоимость) -- мигрирует ТОЛЬКО финалист-шаг. Строка "R:R" в карточке
+   финалиста обязана быть структурной или честное "н/д" -- никаких 0.27.
+3. Вариант (a): мигрируем только заявленный скоуп, `full_analysis()`
+   остаётся load-bearing для `check_entry_zones`/`send_signals_batch`/
+   `cmd_rockets` -- отдельные решения, `check_entry_zones` (боевые алерты
+   подписчикам) требует отдельного "да" с diff-ом.
+4. ДА -- `analyze_market()` удалить как мёртвый код тем же проходом.
+   Доп. находка: inline-дубль `cmd_rockets` в `callback_handler()`
+   ("rockets" callback, отдельная копия той же логики, шестая копия
+   price×OI-класса дублирования) -- зафиксирован в `ENGINE_UNIFICATION.md`,
+   НЕ мигрирован.
+
+**Реализация**:
+- `bot.PRECISION_FA_MIGRATED` (env, default `true`) -- флаг мгновенного
+  отката на `real_full_analysis()` без редеплоя (тот же паттерн, что
+  `ZONES_UNIFIED`/`MENU_V2_ENABLED`).
+- `bot._precision_fields_from_fa_engine(fa_result, a_old)` -- новый чистый
+  адаптер: превращает вложенный результат `fa_engine.build_full_analysis()`
+  (block1_bias/block11_trade_plan/...) в плоские поля, которые уже ожидает
+  карточка `/precision` (`a['tp1']`/`a['sl']`/`a['rr']`/...). Три честных
+  исхода: `ok:False` (живой кейс LOUZI) -> tp1/tp2/tp3/sl/rr=None +
+  `rr_na_reason`; `ok:True has_setup:False` (гейт/чеклист/K-LVL не пройден)
+  -> то же самое, причина из `block11_trade_plan.reason`; `ok:True
+  has_setup:True` -> реальные entry/SL/TP1-3/R:R от
+  `ta_extra.build_trade_from_structure()`. price/rank/vol/rsi_4h/ch1h-90d
+  сохраняются от `a_old` (чистая quote-математика `full_analysis()`, не
+  зависит от исхода `fa_engine`).
+- `cmd_precision()`: финалист-цикл вызывает `fa_engine.build_full_analysis()`
+  (try/except -> `None` при исключении, не крэш) под флагом, иначе старый
+  `real_full_analysis()`-путь. Карточка: TP1/TP2/TP3/SL печатают "н/д" при
+  `None`, строка R:R -- `1:{rr:.1f}` либо `н/д (<причина>)` -- старый
+  фиксированный R:R 0.27 структурно недостижим в новом коде.
+- `analyze_market()` удалён целиком (`bot.py`, было ~68 строк) -- 0 вызовов
+  подтверждено `grep` по всему `bot.py` (только определение). Единственный
+  потребитель формы его возврата, `build_overview_text()`, теперь тоже
+  полностью мёртв (0 вызовов) -- честно зафиксировано в
+  `ENGINE_UNIFICATION.md`, НЕ удалён (владелец авторизовал только
+  `analyze_market()`, скоуп не расширяю неявно).
+
+**Тесты** (`tests/test_precision_fa_migration.py`, 12 новых): 6 юнит-тестов
+на `_precision_fields_from_fa_engine()` (все три честных исхода + NEUTRAL-
+bias + сохранение полей скана), grep-тест на исходник `cmd_precision`
+(подтверждает вызов `fa_engine.build_full_analysis` под флагом, наличие
+отката на `real_full_analysis`), 5 end-to-end тестов на реальном
+`cmd_precision()` с замоканными Telegram/сетевыми вызовами (has_setup=True
+-> реальный R:R в тексте карточки; has_setup=False -> честное "н/д
+(причина)", старый 0.27/0.3x не проскакивает; `ok:False`
+рейт-лимит-подобный кейс LOUZI -> "н/д", не крэш; исключение внутри
+`fa_engine.build_full_analysis()` -> тоже "н/д", не крэш; откат флага
+`PRECISION_FA_MIGRATED=False` -> `fa_engine` не вызывается вообще, старый
+путь работает).
+
+py_compile (`bot.py`, `fa_engine.py`) чист. Полный pytest: **902
+passed, 1 skipped** (890 было + 12 новых) -- без регрессий.
+
+`ENGINE_UNIFICATION.md` обновлён: §3 п.6 сокращён (ссылка на новое
+приложение), новое приложение "Пакет 15" -- таблица 6 вызовов
+`full_analysis()` со статусом каждого (3 мигрировано/удалено, 3
+load-bearing с указанием причины), честная запись про 6-ю копию
+price×OI-класса дублирования (`callback_handler` inline "rockets"),
+честная запись про `build_overview_text()` (осиротевший мёртвый код,
+не в скоупе).
+
+Деплой/живая верификация -- следующим шагом (push -> `railway deployment
+list` -> `railway logs` -> просьба владельцу отправить `/precision` и
+`/coin` из Telegram).

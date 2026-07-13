@@ -2566,75 +2566,6 @@ def format_watchlist_rug_line(symbol: str, coin: dict) -> str:
     return rug_radar.format_rug_alert_line(rug_risk)
 
 
-def analyze_market(btc, eth, gm, coins):
-    bp = btc.get("price", 0); ep = eth.get("price", 0)
-    bd = gm.get("btc_dominance", 0); ed = gm.get("eth_dominance", 0)
-    od = 100 - bd - ed
-    tm = gm.get("total_mcap", 0); mc = gm.get("mcap_change_24h", 0)
-
-    sup = next((z for z in BTC_ZONES["support"]    if bp > z["level"]), None)
-    res = next((z for z in BTC_ZONES["resistance"] if bp < z["level"]), None)
-    if sup: sup["dist"] = (bp - sup["level"]) / bp * 100
-    if res: res["dist"] = (res["level"] - bp) / bp * 100
-
-    pos = sum(1 for c in coins if c["quote"]["USDT"].get("percent_change_24h", 0) > 0)
-    sp  = pos / len(coins) * 100 if coins else 50
-
-    if sp >= 65:   sent = " "
-    elif sp >= 50: sent = "  "
-    elif sp >= 35: sent = "  "
-    else:          sent = " "
-
-    dom_sig    = (" BTC     " if bd > 59 else
-                  (" BTC.D " if bd > 56 else
-                   " BTC.D     "))
-    others_sig = ("  " if od < 8.2 else
-                  ("  " if od > 8.8 else "  "))
-    total_sig  = ("  " if mc >= 2 else
-                  (" "   if mc >= 0 else
-                   (" "   if mc >= -2 else "  ")))
-
-    bulls = sum([btc.get("ch24h", 0) > 1, eth.get("ch24h", 0) > 1, bd < 57, mc > 0, od > 8.3])
-    if bulls >= 4:   verdict = "    "
-    elif bulls >= 3: verdict = "     "
-    elif bulls >= 2: verdict = "    "
-    elif bulls >= 1: verdict = "     "
-    else:            verdict = "     "
-
-    analyzed   = [(c, full_analysis(c)) for c in coins]
-
-    #  : score>=3  ch24h>0  ch7d>0 ( )
-    top_longs  = sorted(
-        [(c,a) for c,a in analyzed
-         if a["score"] >= 3
-         and a["ch24h"] > 0 and a["ch7d"] > 0
-         and not a.get("suspicious", False)
-         and a["rsi_4h"] <= 78
-         and a["vol"] >= 1_000_000],
-        key=lambda x: (x[1]["score"], x[1]["rocket"]), reverse=True
-    )[:5]
-
-    top_shorts = sorted(
-        [(c,a) for c,a in analyzed
-         if a["score"] <= -4
-         and a["ch24h"] < 0
-         and not a.get("suspicious", False)
-         and a["vol"] >= 1_000_000],
-        key=lambda x: x[1]["score"]
-    )[:5]
-
-    return {
-        "btc_price": bp, "btc_ch24h": btc.get("ch24h", 0),
-        "eth_price": ep, "eth_ch24h": eth.get("ch24h", 0),
-        "btc_dom": bd, "eth_dom": ed, "others_dom": od,
-        "total_mcap": tm, "mcap_ch": mc,
-        "btc_sup": sup, "btc_res": res,
-        "sentiment": sent, "sentiment_pct": sp,
-        "dom_signal": dom_sig, "others_signal": others_sig,
-        "total_signal": total_sig, "verdict": verdict,
-        "top_longs": top_longs, "top_shorts": top_shorts,
-    }
-
 def build_overview_text(ms: dict) -> str:
     sup = ms["btc_sup"]; res = ms["btc_res"]
     s_line = f"   : ${sup['level']:,} ({sup['label']})  {sup['dist']:.1f}% " if sup else ""
@@ -2819,6 +2750,14 @@ MENU_V2_ENABLED = os.getenv("MENU_V2_ENABLED", "false").strip().lower() in ("1",
 # им стал journal/watch_zones.json (тот же level_watch.load_watch_zones(), что
 # /zones и /zones_set уже используют). default true после приёмки владельцем.
 ZONES_UNIFIED = os.getenv("ZONES_UNIFIED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# Пакет 15 (владелец "да" 2026-07-13, ENGINE_UNIFICATION.md): /precision финалист-шаг
+# (топ-5 после отбора) переведён с real_full_analysis() на fa_engine.build_full_analysis()
+# -- тот же движок, что /full и /coin (тот же принцип унификации, что ZONES_UNIFIED выше).
+# 500-монетный отбор ОСТАЁТСЯ на full_analysis() (Пакет 10 М3, стоимость) -- флаг касается
+# ТОЛЬКО пересчёта уже отобранных 5 финалистов перед рендером карточки. default true после
+# приёмки владельцем; false -- мгновенный откат на real_full_analysis() без редеплоя.
+PRECISION_FA_MIGRATED = os.getenv("PRECISION_FA_MIGRATED", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 def main_kb_v2():
@@ -6293,11 +6232,69 @@ def precision_shot_analysis(coin: dict, a: dict) -> dict:
     }
 
 
+def _precision_fields_from_fa_engine(fa_result: dict, a_old: dict) -> dict:
+    """Пакет 15 (владелец "да" 2026-07-13): адаптер fa_engine.build_full_analysis()
+    (вложенные block1_bias/block11_trade_plan/...) -> плоские поля, которые уже
+    ожидает карточка /precision (a['tp1']/a['sl']/a['rr']/a['is_long']/... -- тот
+    же плоский формат, что раньше давали full_analysis()/real_full_analysis()).
+
+    Три честных исхода (владелец, п.2 решения): "R:R теперь обязана быть
+    структурной или честное 'н/д' -- никаких 0.27":
+    - fa_result нет / ok=False (живой кейс LOUZI: CoinGecko 429 в момент
+      fa_engine-фетча свечей) -- tp1/tp2/tp3/sl/rr = None, rr_na_reason
+      объясняет причину. price/rank/vol/rsi_4h/ch1h-90d остаются от a_old --
+      это чистая quote-математика full_analysis(), не требует доп. сетевых
+      вызовов и не зависит от того, упал ли fa_engine.
+    - ok=True, has_setup=False (гейт/чеклист/K-LVL не пройден, либо
+      direction не определён -- bias NEUTRAL) -- tp1/tp2/tp3/sl/rr = None,
+      rr_na_reason = причина из block11_trade_plan.reason. Раньше здесь были
+      фиксированные +4/+8/+15%/-15% -- ИМЕННО тот баг, который уже фиксил
+      /coin (см. cmd_coin docstring).
+    - ok=True, has_setup=True -- реальные entry/SL/TP1-3/R:R от
+      ta_extra.build_trade_from_structure() (то же число, что видят /full и
+      /coin для той же монеты в тот же момент).
+
+    is_long: обновляется на bias fa_engine ТОЛЬКО когда bias однозначен
+    (LONG/SHORT) -- при NEUTRAL (== has_setup=False по причине "направление
+    не определено") заголовок карточки сохраняет прежнюю оценку из a_old,
+    т.к. явного NEUTRAL-рендера у /precision карточки нет; честность при
+    NEUTRAL обеспечивается самой строкой R:R "н/д", не переключением
+    заголовка."""
+    a = dict(a_old)
+    ok = bool(fa_result and fa_result.get("ok"))
+    a["fa_engine_ok"] = ok
+    if not ok:
+        a["tp1"] = a["tp2"] = a["tp3"] = a["sl"] = None
+        a["rr"] = None
+        a["rr_na_reason"] = (fa_result.get("error") if fa_result else "нет ответа от fa_engine") or "нет данных"
+        return a
+
+    b1 = fa_result.get("block1_bias", {}) or {}
+    b11 = fa_result.get("block11_trade_plan", {}) or {}
+    bias = b1.get("bias", "NEUTRAL")
+    a["price"] = fa_result.get("price", a.get("price"))
+    a["candles_4h"] = fa_result.get("candles_4h")
+    a["zones"] = fa_result.get("zones")
+    if bias in ("LONG", "SHORT"):
+        a["is_long"] = (bias == "LONG")
+
+    if b11.get("has_setup"):
+        a["tp1"], a["tp2"], a["tp3"] = b11["tp1"], b11["tp2"], b11["tp3"]
+        a["sl"] = b11["sl"]
+        a["rr"] = b11["rr_tp1"]
+        a["rr_na_reason"] = None
+    else:
+        a["tp1"] = a["tp2"] = a["tp3"] = a["sl"] = None
+        a["rr"] = None
+        a["rr_na_reason"] = b11.get("reason", "нет валидного сетапа")
+    return a
+
+
 async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
     /7  PRECISION SHOTS
     1-3     x5-x10
-       5+ 
+       5+
     """
     msg = await update.message.reply_text(
         " *PRECISION SHOTS*\n  -500...\n~45 ",
@@ -6318,26 +6315,39 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     results.sort(key=lambda x: x[2]["ps"], reverse=True)
     top = results[:5]  #  -5
 
-    # Пакет 10 М3 (владелец "да" -- миграция с deprecated full_analysis()):
-    # отбор top-5 по всем 500 монетам ОСТАЁТСЯ на лёгком full_analysis() --
-    # precision_shot_analysis() classifies по %-паттернам из quote-данных
-    # (ch1h/ch24h/vol_ratio/rank), это не тот баг, что был у /coin ("карточка
-    # показывала LONG с R:R 1:0.3" -- фиксированные TP/SL из full_analysis()).
-    # Замена ВСЕХ 500 на real_full_analysis() стоила бы 500 реальных Binance-
+    # Пакет 10 М3: отбор top-5 по всем 500 монетам ОСТАЁТСЯ на лёгком
+    # full_analysis() -- precision_shot_analysis() classifies по %-паттернам из
+    # quote-данных (ch1h/ch24h/vol_ratio/rank), это не тот баг, что был у /coin.
+    # Замена ВСЕХ 500 на структурный движок стоила бы 500 реальных Binance-
     # фетчей за вызов -- не оправдано ради pattern-classification, который не
-    # меняется от источника (проверено: full_analysis()/real_full_analysis()
-    # читают ch1h/ch24h/vol_ratio/rank из ОДНИХ и тех же quote-полей напрямую,
-    # см. real_full_analysis() строки после `q = coin["quote"]["USDT"]`).
-    # ТОЛЬКО для уже отобранных 5 финалистов -- пересчёт через
-    # real_full_analysis() ради честных TP/SL/R:R/entry (та же логика,
-    # что уже исправила /coin), карточка ниже РЕНДЕРИТСЯ уже с новым `a`.
+    # меняется от источника.
+    #
+    # Пакет 15 (владелец "да" 2026-07-13, ENGINE_UNIFICATION.md): финалист-шаг
+    # (уже отобранные 5) переведён с real_full_analysis() на
+    # fa_engine.build_full_analysis() -- ЕДИНЫЙ путь с /full и /coin (не третий
+    # движок). За флагом PRECISION_FA_MIGRATED (default true) -- мгновенный
+    # откат без редеплоя. _precision_fields_from_fa_engine() честно превращает
+    # fa_engine=ok:False (живой кейс LOUZI, CoinGecko 429) ИЛИ has_setup=False
+    # в tp1/tp2/tp3/sl/rr=None + rr_na_reason -- рендер карточки ниже обязан
+    # печатать "н/д (<причина>)", а не старый фиксированный R:R 0.27.
     top_fixed = []
     for coin, a_old, ps_data in top:
-        try:
-            a_new = real_full_analysis(coin)
-        except Exception as e:
-            log.error(f"[PRECISION] real_full_analysis {coin['symbol']}: {e}")
-            a_new = a_old  # честный фоллбек на старое значение при сбое, не молчание
+        sym = coin["symbol"]
+        if PRECISION_FA_MIGRATED:
+            try:
+                fa_result = fa_engine.build_full_analysis(sym, coin)
+            except Exception as e:
+                log.error(f"[PRECISION] fa_engine {sym}: {type(e).__name__}: {e}")
+                fa_result = None
+            a_new = _precision_fields_from_fa_engine(fa_result, a_old)
+            if not a_new.get("fa_engine_ok"):
+                log.info(f"[PRECISION] {sym}: fa_engine н/д ({a_new.get('rr_na_reason')}), карточка честно покажет н/д")
+        else:
+            try:
+                a_new = real_full_analysis(coin)
+            except Exception as e:
+                log.error(f"[PRECISION] real_full_analysis {sym}: {e}")
+                a_new = a_old
         top_fixed.append((coin, a_new, ps_data))
     top = top_fixed
 
@@ -6398,6 +6408,8 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         side_t  = "LONG" if is_long else "SHORT"
 
         def pct(t, p=a["price"]):
+            if t is None:
+                return "н/д"
             d = (t - p) / p * 100
             v = d if is_long else -d
             return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
@@ -6422,16 +6434,24 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for f_ in facts:
             lines.append(f"  {f_}")
 
+        # Пакет 15 (владелец "да" 2026-07-13): TP1/TP2/TP3/SL/R:R теперь честно
+        # "н/д (<причина>)" вместо фиктивного фиксированного R:R 0.27, когда
+        # fa_engine недоступен (кейс LOUZI, CoinGecko 429) или не нашёл
+        # валидного структурного сетапа (has_setup=False) -- см.
+        # _precision_fields_from_fa_engine().
+        rr_na = a.get("rr") is None
+        rr_line = (f" R:R `н/д ({a.get('rr_na_reason', 'нет данных')})`"
+                   if rr_na else f" R:R `1:{a['rr']:.1f}`")
         lines += [
             "",
             f" :  `{fp(a['price'])}`",
-            f" TP1:  `{fp(a['tp1'])}`  ({pct(a['tp1'])})",
-            f" TP2:  `{fp(a['tp2'])}`  ({pct(a['tp2'])})",
-            f" TP3:  `{fp(a['tp3'])}`  ({pct(a['tp3'])})",
-            f" SL:   `{fp(a['sl'])}`",
+            f" TP1:  `{fp(a['tp1']) if a['tp1'] is not None else 'н/д'}`  ({pct(a['tp1'])})",
+            f" TP2:  `{fp(a['tp2']) if a['tp2'] is not None else 'н/д'}`  ({pct(a['tp2'])})",
+            f" TP3:  `{fp(a['tp3']) if a['tp3'] is not None else 'н/д'}`  ({pct(a['tp3'])})",
+            f" SL:   `{fp(a['sl']) if a['sl'] is not None else 'н/д'}`",
             "",
             "",
-            f" R:R `1:{a['rr']:.1f}`  |   {vol_str}  |  Rank `#{a['rank']}`",
+            f"{rr_line}  |   {vol_str}  |  Rank `#{a['rank']}`",
             f" RSI 4H `{a['rsi_4h']:.0f}`  |  ST: `{a['st_label']}`",
             f" 1H`{fc(a['ch1h'])}`  24H`{fc(a['ch24h'])}`  7D`{fc(a['ch7d'])}`  90D`{fc(a['ch90d'])}`",
         ]
