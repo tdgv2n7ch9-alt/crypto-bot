@@ -11541,6 +11541,26 @@ async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
+def _zones_set_usage_hint() -> str:
+    """Владелец, 2026-07-13 (Задача D п.3, хвост): подсказка синтаксиса --
+    показывается и на "нет аргументов", и на любую ошибку разбора/формата, чтобы
+    с телефона не нужно было держать синтаксис в голове после опечатки. Явно
+    проговаривает full-replace (не merge) и что создание нового символа -- та
+    же операция, что и обновление существующего (см.
+    tests/test_watchlist_zones_unification.py::
+    test_zones_set_accepts_brand_new_symbol_not_only_updates_existing)."""
+    return (
+        "Использование: `/zones_set {\"updated\":\"YYYY-MM-DD\",\"source\":\"...\","
+        "\"ETHUSDT\":[{\"side\":\"LONG\",\"lo\":1.0,\"hi\":2.0,\"prio\":1}]}`\n\n"
+        "⚠️ Полностью ЗАМЕНЯЕТ активные зоны (не дописывает) — включай в JSON "
+        "ВСЕ символы, которые должны остаться, иначе отсутствующие в присланном "
+        "JSON пропадут из алертов. Старая версия архивируется автоматически "
+        "перед заменой.\n\n"
+        "Новый символ (которого ещё нет в конфиге) заводится тем же способом — "
+        "просто добавь его ключ в JSON, отдельной команды для создания нет."
+    )
+
+
 async def cmd_zones_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner-only: /zones_set {...json...} -- ПОЛНОСТЬЮ заменяет активную разметку
     (journal/watch_zones.json), чтобы владелец обновлял с телефона без Claude Code.
@@ -11555,20 +11575,19 @@ async def cmd_zones_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     raw_parts = update.message.text.split(None, 1)
     if len(raw_parts) < 2 or not raw_parts[1].strip():
-        await update.message.reply_text(
-            "Использование: `/zones_set {\"updated\":\"YYYY-MM-DD\",\"source\":\"...\","
-            "\"ETHUSDT\":[{\"side\":\"LONG\",\"lo\":1.0,\"hi\":2.0,\"prio\":1}]}`\n\n"
-            "Полностью заменяет активные зоны (не дописывает) — старая версия "
-            "архивируется автоматически.",
-            parse_mode="Markdown")
+        await update.message.reply_text(_zones_set_usage_hint(), parse_mode="Markdown")
         return
     try:
         new_config = json.loads(raw_parts[1])
     except Exception as e:
-        await update.message.reply_text(f"❌ Не удалось разобрать JSON: {e}")
+        await update.message.reply_text(
+            f"❌ Не удалось разобрать JSON: {e}\n\n{_zones_set_usage_hint()}",
+            parse_mode="Markdown")
         return
     if not isinstance(new_config, dict):
-        await update.message.reply_text("❌ Ожидался JSON-объект (dict) верхнего уровня.")
+        await update.message.reply_text(
+            f"❌ Ожидался JSON-объект (dict) верхнего уровня.\n\n{_zones_set_usage_hint()}",
+            parse_mode="Markdown")
         return
     if "updated" not in new_config:
         new_config["updated"] = time.strftime("%Y-%m-%d")

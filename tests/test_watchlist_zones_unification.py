@@ -270,3 +270,53 @@ def test_check_watchlist_alert_includes_rug_line_for_lab_not_for_btc(monkeypatch
     btc_text = next(t for t in sent if "BTCUSDT" in t)
     assert "RUG-RADAR" in lab_text
     assert "RUG-RADAR" not in btc_text
+
+
+def test_zones_set_malformed_json_reply_includes_syntax_hint(monkeypatch):
+    """Владелец, 2026-07-13 (Задача D п.3, хвост): подсказка синтаксиса не только
+    на "нет аргументов", но и на реальную ошибку разбора -- с телефона после
+    опечатки в JSON должен сразу увидеть пример правильной команды, не только
+    голое исключение json.loads()."""
+    import asyncio
+    import os as _os
+
+    _os.environ.setdefault("OWNER_CHAT_ID", "7009350191")
+    owner_id = int(_os.getenv("OWNER_CHAT_ID", "7009350191"))
+
+    update = _FakeZonesSetUpdate(owner_id, '/zones_set {"broken json,,,')
+    asyncio.run(bot.cmd_zones_set(update, None))
+
+    replies = update.message.reply_text.calls
+    assert len(replies) == 1
+    assert "Не удалось разобрать JSON" in replies[0]
+    assert "Использование:" in replies[0]
+    assert "/zones_set" in replies[0]
+
+
+def test_zones_set_non_dict_json_reply_includes_syntax_hint(monkeypatch):
+    """Валидный JSON, но не объект верхнего уровня (например, список) -- тоже
+    ошибка формата, тоже должна показывать подсказку синтаксиса."""
+    import asyncio
+    import os as _os
+
+    _os.environ.setdefault("OWNER_CHAT_ID", "7009350191")
+    owner_id = int(_os.getenv("OWNER_CHAT_ID", "7009350191"))
+
+    update = _FakeZonesSetUpdate(owner_id, '/zones_set ["not", "a", "dict"]')
+    asyncio.run(bot.cmd_zones_set(update, None))
+
+    replies = update.message.reply_text.calls
+    assert len(replies) == 1
+    assert "Ожидался JSON-объект" in replies[0]
+    assert "Использование:" in replies[0]
+
+
+def test_zones_set_usage_hint_warns_full_replace_not_merge():
+    """Подсказка явно предупреждает про full-replace семантику -- см.
+    level_watch.replace_watch_zones docstring и
+    test_level_watch.py::test_replace_watch_zones_is_full_replace_not_merge.
+    Без этого предупреждения владелец мог бы случайно стереть остальные
+    символы, прислав /zones_set только с одним новым тикером."""
+    hint = bot._zones_set_usage_hint()
+    assert "ЗАМЕНЯЕТ" in hint
+    assert "не дописывает" in hint
