@@ -2385,7 +2385,9 @@ WATCHLIST_ZONES = {
         "bias":  "LONG",
     },
     "BTC": {
-        "long":  [62000, 63000],
+        "long":  [61840.9, 62285.0],  # синхронизировано с journal/watch_zones.json BTCUSDT LONG (Королев 13.07),
+                                       # см. PROGRESS.md -- WATCHLIST_ZONES и watch_zones.json две отдельные
+                                       # системы, эта строка была stale (62000-63000) на живом прогоне 13.07
         "note":  "  $62K =  .  $70K+",
         "source": "",
         "bias":  "LONG",
@@ -5681,13 +5683,21 @@ async def whale_monitor(bot: Bot):
 
 async def event_radar_monitor(bot: Bot):
     """EVENT-RADAR М2 (Пакет 13) -- листинги/делистинги, см. event_radar.py.
-    Опрашивает Bybit+Binance announcement-каналы, шлёт владельцу алерт на любой
-    делистинг + на листинг монеты из WATCHLIST_ZONES. Best-effort: ошибка
-    источника внутри event_radar.py уже не бросается наружу (fail-soft fetch_*),
-    здесь ловим только неожиданное (например, сбой самой отправки в Telegram)."""
+    Опрашивает Bybit+Binance announcement-каналы, шлёт владельцу алерт только
+    для событий, релевантных нашим спискам (топ-729 ∪ watch_zones.json ∪
+    WATCHLIST_ZONES/портфель) -- ПЕРЕСМОТРЕНО 2026-07-13 по итогам живого
+    прогона (раньше было "любой делистинг -- алерт" без фильтра релевантности,
+    см. event_radar.should_alert()). Best-effort: ошибка источника внутри
+    event_radar.py уже не бросается наружу (fail-soft fetch_*), здесь ловим
+    только неожиданное (например, сбой самой отправки в Telegram)."""
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     try:
-        alerts = event_radar.poll_and_get_alerts(watch_symbols=set(WATCHLIST_ZONES.keys()))
+        watch_zones_symbols = {k for k in level_watch.load_watch_zones().keys()
+                                if k not in ("updated", "source")}
+        watch_symbols = set(WATCHLIST_ZONES.keys()) | watch_zones_symbols
+        tracked_symbols = {c["symbol"] for c in get_all_coins()}
+        alerts = event_radar.poll_and_get_alerts(watch_symbols=watch_symbols,
+                                                   tracked_symbols=tracked_symbols)
     except Exception as e:
         log.error(f"[EVENT-RADAR] poll failed: {e}")
         return
@@ -6316,12 +6326,22 @@ async def check_watchlist(bot, chat_ids, coins):
         if now_ts - last < 1800:  #     30 
             continue
         watchlist_alerted[sym] = now_ts
+        # Владелец, 2026-07-13 (живой прогон): обязательная строка ликвидационных
+        # кластеров ±1% в алерте (или честное "н/д") -- тот же паттерн, что
+        # level_watch.format_liquidation_cluster_line() уже даёт для zone-touch
+        # алертов в другом месте проекта.
+        try:
+            liq_line = level_watch.format_liquidation_cluster_line(
+                sym, {"lo": al["lo"], "hi": al["hi"], "side": al["bias"]}, get_liq_data_fn=get_liq_data)
+        except Exception as e:
+            liq_line = f"🗺 Ликвидации рядом: н/д (ошибка: {e})"
         text = (
             f" *   !*\n"
             f" {now_utc3()}\n\n"
             f"{al['emoji']} *{sym}USDT  {al['bias']}*\n"
             f" : `{fp(al['price'])}`\n"
-            f" : `{fp(al['lo'])}  {fp(al['hi'])}`\n\n"
+            f" : `{fp(al['lo'])}  {fp(al['hi'])}`\n"
+            f"{liq_line}\n\n"
             f" {al['note']}\n"
             f" : {al['source']}\n\n"
             f" : 2%  | SL \n\n"

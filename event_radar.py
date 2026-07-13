@@ -4,6 +4,22 @@ event_radar.py -- EVENT-RADAR М2 (Пакет 13, 2026-07-13): листинги/
 платного DropsTab: "Bybit announcements API и Binance CMS API проверены живьём
 (200 OK) -- строй на них, без платных зависимостей".
 
+ФИКС 2026-07-13 (живой прогон, скрин владельца, 3 подтверждённых дефекта):
+  1. Парсер тикеров переписан на key-verb extraction (Delist/Remove/Cease
+     Support/Monitoring Tag/List) + валидация против known_symbols (топ-729 +
+     watch/портфель + живой список инструментов Bybit) -- старый парсер ловил
+     только тикеры с суффиксом котировки (USDT/BTC/...), реальные заголовки
+     вида "Will Delist TST & IOTX" (без суффикса) вообще не разбирались.
+  2. Анти-бэкфилл: события старше BACKFILL_WINDOW_HOURS (48ч) не алертятся в
+     чат (см. is_recent()) -- журнал/дайджест их всё равно видят.
+  3. Фильтр шума (classify_noise()): Binance Alpha / Selected Stocks /
+     margin-only-без-spot -- в журнал, не в чат. Правило should_alert()
+     пересмотрено: раньше "любой делистинг -- алерт" без проверки
+     релевантности, теперь симметрично для листинга и делистинга -- нужно
+     пересечение с tracked_symbols/watch_symbols.
+  4. Формат алерта приведён к стандарту карточек (card_v2.SEP, моноширинные
+     тикеры) + обязательная строка портфельной релевантности.
+
 Источники (оба проверены прямым curl 2026-07-13, точные поля -- НЕ пересказ, сырой
 JSON смотрен глазами, см. PROGRESS.md):
 
@@ -67,6 +83,8 @@ import time
 
 import requests
 
+import card_v2
+
 log = logging.getLogger(__name__)
 
 BYBIT_ANNOUNCEMENT_URL = "https://api.bybit.com/v5/announcements/index"
@@ -81,36 +99,159 @@ SEEN_IDS_PATH = "data/event_radar/seen_ids.json"
 MAX_SEEN_IDS = 2000  # плоский список -- старые записи за пределами разумного окна поллинга не нужны
 EVENTS_DIR = "data/event_radar"
 
+BACKFILL_WINDOW_HOURS = 48  # анти-бэкфилл (владелец, 2026-07-13, живой прогон): старее -- только в журнал
+
 _QUOTE_SUFFIXES = ("USDT", "USDC", "FDUSD", "TUSD", "BUSD", "BTC", "ETH", "EUR", "TRY", "BRL")
 
+# Ключевые глаголы объявлений о листинге/делистинге -- живой прогон 13.07 нашёл
+# реальные заголовки со всеми этими формулировками (Bybit/Binance). Символы у
+# бирж после такого глагола идут ОТКРЫТЫМ ТЕКСТОМ (не обязательно с суффиксом
+# котировки -- "...Will Delist TST & IOTX..." не имеет суффикса USDT вообще,
+# прошлая версия парсера такое не находила).
+_KEY_VERB_RE = re.compile(
+    r'(?:Delist(?:ing)?s?|Remov(?:e|al|ing)|Cease(?:s)?\s+Support(?:s)?(?:\s+for)?|'
+    r'Monitoring\s+Tag(?:s)?(?:\s+(?:on|for))?|List(?:ing)?s?)\s*(?:of|for)?\s*[:\-]?\s*',
+    re.IGNORECASE)
 
-def extract_symbols_from_title(title: str) -> list:
-    """Best-effort извлечение тикеров из заголовка объявления биржи. См. докстринг
-    модуля -- честно не гарантирует 100% покрытие, на нестандартных заголовках
-    возвращает []."""
+_TICKER_TOKEN_RE = re.compile(r'\b[A-Z][A-Z0-9]{1,14}\b')
+
+# Дешёвая предфильтрация мусора ДО валидации против known_symbols -- финальная
+# защита всё равно валидация (см. extract_symbols_from_title), это только чтобы
+# не гонять валидацию по служебным словам заголовка.
+_STOP_WORDS = {
+    "PERPETUAL", "CONTRACT", "CONTRACTS", "TRADING", "PAIR", "PAIRS", "SPOT",
+    "MARGIN", "LOAN", "AND", "WILL", "THE", "FOR", "ON", "WITH", "UP", "TO",
+    "LEVERAGE", "TAG", "TAGS", "MONITORING", "TOKEN", "TOKENS", "SEVERAL",
+    "SELECTED", "SUPPORT", "SUPPORTS", "OF", "REMOVAL", "DELISTING",
+    "DELISTINGS", "LISTING", "LISTINGS", "NEW", "FROM", "USD", "USDT", "USDC",
+    "BTC", "ETH", "NOTICE", "BINANCE", "BYBIT", "ADD", "ADDS", "ADDED",
+    "INCLUDE", "INCLUDES", "UNDER", "FOLLOWING",
+}
+
+
+def extract_symbols_from_title(title: str, known_symbols: set = None) -> list:
+    """Best-effort извлечение тикеров: находит первый ключевой глагол
+    объявления (_KEY_VERB_RE), берёт текст ПОСЛЕ него до первой скобки,
+    разбивает по запятой/&/and -- живой прогон 13.07 подтвердил, что символы
+    у бирж в таких заголовках всегда идут открытым текстом, необязательно с
+    суффиксом котировки. Особый случай "Monitoring Tag": в реальных
+    заголовках тикер обычно идёт ПЕРЕД фразой ("Add X to the Monitoring
+    Tag"), а не после -- для этого совпадения берётся ещё и текст ДО глагола.
+
+    `known_symbols` -- если передан (обычно топ-729 + watch/портфель +
+    Bybit-инструменты), КАЖДЫЙ кандидат валидируется против него -- нереальные
+    "тикеры" вроде LEVERAGE/PERPETUAL/CONTRACT отсеиваются здесь по факту
+    существования, а не угадыванием стоп-слов (стоп-слова -- только дешёвая
+    предфильтрация). Без known_symbols -- поведение как раньше, без
+    валидации (для обратной совместимости вызовов без него)."""
     if not title:
         return []
-    symbols = []
-    # список через запятую без суффикса котировки: "Delisting of ARTY,CTA,GTAI,..."
-    m = re.search(r'(?:[Oo]f|for)\s+([A-Z0-9]{2,15}(?:\s*,\s*[A-Z0-9]{2,15})+)', title)
+    m = _KEY_VERB_RE.search(title)
     if m:
-        symbols.extend(s.strip() for s in m.group(1).split(","))
-    # тикер+котировка одним токеном: "SKHYUSDT", "(KORUUSDT)"
-    for tok in re.findall(r'\b([A-Z0-9]{3,20})\b', title):
-        for suf in _QUOTE_SUFFIXES:
-            if tok.endswith(suf) and len(tok) > len(suf):
-                symbols.append(tok[:-len(suf)])
-                break
+        segments_src = [title[m.end():].split("(")[0]]
+        if "monitoring" in m.group(0).lower():
+            segments_src.append(title[:m.start()])
+    else:
+        segments_src = [title]
+
+    raw_segments = []
+    for src in segments_src:
+        raw_segments.extend(re.split(r'[,&]|\band\b', src, flags=re.IGNORECASE))
+
+    candidates = []
+    for seg in raw_segments:
+        for tok in _TICKER_TOKEN_RE.findall(seg.upper()):
+            if tok in _STOP_WORDS:
+                continue
+            base = tok
+            for suf in _QUOTE_SUFFIXES:
+                if base.endswith(suf) and len(base) > len(suf):
+                    base = base[:-len(suf)]
+                    break
+            candidates.append(base)
+
     seen = set()
     out = []
-    for s in symbols:
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+
+    if known_symbols is not None:
+        known_upper = {s.upper() for s in known_symbols}
+        out = [c for c in out if c in known_upper]
     return out
 
 
-def fetch_bybit_announcements(kind: str, limit: int = 20) -> list:
+_BYBIT_SYMBOL_CACHE = {"ts": 0.0, "symbols": set()}
+_BYBIT_SYMBOL_CACHE_TTL = 6 * 3600  # список инструментов биржи не меняется поминутно
+
+
+def fetch_bybit_symbol_universe(force: bool = False) -> set:
+    """Множество БАЗОВЫХ тикеров (без суффикса котировки), торгуемых на Bybit
+    linear-перпетуалах -- для валидации извлечённых из заголовков символов
+    (см. extract_symbols_from_title). Кэш 6ч в памяти процесса. Сбой сети --
+    честно возвращает то, что было в кэше (может быть пустым множеством при
+    самом первом сбое, не выдумывает данные)."""
+    now = time.time()
+    if not force and _BYBIT_SYMBOL_CACHE["symbols"] and (now - _BYBIT_SYMBOL_CACHE["ts"]) < _BYBIT_SYMBOL_CACHE_TTL:
+        return _BYBIT_SYMBOL_CACHE["symbols"]
+    try:
+        r = requests.get("https://api.bybit.com/v5/market/tickers",
+                          params={"category": "linear"}, timeout=15)
+        r.raise_for_status()
+        rows = r.json().get("result", {}).get("list", [])
+        symbols = {row["symbol"][:-4] for row in rows
+                   if row.get("symbol", "").endswith("USDT")}
+        if symbols:
+            _BYBIT_SYMBOL_CACHE["symbols"] = symbols
+            _BYBIT_SYMBOL_CACHE["ts"] = now
+        return _BYBIT_SYMBOL_CACHE["symbols"]
+    except Exception as e:
+        log.error(f"event_radar: fetch_bybit_symbol_universe failed ({type(e).__name__}: {e})")
+        return _BYBIT_SYMBOL_CACHE["symbols"]
+
+
+# Категории объявлений, которые владелец решил ИСКЛЮЧИТЬ из чат-алертов после
+# живого прогона 13.07 (шум) -- событие всё равно попадает в журнал/дайджест,
+# просто не в чат. margin_only исключается ТОЛЬКО если в заголовке нет "spot"
+# (одновременный margin+spot делистинг -- это реальный спотовый делистинг,
+# алертить надо).
+_NOISE_ALPHA_RE = re.compile(r'\bBinance\s+Alpha\b', re.IGNORECASE)
+_NOISE_STOCKS_RE = re.compile(r'\b(?:Selected\s+Stocks|Tokeni[sz]ed\s+(?:Securities|Stocks?)|bStocks)\b',
+                               re.IGNORECASE)
+_NOISE_MARGIN_RE = re.compile(r'\bMargin\b', re.IGNORECASE)
+_NOISE_SPOT_RE = re.compile(r'\bSpot\b', re.IGNORECASE)
+
+
+def classify_noise(title: str, kind: str) -> str:
+    """Возвращает причину исключения из чат-алерта ("" -- событие проходит
+    фильтр шума). Только классификация по тексту заголовка, никакой сетевой
+    логики -- чистая функция, тестируется без mock'ов."""
+    if not title:
+        return ""
+    if _NOISE_ALPHA_RE.search(title):
+        return "binance_alpha"
+    if _NOISE_STOCKS_RE.search(title):
+        return "selected_stocks"
+    if kind == "delisting" and _NOISE_MARGIN_RE.search(title) and not _NOISE_SPOT_RE.search(title):
+        return "margin_only"
+    return ""
+
+
+def is_recent(event: dict, now: float = None, window_hours: float = BACKFILL_WINDOW_HOURS) -> bool:
+    """Анти-бэкфилл (владелец, 2026-07-13, живой прогон): событие алертится в
+    чат только если опубликовано за последние `window_hours` часов. Старые
+    события всё равно попадают в events-*.jsonl (для EVENT-DIGEST), просто не
+    в чат -- иначе первый запуск на свежем контейнере (пустой seen_ids.json)
+    засыпает владельца полным бэклогом (см. PROGRESS.md, живая находка
+    "40 алертов -- backfill первого запуска")."""
+    now = now if now is not None else time.time()
+    ts = event.get("ts", 0) or 0
+    return (now - ts) <= window_hours * 3600
+
+
+def fetch_bybit_announcements(kind: str, limit: int = 20, known_symbols: set = None) -> list:
     """kind: "listing" | "delisting". Возвращает нормализованный список событий,
     [] при любой сетевой/API-ошибке (не бросает исключения наружу -- вызывающая
     сторона не должна падать из-за одного недоступного источника)."""
@@ -139,14 +280,14 @@ def fetch_bybit_announcements(kind: str, limit: int = 20) -> list:
             "kind": kind,
             "id": f"bybit:{url}",
             "title": title,
-            "symbols": extract_symbols_from_title(title),
+            "symbols": extract_symbols_from_title(title, known_symbols),
             "url": url,
             "ts": ts_ms / 1000 if ts_ms else time.time(),
         })
     return out
 
 
-def fetch_binance_announcements(kind: str, page_size: int = 20) -> list:
+def fetch_binance_announcements(kind: str, page_size: int = 20, known_symbols: set = None) -> list:
     """kind: "listing" | "delisting". Та же fail-soft семантика, что и
     fetch_bybit_announcements -- [] на ошибке, ничего не выдумывает."""
     catalog_id = BINANCE_CATALOG_LISTING if kind == "listing" else BINANCE_CATALOG_DELISTING
@@ -174,22 +315,22 @@ def fetch_binance_announcements(kind: str, page_size: int = 20) -> list:
             "kind": kind,
             "id": f"binance:{it.get('id')}",
             "title": title,
-            "symbols": extract_symbols_from_title(title),
+            "symbols": extract_symbols_from_title(title, known_symbols),
             "url": "",  # bapi не отдаёт публичный URL статьи напрямую -- честно пусто
             "ts": ts_ms / 1000 if ts_ms else time.time(),
         })
     return out
 
 
-def fetch_all_events(limit: int = 20) -> list:
+def fetch_all_events(limit: int = 20, known_symbols: set = None) -> list:
     """Опрашивает оба источника, оба вида (листинг/делистинг), возвращает
     объединённый список событий. Частичный отказ одного источника не блокирует
     остальные (каждый fetch_* уже fail-soft)."""
     events = []
-    events.extend(fetch_bybit_announcements("listing", limit))
-    events.extend(fetch_bybit_announcements("delisting", limit))
-    events.extend(fetch_binance_announcements("listing", limit))
-    events.extend(fetch_binance_announcements("delisting", limit))
+    events.extend(fetch_bybit_announcements("listing", limit, known_symbols))
+    events.extend(fetch_bybit_announcements("delisting", limit, known_symbols))
+    events.extend(fetch_binance_announcements("listing", limit, known_symbols))
+    events.extend(fetch_binance_announcements("delisting", limit, known_symbols))
     return events
 
 
@@ -222,47 +363,73 @@ def filter_new_events(events: list, seen_ids: set) -> list:
     return [e for e in events if e["id"] not in seen_ids]
 
 
-# ── Решение "алертить ли" (чистая функция, владелец 2026-07-13) ─────────────
+# ── Решение "алертить ли" (чистая функция, ПЕРЕСМОТРЕНО владельцем 2026-07-13
+# по итогам живого прогона -- см. ниже) ──────────────────────────────────────
 
-def should_alert(event: dict, watch_symbols: set) -> bool:
-    """ЛЮБОЙ делистинг -- алерт. Листинг -- алерт только если пересечение
-    extracted symbols с watch_symbols (регистронезависимо -- watch_symbols уже
-    ожидается в верхнем регистре, как WATCHLIST_ZONES.keys() в bot.py, но на
-    всякий случай сравнение через upper())."""
-    if event.get("kind") == "delisting":
-        return True
-    watch_upper = {s.upper() for s in (watch_symbols or ())}
-    return any(sym.upper() in watch_upper for sym in event.get("symbols", []))
+def should_alert(event: dict, watch_symbols: set, tracked_symbols: set = None) -> bool:
+    """ПЕРЕСМОТРЕНО 2026-07-13: раньше правило было "ЛЮБОЙ делистинг -- алерт"
+    без фильтра релевантности. Живой прогон 13.07 показал шум -- делистинги
+    монет, которых у нас вообще нет в отслеживаемых списках, лишь засоряли
+    чат. Теперь: И листинг, И делистинг алертятся ТОЛЬКО если хотя бы один
+    извлечённый символ входит в tracked_symbols (топ-729) ИЛИ watch_symbols
+    (watch_zones/портфель) -- симметрично для обоих видов события. Событие
+    без извлечённых символов (extract_symbols_from_title вернул []) никогда
+    не алертится -- honest "нечего сопоставлять"."""
+    symbols = event.get("symbols", [])
+    if not symbols:
+        return False
+    symbols_upper = {s.upper() for s in symbols}
+    relevant_upper = {s.upper() for s in (watch_symbols or ())} | {s.upper() for s in (tracked_symbols or ())}
+    return bool(symbols_upper & relevant_upper)
 
 
-def format_event_alert(event: dict) -> str:
-    """Текст алерта владельцу для одного события."""
+def format_event_alert(event: dict, watch_symbols: set = None) -> str:
+    """Текст алерта -- формат приведён к стандарту карточек (разделитель
+    card_v2.SEP, моноширинные тикеры) + обязательная строка портфельной
+    релевантности (владелец, 2026-07-13)."""
     icon = "🔴" if event["kind"] == "delisting" else "🟢"
     kind_label = "ДЕЛИСТИНГ" if event["kind"] == "delisting" else "ЛИСТИНГ"
-    symbols_str = ", ".join(event.get("symbols", [])) or "н/д (не удалось извлечь тикер из заголовка)"
+    symbols = event.get("symbols", [])
+    symbols_str = ", ".join(f"`{s}`" for s in symbols) or "н/д (тикер не подтверждён)"
+
+    watch_upper = {s.upper() for s in (watch_symbols or ())}
+    in_portfolio = [s for s in symbols if s.upper() in watch_upper]
+    portfolio_line = (f"⚠️ Есть в твоём портфеле: {', '.join(f'`{s}`' for s in in_portfolio)}"
+                       if in_portfolio else "В портфеле нет")
+
     lines = [
-        f"{icon} EVENT-RADAR: {kind_label} -- {event['exchange'].upper()}",
+        f"{icon} *EVENT-RADAR: {kind_label}* -- {event['exchange'].upper()}",
+        card_v2.SEP,
         f"Тикер(ы): {symbols_str}",
-        event["title"],
+        event.get("title", ""),
+        portfolio_line,
     ]
     if event.get("url"):
         lines.append(event["url"])
     return "\n".join(lines)
 
 
-def poll_and_get_alerts(watch_symbols: set, limit: int = 20,
-                         seen_ids_path: str = SEEN_IDS_PATH,
-                         events_dir: str = EVENTS_DIR) -> list:
-    """Главная точка входа для планировщика: опрашивает источники, отфильтровывает
-    уже виденные объявления, среди новых отбирает те, что нужно алертить (по
-    should_alert), помечает ВСЕ новые (не только заалерченные) как виденные --
-    чтобы не алертить листинг не-watch монеты в будущем, если она внезапно
-    попадёт в watch (объявление всё равно устареет к тому моменту). Каждое новое
-    событие (заалерченное или нет) дополнительно пишется в events-*.jsonl для
-    EVENT-DIGEST (Пакет 13 М5) -- утренняя сводка должна честно показывать
-    ВСЮ картину ночи, не только то, что дошло до владельца алертом. Возвращает
-    список готовых текстов алертов (format_event_alert)."""
-    events = fetch_all_events(limit=limit)
+def poll_and_get_alerts(watch_symbols: set, tracked_symbols: set = None, limit: int = 20,
+                         seen_ids_path: str = SEEN_IDS_PATH, events_dir: str = EVENTS_DIR,
+                         now: float = None) -> list:
+    """Главная точка входа для планировщика. Пайплайн (владелец, 2026-07-13,
+    по итогам живого прогона 13.07 -- см. докстринг модуля/PROGRESS.md):
+      1. Извлечение+валидация тикеров против known_symbols = tracked_symbols
+         (топ-729) + watch_symbols (watch_zones/портфель) + Bybit-инструменты
+         (fetch_bybit_symbol_universe()) -- нулевой результат извлечения
+         означает событие НИКОГДА не алертится (см. should_alert).
+      2. Дедуп по id (filter_new_events) -- как раньше.
+      3. КАЖДОЕ новое событие пишется в events-*.jsonl (для EVENT-DIGEST) --
+         независимо от того, попадёт ли оно в чат.
+      4. Анти-бэкфилл: событие старше BACKFILL_WINDOW_HOURS -- в чат не идёт.
+      5. Фильтр шума (classify_noise): Binance Alpha / Selected Stocks /
+         margin-only-без-spot -- в чат не идёт.
+      6. Релевантность (should_alert): пересечение с tracked_symbols/
+         watch_symbols -- иначе не идёт.
+    Возвращает список готовых текстов алертов (format_event_alert)."""
+    now = now if now is not None else time.time()
+    known_symbols = set(tracked_symbols or ()) | set(watch_symbols or ()) | fetch_bybit_symbol_universe()
+    events = fetch_all_events(limit=limit, known_symbols=known_symbols)
     seen = _load_seen_ids(seen_ids_path)
     new_events = filter_new_events(events, seen)
     if not new_events:
@@ -272,8 +439,14 @@ def poll_and_get_alerts(watch_symbols: set, limit: int = 20,
     for e in new_events:
         seen.add(e["id"])
         append_event_log(e, events_dir=events_dir)
-        if should_alert(e, watch_symbols):
-            alerts.append(format_event_alert(e))
+        if not e.get("symbols"):
+            continue
+        if not is_recent(e, now=now):
+            continue
+        if classify_noise(e.get("title", ""), e.get("kind")):
+            continue
+        if should_alert(e, watch_symbols, tracked_symbols):
+            alerts.append(format_event_alert(e, watch_symbols))
     _save_seen_ids(seen, seen_ids_path)
     return alerts
 
