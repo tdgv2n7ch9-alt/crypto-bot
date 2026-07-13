@@ -7636,5 +7636,12 @@ zone-touch алерты."
 
 py_compile (morning_metrics.py/bot.py/shadow_engine.py) -- чисто. Полный
 `pytest` -- 1038 passed, 1 skipped (было 1018 до Н4, +20 новых тестов).
-Коммит следующим шагом, деплой (`bot.py` в Watch Paths) верифицируется
-после push.
+
+**Деплой подтверждён**: коммит `c13b8fb`, push в main, rebase против
+auto-shadow-коммитов чистый (только `journal/shadow_signals.json`
+пересекался). `railway deployment list` -- деплой `753c2293` статус
+`SUCCESS` (bot.py в Watch Paths, триггернул сборку). Живой лог
+(`railway logs --deployment 753c2293`) -- чистый старт: планировщик
+поднялся, среди job'ов явно виден `"send_morning_digest"`, никаких новых
+traceback от Н4-кода (единственные ошибки в окне лога -- уже известные
+CoinGecko 429 rate-limit, не связаны с этим коммитом). **Н4 -- ГОТОВО.**
