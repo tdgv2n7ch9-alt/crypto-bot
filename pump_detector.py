@@ -263,7 +263,13 @@ def _fmt_price(v: float) -> str:
 
 
 def _oi_matrix_label(price_up: bool, oi_change_pct: float, funding: float) -> str:
-    """Та же интерпретация OI-матрицы, что и в /market и Институционале bot.py."""
+    """Та же интерпретация OI-матрицы, что и в /market и Институционале bot.py.
+    Мини-пакет (владелец, кейсы AVAX 15:42/DOT 14:48, 2026-07-13): |ΔOI| < порога
+    (ta_extra.OI_MATRIX_NEAR_ZERO_PCT) -- шум, честное "матрица н/д" вместо
+    решительного вердикта. Не используется для гейта промоушена пампа/дампа
+    (_try_promote_pump() читает другие критерии) -- только текст карточки."""
+    if abs(oi_change_pct) < ta_extra.OI_MATRIX_NEAR_ZERO_PCT:
+        return "⚪ OI без изменений — матрица н/д"
     oi_up = oi_change_pct > 0
     if price_up and oi_up:
         return "🟢 Цена↑ OI↑ — новые лонги, сильный тренд" if funding >= 0 else "🟡 Цена↑ OI↑ — шорт-сквиз возможен"

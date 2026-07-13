@@ -5645,14 +5645,20 @@ def _format_whale_alert(w: dict, rug_line: str = "") -> str:
     elif score_100 >= 40: verdict_e, verdict_word = "⚠️", "УМЕРЕННЫЙ"
     else:                 verdict_e, verdict_word = "❌", "СЛАБЫЙ"
 
-    # Словесная интерпретация OI-матрицы (цена × OI × funding), как в /market и Институционале
-    price_up = ch24h > 0
-    oi_up = oi > 0
-    if price_up and oi_up:
+    # Словесная интерпретация OI-матрицы (цена × OI × funding), как в /market и Институционале.
+    # Мини-пакет (владелец, кейсы AVAX 15:42/DOT 14:48, 2026-07-13): |ΔOI| < порога --
+    # шум, честное "матрица н/д" вместо решительного "сквиз"/"выход из позиций". ТОЛЬКО
+    # текст -- score_100/factors уже посчитаны в _analyze_whale_signal() СВОИМ, уже
+    # корректным порогом (0.1%, см. её "if oi > 0.1 / elif oi < -0.1"), эта функция их не
+    # трогает.
+    oi_combo = ta_extra.classify_oi_matrix(oi, ch24h)
+    if oi_combo == "near_zero":
+        oi_line = "⚪ OI без изменений — матрица н/д"
+    elif oi_combo == "up_up":
         oi_line = "🟢 Цена↑ OI↑ — новые лонги, сильный тренд" if funding >= 0 else "🟡 Цена↑ OI↑ — шорт-сквиз возможен"
-    elif price_up and not oi_up:
+    elif oi_combo == "up_down":
         oi_line = "🟡 Цена↑ OI↓ — шорт-сквиз, может исчерпаться"
-    elif not price_up and oi_up:
+    elif oi_combo == "down_up":
         oi_line = "🔴 Цена↓ OI↑ — новые шорты, реальное давление"
     else:
         oi_line = "🟡 Цена↓ OI↓ — выход из позиций, движение слабеет"

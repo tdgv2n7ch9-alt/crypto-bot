@@ -457,18 +457,34 @@ def smart_round(val: float) -> float:
     return round(val, precision)
 
 
+TP_LADDER_MIN_STEP_PCT = 0.5  # владелец, кейс MOODENG 2026-07-13: TP1 0.0400262 vs
+# TP2 0.04002969 -- разница 0.009%, неразличимо. find_sr_zones() иногда даёт 2+ зоны
+# (например EMA-зона и фрактальная зона) с почти идентичным mid. Минимальный шаг между
+# СОСЕДНИМИ принятыми целями лестницы -- TP1 НЕ переоценивается (боевой R:R-гейт/
+# rr_gate_pass зависит только от TP1, см. bot.real_full_analysis() -- эта функция
+# отвечает за боевые entry/SL/TP1, трогать выбор TP1 нельзя), только TP2 (шаг от TP1)
+# и TP3 (шаг от TP2).
+
+
 def build_trade_from_structure(direction: str, price: float, zones: dict):
     """Строит вход/SL/TP от зон структуры (find_sr_zones()). direction: "long"/"short".
     Вход -- DCA 50/30/20 внутри ближайшей зоны (entry1 у границы зоны, ближней к цене --
     основной ориентир для R:R; entry3 у дальней границы, самый агрессивный транш). SL --
     за зоной с буфером SR_SL_BUFFER_PCT от её дальней (по направлению риска) границы;
     зона уже построена на wick-инклюзивных high/low фракталов, так что хвосты уже учтены
-    в самой границе. TP1/2/3 -- следующие 3 зоны с противоположной стороны; при нехватке
-    зон -- Fibonacci-подобное расширение от риска (2.0/3.2/5.0x) как фоллбэк.
+    в самой границе. TP1 -- ближайшая зона с противоположной стороны (или Fibonacci-
+    расширение 2.0x риска, если зон нет вообще) -- НЕ переоценивается валидатором лестницы
+    (боевой R:R-гейт зависит только от TP1). TP2/TP3 -- следующие зоны структуры СО
+    ШАГОМ >= TP_LADDER_MIN_STEP_PCT от предыдущей принятой цели (сканирует ВСЕ оставшиеся
+    зоны, не только позиционно вторую/третью, пропуская слишком близкие к предыдущей);
+    при нехватке разнесённых зон -- Fibonacci-подобное расширение от риска (3.2x/5.0x)
+    как фоллбэк для незаполненного слота.
 
     Возвращает None, если нет ни одной зоны для входа (нечего строить), иначе dict:
     {"entry1","entry2","entry3","entry_lo","entry_hi","sl","tp1","tp2","tp3",
-     "rr_tp1","rr_tp2","rr_tp3","entry_zone","tp_zones","rr_gate_pass"}."""
+     "rr_tp1","rr_tp2","rr_tp3","entry_zone","tp_zones","tp_sources","rr_gate_pass"}.
+    `tp_sources` -- ["structure"|"fibonacci", ...] для TP1/TP2/TP3, для честной
+    пометки в карточках ("TP2: структура" vs "TP2: Fib-расширение")."""
     if not price or price <= 0:
         return None
 
@@ -488,12 +504,38 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
     entry_lo, entry_hi = min(entry_zone["lo"], entry_zone["hi"]), max(entry_zone["lo"], entry_zone["hi"])
 
     risk = abs(entry1 - sl) or 1e-9
-    tps = [z["mid"] for z in tp_zones[:3]]
     fib_mults = (2.0, 3.2, 5.0)
-    while len(tps) < 3:
-        mult = fib_mults[len(tps)]
-        tps.append(entry1 + risk * mult if direction == "long" else entry1 - risk * mult)
-    tp1, tp2, tp3 = tps[0], tps[1], tps[2]
+
+    def _fib(mult):
+        return entry1 + risk * mult if direction == "long" else entry1 - risk * mult
+
+    remaining_zone_mids = [z["mid"] for z in tp_zones]
+
+    # TP1 -- поведение БУКВАЛЬНО не изменено относительно кода до этого патча
+    # (ближайшая зона либо fib(2.0x), если зон нет вовсе).
+    if remaining_zone_mids:
+        tp1 = remaining_zone_mids.pop(0)
+        tp_sources = ["structure"]
+    else:
+        tp1 = _fib(fib_mults[0])
+        tp_sources = ["fibonacci"]
+
+    tps = [tp1]
+    last = tp1
+    for slot_idx in (1, 2):
+        picked = None
+        while remaining_zone_mids:
+            z = remaining_zone_mids.pop(0)
+            if abs(z - last) / entry1 * 100 >= TP_LADDER_MIN_STEP_PCT:
+                picked = z
+                tp_sources.append("structure")
+                break
+        if picked is None:
+            picked = _fib(fib_mults[slot_idx])
+            tp_sources.append("fibonacci")
+        tps.append(picked)
+        last = picked
+    tp1, tp2, tp3 = tps
 
     def _rr(tp):
         return round(abs(tp - entry1) / risk, 2)
@@ -504,7 +546,7 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
         "entry_lo": entry_lo, "entry_hi": entry_hi,
         "sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
         "rr_tp1": rr_tp1, "rr_tp2": _rr(tp2), "rr_tp3": _rr(tp3),
-        "entry_zone": entry_zone, "tp_zones": tp_zones[:3],
+        "entry_zone": entry_zone, "tp_zones": tp_zones[:3], "tp_sources": tp_sources,
         "rr_gate_pass": rr_tp1 >= SR_MIN_RR_TP1,
     }
 
@@ -1292,6 +1334,42 @@ def classify_amd_phase(candles_4h: list, now_utc: "_dt.datetime" = None) -> dict
 
     return {"phase": phase, "nymidnight_price": nymid,
             "price_vs_nymidnight": price_vs_nymidnight}
+
+
+OI_MATRIX_NEAR_ZERO_PCT = 0.1  # владелец, кейсы AVAX 15:42/DOT 14:48, 2026-07-13:
+# |ΔOI| < этого порога -- шум измерения (CoinGecko OI approximation, не точная
+# биржевая история), не реальный сдвиг открытого интереса. Тот же порог уже
+# использовался в bot._analyze_whale_signal() для скоринга (Whale Monitor) --
+# здесь распространяется и на ТЕКСТ интерпретации в остальных местах, которые
+# этот же порог для текста не применяли (bot._format_whale_alert() oi_line,
+# pump_detector._oi_matrix_label(), fa_engine._oi_matrix() oi_text).
+
+
+def classify_oi_matrix(oi_change_pct, price_change_pct) -> str:
+    """Классифицирует комбинацию цена×OI в один из 5 тегов:
+    "up_up"/"up_down"/"down_up"/"down_down" (обе величины ненулевые, за
+    порогом OI_MATRIX_NEAR_ZERO_PCT) или "near_zero" (|ΔOI| < порога -- ЛЮБОЙ
+    вердикт вида "сквиз"/"выход из позиций" на таком шуме честно вводит в
+    заблуждение). "no_data", если один из параметров None.
+
+    ТОЛЬКО классификация для ТЕКСТА интерпретации -- не гейт и не боевой скор
+    (см. владелец, 2026-07-13: "боевой скоринг не трогать"). Вызывающая
+    сторона сама решает, как оформить каждый тег текстом/эмодзи -- эта
+    функция только отвечает на вопрос "заслуживает ли ΔOI решительной
+    интерпретации, или это шум"."""
+    if oi_change_pct is None or price_change_pct is None:
+        return "no_data"
+    if abs(oi_change_pct) < OI_MATRIX_NEAR_ZERO_PCT:
+        return "near_zero"
+    price_up = price_change_pct > 0
+    oi_up = oi_change_pct > 0
+    if price_up and oi_up:
+        return "up_up"
+    if price_up and not oi_up:
+        return "up_down"
+    if not price_up and oi_up:
+        return "down_up"
+    return "down_down"
 
 
 def detect_inducement_sweep(candles: list, min_bars_ago: int = 3) -> dict:

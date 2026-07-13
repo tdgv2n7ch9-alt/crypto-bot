@@ -123,3 +123,96 @@ def test_rr_from_base_gate_respects_min_rr():
     assert rr_pass["rr_gate_pass"] is True
     rr_fail = ta_extra.rr_from_base(trade, base=100.0, min_rr=3.0)
     assert rr_fail["rr_gate_pass"] is False
+
+
+# --- TP-лестница: минимальный шаг между соседними целями (владелец, кейс MOODENG
+# 2026-07-13: TP1 0.0400262 vs TP2 0.04002969 -- разница 0.009%, неразличимо на
+# карточке). TP1 НЕ трогается (боевой rr_gate_pass зависит только от него) ---
+
+def test_moodeng_case_near_duplicate_tp_zones_get_separated():
+    """Воспроизводит живой кейс: две TP-зоны с почти идентичным mid. TP1 --
+    первая (не меняется), TP2 -- ОБЯЗАН отличаться от TP1 минимум на
+    TP_LADDER_MIN_STEP_PCT, не быть тем же почти-дубликатом."""
+    price = 0.0395
+    zones = {
+        "below": [_zone(0.038, 0.039)],
+        "above": [
+            _zone(0.0400262, 0.0400262),   # TP1 -- ближайшая зона
+            _zone(0.04002969, 0.04002969), # почти дубликат TP1 -- ДОЛЖНА быть пропущена для TP2
+            _zone(0.043, 0.043),           # достаточно далёкая зона -- валидный кандидат TP2
+        ],
+    }
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    assert trade is not None
+    assert trade["tp1"] == 0.0400262  # TP1 -- поведение НЕ изменилось
+    step_pct = abs(trade["tp2"] - trade["tp1"]) / trade["entry1"] * 100
+    assert step_pct >= ta_extra.TP_LADDER_MIN_STEP_PCT, "TP2 обязан отличаться от TP1 минимум на шаг"
+    assert trade["tp2"] != 0.04002969, "почти-дубликат НЕ должен был быть выбран как TP2"
+    assert trade["tp2"] == 0.043  # реальная разнесённая зона взята вместо дубликата
+
+
+def test_tp_ladder_step_enforced_between_tp2_and_tp3_too():
+    """Шаг проверяется и между TP2 и TP3, не только TP1/TP2."""
+    price = 100.0
+    zones = {
+        "below": [_zone(90, 95)],
+        "above": [
+            _zone(110, 110),     # TP1
+            _zone(120, 120),     # TP2 -- достаточно далеко от TP1
+            _zone(120.05, 120.05),  # почти дубликат TP2 -- должна быть пропущена для TP3
+            _zone(140, 140),     # валидный кандидат TP3
+        ],
+    }
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    step_pct = abs(trade["tp3"] - trade["tp2"]) / trade["entry1"] * 100
+    assert step_pct >= ta_extra.TP_LADDER_MIN_STEP_PCT
+    assert trade["tp3"] == 140
+
+
+def test_tp1_selection_unchanged_by_ladder_validator():
+    """TP1 -- буквально та же зона, что и раньше (ближайшая), валидатор её не
+    трогает -- боевой rr_gate_pass зависит только от TP1."""
+    price = 100.0
+    zones = {"below": [_zone(90, 95)], "above": [_zone(105, 110), _zone(105.1, 105.1)]}
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    assert trade["tp1"] == _zone(105, 110)["mid"]
+
+
+def test_tp_ladder_falls_back_to_fibonacci_when_no_separated_zone_left():
+    """Если после TP1 не осталось разнесённых зон структуры -- Fibonacci-фоллбэк
+    (уже существующее поведение, гарантированно разнесённое), не падение и не
+    повтор TP1."""
+    price = 100.0
+    zones = {
+        "below": [_zone(90, 95)],
+        "above": [_zone(110, 110), _zone(110.05, 110.05)],  # только TP1 + почти-дубликат
+    }
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    assert trade["tp2"] != 110.05
+    assert trade["tp1"] < trade["tp2"] < trade["tp3"]
+    assert trade["tp_sources"][0] == "structure"
+    assert trade["tp_sources"][1] == "fibonacci"
+    assert trade["tp_sources"][2] == "fibonacci"
+
+
+def test_tp_sources_all_structure_when_well_separated():
+    price = 100.0
+    zones = {"below": [_zone(90, 95)], "above": [_zone(105, 110), _zone(120, 120), _zone(140, 140)]}
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    assert trade["tp_sources"] == ["structure", "structure", "structure"]
+
+
+def test_rr_gate_pass_unaffected_by_tp_ladder_fix():
+    """Мини-пакет, владелец: "боевой скоринг не трогает" -- rr_gate_pass зависит
+    ТОЛЬКО от TP1/entry1/SL, которые валидатор лестницы не меняет. Один и тот
+    же сценарий с/без near-duplicate TP2-зоны обязан давать ОДИНАКОВЫЙ
+    rr_gate_pass/rr_tp1."""
+    price = 100.0
+    zones_clean = {"below": [_zone(99, 99.5)], "above": [_zone(130, 131)]}
+    zones_with_duplicate = {"below": [_zone(99, 99.5)],
+                             "above": [_zone(130, 131), _zone(130.01, 130.01)]}
+    trade_clean = ta_extra.build_trade_from_structure("long", price, zones_clean)
+    trade_dup = ta_extra.build_trade_from_structure("long", price, zones_with_duplicate)
+    assert trade_clean["rr_tp1"] == trade_dup["rr_tp1"]
+    assert trade_clean["rr_gate_pass"] == trade_dup["rr_gate_pass"]
+    assert trade_clean["tp1"] == trade_dup["tp1"]
