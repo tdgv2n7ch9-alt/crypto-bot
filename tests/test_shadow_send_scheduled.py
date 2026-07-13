@@ -9,6 +9,7 @@ pytest для shadow_engine._adapt_send_scheduled_result() / log_send_scheduled_
 import asyncio
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -251,3 +252,52 @@ def test_log_send_scheduled_shadow_async_compute_failure_returns_false(monkeypat
     ok = asyncio.run(se.log_send_scheduled_shadow_async(
         "BTCUSDT", None, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
     assert ok is False
+
+
+# --- Health-счётчик "последняя успешная shadow-запись" (владелец "да" 2026-07-13,
+# находка "поток молчал 16+ часов незамеченным") -------------------------------------
+
+def test_get_last_send_scheduled_write_ts_none_before_any_write(monkeypatch):
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    assert se.get_last_send_scheduled_write_ts() is None
+
+
+def test_last_write_ts_updated_on_successful_write(monkeypatch):
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    monkeypatch.setattr(se, "_write_local", lambda record: True)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    before = time.time()
+    a = _fake_real_full_analysis_result(is_long=True)
+    ok = asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+    after = time.time()
+
+    assert ok is True
+    ts = se.get_last_send_scheduled_write_ts()
+    assert ts is not None
+    assert before <= ts <= after
+
+
+def test_last_write_ts_not_updated_on_compute_failure(monkeypatch):
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    monkeypatch.setattr(se, "_write_local", lambda record: True)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    ok = asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", None, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert ok is False
+    assert se.get_last_send_scheduled_write_ts() is None
+
+
+def test_last_write_ts_not_updated_on_local_write_failure(monkeypatch):
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    monkeypatch.setattr(se, "_write_local", lambda record: False)
+
+    a = _fake_real_full_analysis_result(is_long=True)
+    ok = asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    assert ok is False
+    assert se.get_last_send_scheduled_write_ts() is None

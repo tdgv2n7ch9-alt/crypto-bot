@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import daily_metrics
+import shadow_engine
 import signal_journal
 
 MORNING_HOUR_UTC3 = 8
@@ -121,6 +122,17 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
         if td:
             mark = "✅ promoted" if td["promoted_live"] else "теневой"
             lines.append(f"  Топ-1 расхождение ({mark}): {td['symbol']} {td['direction']} — {td['detail']}")
+
+    # Владелец "да" 2026-07-13 -- health-счётчик shadow-потока (та же честность про
+    # None="с последнего рестарта ещё не было записи", что в /stats).
+    last_shadow_ts = shadow_engine.get_last_send_scheduled_write_ts()
+    lines += ["", "🩺 *Shadow-поток (send_scheduled):*"]
+    if last_shadow_ts is None:
+        lines.append("  Ни одной записи с последнего рестарта процесса")
+    else:
+        hours_ago = (now - last_shadow_ts) / 3600
+        warn = " ⚠️ >2ч без записи" if hours_ago > 2 else ""
+        lines.append(f"  Последняя запись: {hours_ago:.1f}ч назад{warn}")
 
     lines += ["", "🐋 *Whale-события, топ-3:*"]
     if not whales:

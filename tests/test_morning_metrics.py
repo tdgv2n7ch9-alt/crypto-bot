@@ -102,6 +102,45 @@ def test_build_morning_digest_includes_deploy_section(monkeypatch, tmp_path):
     assert "актуален" in text
 
 
+# ── Shadow-поток health-счётчик (владелец "да" 2026-07-13, находка "молчал 16+ часов") ──
+
+def test_build_morning_digest_shadow_write_na_when_never_written(monkeypatch, tmp_path):
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.shadow_engine, "get_last_send_scheduled_write_ts", lambda: None)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Shadow-поток" in text
+    assert "Ни одной записи" in text
+
+
+def test_build_morning_digest_shadow_write_fresh_no_warning(monkeypatch, tmp_path):
+    now = 1_000_000.0
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.shadow_engine, "get_last_send_scheduled_write_ts",
+                         lambda: now - 1800)  # 30 минут назад
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
+    assert "0.5ч назад" in text
+    assert "⚠️" not in text.split("Shadow-поток")[1].split("\n\n")[0]
+
+
+def test_build_morning_digest_shadow_write_stale_shows_warning(monkeypatch, tmp_path):
+    now = 1_000_000.0
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.shadow_engine, "get_last_send_scheduled_write_ts",
+                         lambda: now - 5 * 3600)  # 5 часов назад -- за порогом 2ч
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
+    assert "5.0ч назад" in text
+    assert "⚠️" in text
+
+
 def test_build_morning_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path):
     """Пакет 6 М3 -- та же обогащённая shadow-секция, что «Метрики дня», через
     переиспользованный daily_metrics.shadow_vs_live_today()."""

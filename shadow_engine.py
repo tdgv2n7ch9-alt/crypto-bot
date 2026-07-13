@@ -64,6 +64,7 @@ Multi-TF confluence на реальных промоушен-проверках 
 import asyncio
 import base64
 import json
+import logging
 import os
 import time
 
@@ -73,6 +74,12 @@ import chart_patterns
 import signal_journal   # переиспользуем _github_configured/_validate_github_token/_github_headers/_github_api_base
 import ta_extra
 
+# Находка 2026-07-13 (владелец "да"): весь shadow-путь молчал 16+ часов, потому что
+# ошибки уходили в print() (stdout) вместо log.error() -- невидимо в ограниченном
+# буфере `railway logs`. Использует общий root-логгер, настроенный один раз в bot.py
+# (logging.basicConfig) -- тот же формат/уровень, отдельного basicConfig здесь не надо.
+log = logging.getLogger(__name__)
+
 SHADOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "shadow_signals.json")
 GITHUB_SHADOW_PATH = "journal/shadow_signals.json"
 SR_MIN_RR_TP1_SHADOW = 2.0  # патч 02 -- см. patches/02-rr-gate/README.md, НЕ live-константа
@@ -81,6 +88,21 @@ DEAD_ZONE_SHADOW_SCORE_PENALTY = 10  # находка владельца 2026-07
 # Zone) никак не штрафовал pro_score reversal-кандидата. НЕ live-константа -- боевой
 # pro_analysis()/_try_promote_pump() не трогаются, только shadow-запись (см.
 # _build_pump_reversal_record ниже). Первое приближение, не откалибровано.
+
+# Пакет "находки 1-2" (владелец "да", 2026-07-13) -- health-счётчик "последняя
+# успешная shadow-запись N часов назад" для /stats и утренней сводки. Хранится
+# только в памяти процесса (Railway ephemeral, честно НЕ переживает рестарт --
+# после редеплоя счётчик стартует с None, пока не придёт первая новая запись
+# ЭТОГО процесса; не выдаёт время до рестарта за реальное время последней
+# записи, чтобы не создавать ложное ощущение свежести после каждого деплоя).
+_last_send_scheduled_write_ts = None
+
+
+def get_last_send_scheduled_write_ts():
+    """None, если этот процесс ещё не записал ни одной send_scheduled shadow-
+    записи с момента своего старта (см. докстринг _last_send_scheduled_write_ts
+    -- честно, не подставляет старое значение с прошлого рестарта)."""
+    return _last_send_scheduled_write_ts
 
 
 def _atomic_write_json(path: str, obj) -> bool:
@@ -96,7 +118,7 @@ def _atomic_write_json(path: str, obj) -> bool:
         os.replace(tmp_path, path)
         return True
     except Exception as e:
-        print(f"shadow_engine: atomic write to {path} failed ({e})")
+        log.error(f"shadow_engine: atomic write to {path} failed ({e})")
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -144,7 +166,7 @@ def _github_get_shadow_sync():
         return None, None
     token_issue = signal_journal._validate_github_token()
     if token_issue:
-        print(f"shadow_engine: {token_issue}")
+        log.error(f"shadow_engine: {token_issue}")
         return None, None
     try:
         r = requests.get(f"{signal_journal._github_api_base()}/contents/{GITHUB_SHADOW_PATH}",
@@ -159,7 +181,7 @@ def _github_get_shadow_sync():
         return records, data["sha"]
     except Exception as e:
         detail = getattr(getattr(e, "response", None), "text", "")
-        print(f"shadow_engine: GitHub GET failed ({e} {detail[:300]})")
+        log.error(f"shadow_engine: GitHub GET failed ({e} {detail[:300]})")
         return False, None
 
 
@@ -170,7 +192,7 @@ def _github_put_shadow_sync(records: list, sha):
         return None
     token_issue = signal_journal._validate_github_token()
     if token_issue:
-        print(f"shadow_engine: {token_issue}")
+        log.error(f"shadow_engine: {token_issue}")
         return None
     try:
         payload = {"schema_version": 1, "records": records}
@@ -188,7 +210,7 @@ def _github_put_shadow_sync(records: list, sha):
         return r.json()["content"]["sha"]
     except Exception as e:
         detail = getattr(getattr(e, "response", None), "text", "")
-        print(f"shadow_engine: GitHub PUT failed ({e} {detail[:300]})")
+        log.error(f"shadow_engine: GitHub PUT failed ({e} {detail[:300]})")
         return None
 
 
@@ -520,7 +542,7 @@ def log_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         record = compute_shadow(symbol, result, bot_module, live_journal_id, whale_zones)
         return _write_local(record)
     except Exception as e:
-        print(f"shadow_engine.log_shadow failed for {symbol}: {e}")
+        log.error(f"shadow_engine.log_shadow failed for {symbol}: {e}")
         return False
 
 
@@ -534,7 +556,7 @@ async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_i
     try:
         record = compute_shadow(symbol, result, bot_module, live_journal_id, whale_zones)
     except Exception as e:
-        print(f"shadow_engine.log_shadow_async: compute failed for {symbol}: {e}")
+        log.error(f"shadow_engine.log_shadow_async: compute failed for {symbol}: {e}")
         return False
     ok_local = _write_local(record)
     if not ok_local:
@@ -543,7 +565,7 @@ async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_i
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
-        print(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
+        log.error(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
     return True
 
 
@@ -585,12 +607,19 @@ async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
     для promoted-кандидатов `bot.send_scheduled()` теперь логирует journal-запись
     ДО вызова этой функции и передаёт сюда реальный id, чтобы
     `shadow_outcome_analysis.py` мог напрямую сопоставить shadow-запись с
-    фактическим исходом сделки без ретроактивного матчинга по времени."""
+    фактическим исходом сделки без ретроактивного матчинга по времени.
+
+    Явное логирование входа/выхода (владелец "да", 2026-07-13 -- находка "поток
+    молчал 16+ часов, ошибка ушла в print(), невидима в railway logs"): log.info
+    на входе И на успешном выходе -- если в логах есть "started" без парного
+    "OK"/"failed" рядом, само по себе укажет, на каком шаге теряется поток,
+    даже без текста конкретного исключения."""
+    log.info(f"shadow_engine.log_send_scheduled_shadow_async: started for {symbol}")
     try:
         adapted = _adapt_send_scheduled_result(a)
         record = compute_shadow(symbol, adapted, bot_module, live_journal_id=live_journal_id)
     except Exception as e:
-        print(f"shadow_engine.log_send_scheduled_shadow_async: compute failed for {symbol}: {e}")
+        log.error(f"shadow_engine.log_send_scheduled_shadow_async: compute failed for {symbol}: {e}")
         return False
     record["source"] = "send_scheduled"
     record["promoted_live"] = promoted_live
@@ -607,12 +636,18 @@ async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
     record["order_block_shadow"] = a.get("order_block_shadow")
     ok_local = _write_local(record)
     if not ok_local:
+        log.error(f"shadow_engine.log_send_scheduled_shadow_async: _write_local FAILED for {symbol}")
         return False
+    global _last_send_scheduled_write_ts
+    _last_send_scheduled_write_ts = time.time()
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
-        print(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
+        log.error(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
+    log.info(f"shadow_engine.log_send_scheduled_shadow_async: OK for {symbol} "
+             f"(oi_funding_ls_shadow={'set' if record.get('oi_funding_ls_shadow') else 'None'}, "
+             f"bos_body_close_shadow={'set' if record.get('bos_body_close_shadow') else 'None'})")
     return True
 
 
@@ -671,7 +706,7 @@ def log_pump_reversal_shadow(symbol: str, watch: dict, funding, oi_usd, oi_chang
                                               promoted_live, kz_quality, pro_score)
         return _write_local(record)
     except Exception as e:
-        print(f"shadow_engine.log_pump_reversal_shadow failed for {symbol}: {e}")
+        log.error(f"shadow_engine.log_pump_reversal_shadow failed for {symbol}: {e}")
         return False
 
 
@@ -685,7 +720,7 @@ async def log_pump_reversal_shadow_async(symbol: str, watch: dict, funding, oi_u
         record = _build_pump_reversal_record(symbol, watch, funding, oi_usd, oi_change_pct,
                                               promoted_live, kz_quality, pro_score)
     except Exception as e:
-        print(f"shadow_engine.log_pump_reversal_shadow_async: build failed for {symbol}: {e}")
+        log.error(f"shadow_engine.log_pump_reversal_shadow_async: build failed for {symbol}: {e}")
         return False
     ok_local = _write_local(record)
     if not ok_local:
@@ -694,7 +729,7 @@ async def log_pump_reversal_shadow_async(symbol: str, watch: dict, funding, oi_u
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
-        print(f"shadow_engine: GitHub sync failed for pump_reversal ({symbol}): {e}")
+        log.error(f"shadow_engine: GitHub sync failed for pump_reversal ({symbol}): {e}")
     return True
 
 
@@ -734,13 +769,25 @@ async def log_ema_stack_shadow_async(symbol: str, ema_stack_shadow: dict,
                                       promoted_live: bool, rr: float = None) -> bool:
     """Боевой путь -- вызывается из pump_detector._try_promote_pump() ПОСЛЕ того,
     как боевое решение о промоушене уже принято. Только накопление данных, не
-    влияет ни на что боевое (см. докстринг _build_ema_stack_shadow_record)."""
-    if not ema_stack_shadow or ema_stack_shadow.get("error"):
+    влияет ни на что боевое (см. докстринг _build_ema_stack_shadow_record).
+
+    Владелец "да" 2026-07-13 -- различать в логах "события не было" (ema_stack_
+    shadow=None, bot.pro_analysis() честно не дошла до расчёта) от "было, но
+    упало" (dict с ключом "error" -- bot.pro_analysis() поймала исключение и
+    промаркировала это явно, см. bot.py). Раньше оба случая тихо схлопывались
+    в один и тот же return False без единой строки в логах."""
+    if not ema_stack_shadow:
+        log.info(f"shadow_engine.log_ema_stack_shadow_async: skip for {symbol} -- "
+                  f"нет события (pro_analysis не дошла до ema_stack_shadow)")
+        return False
+    if ema_stack_shadow.get("error"):
+        log.warning(f"shadow_engine.log_ema_stack_shadow_async: skip for {symbol} -- "
+                    f"pro_analysis сообщила об ошибке: {ema_stack_shadow['error']}")
         return False
     try:
         record = _build_ema_stack_shadow_record(symbol, ema_stack_shadow, promoted_live, rr)
     except Exception as e:
-        print(f"shadow_engine.log_ema_stack_shadow_async: build failed for {symbol}: {e}")
+        log.error(f"shadow_engine.log_ema_stack_shadow_async: build failed for {symbol}: {e}")
         return False
     ok_local = _write_local(record)
     if not ok_local:
@@ -749,5 +796,5 @@ async def log_ema_stack_shadow_async(symbol: str, ema_stack_shadow: dict,
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
-        print(f"shadow_engine: GitHub sync failed for ema_stack_shadow ({symbol}): {e}")
+        log.error(f"shadow_engine: GitHub sync failed for ema_stack_shadow ({symbol}): {e}")
     return True

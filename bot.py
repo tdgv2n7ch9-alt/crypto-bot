@@ -487,6 +487,14 @@ _job_heartbeats = {}          # name -> {"ts": float, "ok": bool, "detail": str}
 _job_expected_interval_sec = {}   # name -> ожидаемый интервал тика, сек (для /health и watchdog)
 _job_alerted_stale = set()    # чтобы watchdog не спамил на каждый тик, пока джоба не восстановится
 
+# Владелец "да" 2026-07-13 (находка "shadow-поток молчал 16+ часов, никто не
+# заметил") -- отдельный анти-спам флаг для watchdog-проверки shadow-потока
+# (не путать с _job_alerted_stale -- та проверяет, что send_scheduled/etc САМИ
+# запускаются, эта проверяет, что они успешно ПИШУТ shadow-записи -- разные
+# сигналы, ровно та разница, которая замаскировала находку).
+SHADOW_WRITE_ALERT_THRESHOLD_SEC = 2 * 3600  # 2 часа, порог владельца
+_shadow_write_alerted = False
+
 # Whale Radar (Блок 1/2) -- НЕ путать с существующим whale_monitor()/"🐋 Whale Monitor"
 # ниже (OI/funding/L-S-ratio институциональный скоринг, другая фича, тот же "кит" в
 # названии случайно совпал). _whale_radar_state -- живое состояние стакана/сделок,
@@ -660,6 +668,33 @@ async def run_watchdog(bot: Bot):
                 )
             except Exception:
                 pass
+
+    # Shadow-поток (владелец "да" 2026-07-13, находка "молчал 16+ часов незамеченным"):
+    # send_scheduled сам по себе может исправно тикать по heartbeat выше, но его
+    # shadow-запись -- отдельный внутренний шаг, который может тихо падать. Алерт
+    # только если AUTO-цикл (send_scheduled) САМ по себе живой (heartbeat свежий) --
+    # иначе это уже покрыто алертом про send_scheduled выше, не дублируем причину.
+    global _shadow_write_alerted
+    send_scheduled_hb = _job_heartbeats.get("send_scheduled")
+    send_scheduled_alive = bool(send_scheduled_hb and (now - send_scheduled_hb["ts"]) < 2 * 30 * 60)
+    if send_scheduled_alive:
+        last_shadow_ts = shadow_engine.get_last_send_scheduled_write_ts()
+        since_start = now - _PROCESS_START_TS
+        shadow_age = (now - last_shadow_ts) if last_shadow_ts else since_start
+        if shadow_age > SHADOW_WRITE_ALERT_THRESHOLD_SEC and not _shadow_write_alerted:
+            _shadow_write_alerted = True
+            try:
+                await bot.send_message(
+                    owner_id,
+                    f"⚠️ Watchdog: shadow-поток (send_scheduled) не писал записей "
+                    f"{shadow_age/3600:.1f}ч (порог {SHADOW_WRITE_ALERT_THRESHOLD_SEC/3600:.0f}ч), "
+                    f"хотя сам AUTO-цикл живой. Похоже, тихо падает внутри -- "
+                    f"проверь /stats и `railway logs` на 'log_send_scheduled_shadow_async'.",
+                )
+            except Exception:
+                pass
+        elif last_shadow_ts and shadow_age <= SHADOW_WRITE_ALERT_THRESHOLD_SEC:
+            _shadow_write_alerted = False  # восстановилось -- сбросить, как остальные watchdog-флаги
 
     # Источники данных (ROADMAP П3) -- N отказов подряд -> алерт (см. _record_source_result).
     # Ретраи внутри самих фетчеров не спасают от "ключ невалиден"/"квота исчерпана" --
@@ -7466,6 +7501,10 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         c1w  = get_binance_ohlc(symbol, "1w",  100) or []
 
         if len(c4h) < 50:
+            # Владелец "да" 2026-07-13 -- различать "события не было" (None) от
+            # "было, но упало" (dict с "error") для downstream shadow-логирования
+            # (shadow_engine.log_ema_stack_shadow_async), см. PROGRESS.md находка 2.
+            result["ema_stack_shadow"] = {"error": f"insufficient_candle_data: c4h={len(c4h)}"}
             return result
 
         #    
@@ -8043,6 +8082,14 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
 
     except Exception as e:
         log.error(f"pro_analysis {symbol}: {e}")
+        # Владелец "да" 2026-07-13 -- то же различение, что и выше при недостатке
+        # свечей: явно помечаем, что расчёт УПАЛ (не просто "события не было"),
+        # чтобы shadow_engine.log_ema_stack_shadow_async() мог это залогировать
+        # отдельно от нормального "пока нет данных". НЕ перезаписывает result,
+        # если ema_stack_shadow уже был выставлен (например, ветка недостатка
+        # свечей выше) -- честно, только заполняет отсутствующее.
+        if result.get("ema_stack_shadow") is None:
+            result["ema_stack_shadow"] = {"error": f"pro_analysis_exception: {e}"}
 
     return result
 
@@ -11079,6 +11126,21 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if rejected["total"]:
         rej_str = ", ".join(f"{k}: {v}" for k, v in sorted(rejected["by_source"].items()))
         lines.append(f"\nОтклонено гейтами за 7д: {rejected['total']} ({rej_str})")
+
+    # Владелец "да" 2026-07-13 (находка "shadow-поток молчал 16+ часов, никто не
+    # заметил") -- health-счётчик последней успешной shadow-записи. Честно: None
+    # значит "этот процесс ещё не записал ни одной с момента своего последнего
+    # старта" (Railway ephemeral) -- не путать с "поток мёртв", если процесс
+    # только что перезапустился.
+    last_shadow_ts = shadow_engine.get_last_send_scheduled_write_ts()
+    lines.append("\n*Shadow-поток (send_scheduled):*")
+    if last_shadow_ts is None:
+        lines.append("  Ни одной записи с последнего рестарта процесса -- н/д "
+                      "(либо только что запустились, либо поток стоит)")
+    else:
+        hours_ago = (time.time() - last_shadow_ts) / 3600
+        warn = " ⚠️ >2ч без записи при живом AUTO-цикле" if hours_ago > 2 else ""
+        lines.append(f"  Последняя запись: {hours_ago:.1f}ч назад{warn}")
 
     lines.append("\nПодробнее по всем окнам (24ч/7д/всё время): /journal")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
