@@ -2671,10 +2671,10 @@ async def check_entry_zones(bot, chat_ids, coins):
                           f"⚖️ R:R: 1:{a['rr']:.1f}\n\n"
                           f"⚠️ Риск: не больше 2% депозита | ставь SL\n\n"
                           f"#{sym_e}USDT")
-                kb = InlineKeyboardMarkup([[
+                kb = attach_home_row(InlineKeyboardMarkup([[
                     InlineKeyboardButton("📊 TradingView", url=tv_link(sym)),
                     InlineKeyboardButton("CMC", url=cmc_link(slug)),
-                ]])
+                ]]))
                 for cid in chat_ids:
                     try:
                         await bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
@@ -2768,6 +2768,33 @@ def welcome_text_v2(bot_module) -> str:
         f"{SEP}\n"
         f"👇 Выбери раздел:"
     )
+
+
+def attach_home_row(markup):
+    """Пакет 18, п.2 (владелец): "нижний ряд [🏠 Меню] во всех сообщениях
+    бота -- один хелпер, подключить везде". Grep по reply_markup= (см. отчёт
+    пакета) нашёл реальные пробелы: часть алертов подписчикам (zone/ST/
+    watchlist/spot/entry-approach) и часть команд/callback-веток (game,
+    rockets, precision-шапка, cmd_watchlist) отправляли клавиатуру БЕЗ пути
+    назад -- пользователь застревал на экране без /команды. Идемпотентно:
+    если в markup уже есть кнопка с callback_data="show_menu", повторно не
+    добавляет (не дублирует ряд на билдерах, которые уже сами его ставят).
+    show_menu стейтлес (см. callback_handler: рендерит active_main_kb()/
+    main_kb() с нуля из модульного флага MENU_V2_ENABLED, без ctx.user_data)
+    -- работает из старых постов и после рестарта бота."""
+    if markup is None:
+        rows = []
+    elif isinstance(markup, InlineKeyboardMarkup):
+        rows = [list(row) for row in markup.inline_keyboard]
+    else:
+        rows = [list(row) for row in markup]
+    has_home = any(
+        any(getattr(btn, "callback_data", None) == "show_menu" for btn in row)
+        for row in rows
+    )
+    if not has_home:
+        rows.append([InlineKeyboardButton("🏠 Меню", callback_data="show_menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def back_kb():
@@ -2937,11 +2964,11 @@ async def send_signals_batch(bot, chat_id, coins):
     rocket_syms = {c["symbol"] for c,a in rockets}
     longs = [(c,a) for c,a in longs if c["symbol"] not in rocket_syms]
 
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" /1 ",    callback_data="market_overview"),
         InlineKeyboardButton(" /3 ",  callback_data="signals"),
         InlineKeyboardButton(" /5 ",   callback_data="rockets"),
-    ]])
+    ]]))
 
     header_lines = [
         " *BEST TRADE  *",
@@ -3652,11 +3679,11 @@ async def cmd_top(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         em = "" if ch >= 5 else ("" if ch >= 0 else ("" if ch >= -5 else ""))
         return f"{em} {i}. *{c['symbol']}*  ${fp(q['price'])}  {fc(ch)}"
 
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" /1 ",   callback_data="market_overview"),
         InlineKeyboardButton(" /3 ", callback_data="signals"),
         InlineKeyboardButton(" /5 ",  callback_data="rockets"),
-    ]])
+    ]]))
     t1 = [f" *-500  BEST TRADE*", f" {now_utc3()}",
           f": {pos}/{len(coins)} ({pos/len(coins)*100:.0f}%)", "",
           " *  24*"]
@@ -3687,10 +3714,10 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         key=lambda x: x[1]["rocket"], reverse=True
     )[:10]
 
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" /1 ",   callback_data="market_overview"),
         InlineKeyboardButton(" /3 ", callback_data="signals"),
-    ]])
+    ]]))
 
     lines = [
         " *BEST TRADE  *",
@@ -3754,10 +3781,10 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     t2  = [" *  24*"]
     t2 += [row(i, c) for i, c in enumerate(dn[:15], 1)]
 
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" /1 ", callback_data="market_overview"),
         InlineKeyboardButton(" /3 ", callback_data="signals"),
-    ]])
+    ]]))
     await msg.edit_text("\n".join(t1), parse_mode="Markdown", reply_markup=nav)
     await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
@@ -4462,10 +4489,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         rockets  = sorted([(c,a) for c,a in analyzed
                            if not a.get("suspicious", False)],
                           key=lambda x: x[1]["rocket"], reverse=True)[:10]
-        nav = InlineKeyboardMarkup([[
+        nav = attach_home_row(InlineKeyboardMarkup([[
             InlineKeyboardButton(" /1 ",   callback_data="market_overview"),
             InlineKeyboardButton(" /3 ", callback_data="signals"),
-        ]])
+        ]]))
         lines = [" *  Rocket Score*", f" {now_utc3()}", ""]
         for i, (c, a) in enumerate(rockets, 1):
             r = a["rocket"]; bar = ""*int(r/10)+""*(10-int(r/10))
@@ -4481,10 +4508,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif data == "game":
         text = f"\U0001f550 {now_utc3()}\n\n" + build_game_digest()
-        nav  = InlineKeyboardMarkup([[
+        nav  = attach_home_row(InlineKeyboardMarkup([[
             InlineKeyboardButton("\U0001f504 ",  callback_data="game"),
             InlineKeyboardButton("\U0001f30d ",     callback_data="market_overview"),
-        ]])
+        ]]))
         try:
             await q.edit_message_text(text, parse_mode="Markdown",
                                       reply_markup=nav, disable_web_page_preview=False)
@@ -6032,10 +6059,10 @@ async def check_supertrend_signals(bot, chat_ids, coins):
                 f"⚠️ Риск: не больше 2% депозита | ставь SL\n\n"
                 f"#{sym_e}USDT"
             )
-            kb = InlineKeyboardMarkup([[
+            kb = attach_home_row(InlineKeyboardMarkup([[
                 InlineKeyboardButton("📊 TradingView", url=tv_link(sym)),
                 InlineKeyboardButton("CMC", url=cmc_link(slug)),
-            ]])
+            ]]))
             for cid in chat_ids:
                 try:
                     await bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
@@ -6343,11 +6370,11 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" /1 ",   callback_data="market_overview"),
         InlineKeyboardButton(" /5 ",  callback_data="rockets"),
         InlineKeyboardButton(" ",   callback_data="precision"),
-    ]])
+    ]]))
 
     # 
     header = [
@@ -6520,9 +6547,9 @@ async def check_watchlist(bot, chat_ids, coins):
             f" : 2%  | SL \n\n"
             f"#{sym}USDT"
         )
-        kb = InlineKeyboardMarkup([[
+        kb = attach_home_row(InlineKeyboardMarkup([[
             InlineKeyboardButton(" TradingView", url=tv_link(sym)),
-        ]])
+        ]]))
         for cid in chat_ids:
             try:
                 await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
@@ -6570,10 +6597,10 @@ async def check_spot_alerts(bot: Bot, chat_ids: set):
                     f" :   5-10% \n\n"
                     f"#{sym}USDT  #"
                 )
-                kb = InlineKeyboardMarkup([[
+                kb = attach_home_row(InlineKeyboardMarkup([[
                     InlineKeyboardButton(" TradingView", url=tv_link(sym)),
                     InlineKeyboardButton(" TOP ",  callback_data="top_trades"),
-                ]])
+                ]]))
                 for cid in chat_ids:
                     try:
                         await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
@@ -6613,10 +6640,10 @@ async def check_entry_approach(bot: Bot, chat_ids: set):
                     f" SL:  `{fp(v.get('sl', entry*0.85))}`\n\n"
                     f"   !\n#{sym}USDT"
                 )
-                kb = InlineKeyboardMarkup([[
+                kb = attach_home_row(InlineKeyboardMarkup([[
                     InlineKeyboardButton(" TradingView", url=tv_link(sym)),
                     InlineKeyboardButton(" TOP ",  callback_data="top_trades"),
-                ]])
+                ]]))
                 for cid in chat_ids:
                     try: await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
                     except Exception as e: log.error(f"Entry approach alert {cid}: {e}")
@@ -6648,10 +6675,10 @@ async def check_entry_approach(bot: Bot, chat_ids: set):
                     f" SL:  `{fp(v.get('sl', entry*1.15))}`\n\n"
                     f"   !\n#{sym}USDT"
                 )
-                kb = InlineKeyboardMarkup([[
+                kb = attach_home_row(InlineKeyboardMarkup([[
                     InlineKeyboardButton(" TradingView", url=tv_link(sym)),
                     InlineKeyboardButton(" TOP ",  callback_data="top_trades"),
-                ]])
+                ]]))
                 for cid in chat_ids:
                     try: await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
                     except Exception as e: log.error(f"Entry approach alert {cid}: {e}")
@@ -8102,10 +8129,10 @@ async def cmd_watchlist(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"    {src}")
         lines.append("")
 
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" /1 ",   callback_data="market_overview"),
         InlineKeyboardButton(" /3 ", callback_data="signals"),
-    ]])
+    ]]))
     await msg.edit_text("\n".join(lines), parse_mode="Markdown",
                         reply_markup=nav, disable_web_page_preview=True)
 
@@ -8114,13 +8141,13 @@ async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     /8    
          48 + 
     """
-    nav = InlineKeyboardMarkup([[
+    nav = attach_home_row(InlineKeyboardMarkup([[
         InlineKeyboardButton(" ",    callback_data="game"),
         InlineKeyboardButton(" ",       callback_data="market_overview"),
     ], [
         InlineKeyboardButton(" ",      callback_data="rockets"),
         InlineKeyboardButton(" Precision",   callback_data="precision"),
-    ]])
+    ]]))
     text = f" {now_utc3()}\n\n" + build_game_digest()
     await update.message.reply_text(
         text, parse_mode="Markdown",
