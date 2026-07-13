@@ -205,3 +205,68 @@ def test_zones_set_style_config_change_reflected_without_restart(monkeypatch):
     alerts_after = bot.check_watchlist_alerts_from_level_watch(coins)
     assert len(alerts_after) == 1
     assert alerts_after[0]["lo"] == 140
+
+
+def test_format_watchlist_rug_line_shows_line_at_or_above_warn_threshold(monkeypatch):
+    """Владелец, 2026-07-13 (кейс LAB): score >= rug_radar.RUG_RISK_WARN_THRESHOLD
+    (40) -> строка "🛑 RUG-RADAR: {score} — {детекторы}" в алерте."""
+    monkeypatch.setattr(bot, "_cg_get", lambda *a, **kw: {})
+    monkeypatch.setattr(bot.rug_radar, "compute_rug_risk",
+                         lambda *a, **kw: {"score": 45, "reasons": ["навес разлоков", "тонкий объём"]})
+    line = bot.format_watchlist_rug_line("LAB", _coin("LAB", 0.21))
+    assert line == "🛑 RUG-RADAR: 45 — навес разлоков; тонкий объём"
+
+
+def test_format_watchlist_rug_line_empty_below_warn_threshold(monkeypatch):
+    monkeypatch.setattr(bot, "_cg_get", lambda *a, **kw: {})
+    monkeypatch.setattr(bot.rug_radar, "compute_rug_risk",
+                         lambda *a, **kw: {"score": 10, "reasons": []})
+    assert bot.format_watchlist_rug_line("BTC", _coin("BTC", 62000.0)) == ""
+
+
+def test_format_watchlist_rug_line_silent_empty_on_fetch_error(monkeypatch):
+    """Best-effort: сеть/CoinGecko падают -> тихая пустая строка, алерт не ломается."""
+    def _boom(*a, **kw):
+        raise RuntimeError("coingecko down")
+    monkeypatch.setattr(bot, "_cg_get", _boom)
+    assert bot.format_watchlist_rug_line("XYZ", _coin("XYZ", 1.0)) == ""
+
+
+def test_check_watchlist_alert_includes_rug_line_for_lab_not_for_btc(monkeypatch):
+    """Золотой тестовый кейс владельца, 2026-07-13: LAB -- первый символ сразу
+    с активной зоной И WARN rug-скором. Алерт по LAB содержит rug-строку,
+    алерт по BTC -- нет."""
+    import asyncio
+
+    cfg = {
+        "updated": "2026-07-13", "source": "Королев 13.07",
+        "LABUSDT": [{"side": "LONG", "lo": 0.2006, "hi": 0.2167, "note": "HIGH RISK"}],
+        "BTCUSDT": [{"side": "LONG", "lo": 61840.9, "hi": 62285.0, "note": "поддержка"}],
+    }
+    monkeypatch.setattr(level_watch, "load_watch_zones", lambda *a, **kw: cfg)
+    monkeypatch.setattr(bot, "ZONES_UNIFIED", True)
+    monkeypatch.setattr(bot, "watchlist_alerted", {})
+    monkeypatch.setattr(level_watch, "format_liquidation_cluster_line",
+                         lambda *a, **kw: "🗺 Ликвидации рядом: н/д")
+    monkeypatch.setattr(bot, "_cg_get", lambda *a, **kw: {})
+
+    def _fake_rug(symbol, coin, cg_detail=None, **kw):
+        if symbol == "LAB":
+            return {"score": 45, "reasons": ["rug-score 45 WARN"]}
+        return {"score": 5, "reasons": []}
+
+    monkeypatch.setattr(bot.rug_radar, "compute_rug_risk", _fake_rug)
+
+    sent = []
+
+    class _FakeBot2:
+        async def send_message(self, chat_id, text, **kw):
+            sent.append(text)
+
+    coins = [_coin("LAB", 0.21), _coin("BTC", 62000.0)]
+    asyncio.run(bot.check_watchlist(_FakeBot2(), {123}, coins))
+
+    lab_text = next(t for t in sent if "LABUSDT" in t)
+    btc_text = next(t for t in sent if "BTCUSDT" in t)
+    assert "RUG-RADAR" in lab_text
+    assert "RUG-RADAR" not in btc_text

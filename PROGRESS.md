@@ -6742,3 +6742,40 @@ py_compile чист, полный pytest 818 passed/1 skipped.
    телефона, старые границы из legacy-архива НЕ использовать (протухшие).
 
 py_compile чист, полный pytest 819 passed/1 skipped.
+
+## 2026-07-13 -- LABUSDT в разметку Королева + rug-score строка в zone-touch алертах
+
+Владелец: LAB -- новый символ в дневной разметке 13.07, ПЕРВЫЙ случай, когда
+активная зона и WARN rug-скор (кейс §21, `knowledge/METHODOLOGY_CORE.md`)
+совпадают на одном символе -- золотой тестовый кейс для проверки, что
+rug-предупреждение реально доходит до подписчика в алерте, а не только на
+карточках x100/Памп-радара.
+
+1. `journal/watch_zones.json` -- `LABUSDT` LONG `0.2006-0.2167`, prio 3,
+   note "HIGH RISK от автора; rug-score 45 WARN (кейс §21); у инсайдеров
+   80M+ LAB — навес давления; только наблюдение/минимальная доля" (через
+   `level_watch.replace_watch_zones()`, прежняя версия архивирована в
+   `journal/watch_zones_history/2026-07-13.json`).
+2. `bot.format_watchlist_rug_line(symbol, coin)` -- новая функция: best-effort
+   CoinGecko-фетч (тот же паттерн, что `_mv2_show_razbor()`) +
+   `rug_radar.compute_rug_risk()`. Score >= `rug_radar.RUG_RISK_WARN_THRESHOLD`
+   (40) -> строка `"🛑 RUG-RADAR: {score} — {детекторы}"`; ниже порога или
+   любая ошибка (сеть/нет coin) -> тихая пустая строка (алерт не портится и
+   не блокируется, в отличие от liq-line там нет обязательного "н/д" --
+   rug-риск не гарантированный блок на каждой карточке). Раньше такой
+   интеграции в `check_watchlist()` не было вообще -- проверено грепом
+   (`compute_rug_risk` вызывался только в `_mv2_show_razbor()` и x100/Памп-
+   радар карточках, не в watchlist-алертах).
+3. `check_watchlist()` подключает rug-строку в текст алерта (после liq-line,
+   до note/source), только когда она непустая.
+4. 4 новых теста (`tests/test_watchlist_zones_unification.py`): rug-строка
+   показывается на score>=WARN, пустая ниже порога, тихая пустая при ошибке
+   фетча, и золотой кейс владельца -- `check_watchlist()` с LAB (score 45,
+   замокан) и BTC (score 5) в одном тике: LAB получает "RUG-RADAR" в тексте
+   алерта, BTC -- нет.
+5. `/zones` -- проверено офлайн прямым вызовом `bot.cmd_zones()` против
+   реального `watch_zones.json`: LABUSDT отображается с полным note (см.
+   вывод в сессии). Живой Telegram-скрин -- за владельцем (команда owner-only,
+   у Claude Code нет доступа тапнуть кнопку в приложении).
+
+py_compile чист, полный pytest 823 passed/1 skipped.

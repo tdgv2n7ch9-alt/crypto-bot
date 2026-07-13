@@ -2505,6 +2505,33 @@ def check_watchlist_alerts_from_level_watch(coins: list) -> list:
     return alerts
 
 
+def format_watchlist_rug_line(symbol: str, coin: dict) -> str:
+    """Владелец, 2026-07-13 (кейс LAB): любой zone-touch алерт подписчикам
+    обязан включать строку rug-скора, если score >= rug_radar.RUG_RISK_WARN_THRESHOLD
+    (40) -- LAB первый символ сразу с активной зоной И WARN-скором (кейс §21,
+    knowledge/METHODOLOGY_CORE.md). Best-effort: сетевой CoinGecko-фетч
+    (тот же паттерн, что _mv2_show_razbor()) -- любая ошибка (сеть/рейт-
+    лимит/нет coin) -> тихая пустая строка, не блокирует и не портит остальной
+    текст алерта (в отличие от liq-line, здесь НЕТ обязательного "н/д" --
+    rug-риск не гарантированная строка на каждой карточке, только "есть
+    сигнал -- покажи", молчание при ошибке не искажает смысл алерта)."""
+    try:
+        cg_detail = _cg_get(
+            f"https://api.coingecko.com/api/v3/coins/{_cg_slug(symbol)}",
+            params={"localization": "false", "tickers": "true",
+                    "community_data": "false", "developer_data": "false"},
+            timeout=8) or {}
+        coin_q = (coin or {}).get("quote", {}).get("USDT", {})
+        rug_risk = rug_radar.compute_rug_risk(symbol, {"quote": {"USDT": coin_q}}, cg_detail=cg_detail)
+    except Exception as e:
+        log.info(f"[WATCHLIST] rug-risk {symbol}: {e}")
+        return ""
+    if rug_risk.get("score", 0) < rug_radar.RUG_RISK_WARN_THRESHOLD:
+        return ""
+    reasons_str = "; ".join(rug_risk.get("reasons", [])[:3]) or "детали н/д"
+    return f"🛑 RUG-RADAR: {rug_risk['score']} — {reasons_str}"
+
+
 def analyze_market(btc, eth, gm, coins):
     bp = btc.get("price", 0); ep = eth.get("price", 0)
     bd = gm.get("btc_dominance", 0); ed = gm.get("eth_dominance", 0)
@@ -6383,10 +6410,11 @@ async def check_watchlist(bot, chat_ids, coins):
     now_ts   = datetime.now(TZ).timestamp()
     alerts   = (check_watchlist_alerts_from_level_watch(coins) if ZONES_UNIFIED
                 else check_watchlist_alerts(coins))
+    coin_map = {c["symbol"]: c for c in coins}
     for al in alerts:
         sym = al["symbol"]
         last = watchlist_alerted.get(sym, 0)
-        if now_ts - last < 1800:  #     30 
+        if now_ts - last < 1800:  #     30
             continue
         watchlist_alerted[sym] = now_ts
         # Владелец, 2026-07-13 (живой прогон): обязательная строка ликвидационных
@@ -6398,6 +6426,11 @@ async def check_watchlist(bot, chat_ids, coins):
                 sym, {"lo": al["lo"], "hi": al["hi"], "side": al["bias"]}, get_liq_data_fn=get_liq_data)
         except Exception as e:
             liq_line = f"🗺 Ликвидации рядом: н/д (ошибка: {e})"
+        # Владелец, 2026-07-13 (кейс LAB): rug-score строка, если score >= WARN --
+        # см. format_watchlist_rug_line(). Пустая строка -- не показывается вообще
+        # (не "н/д", в отличие от liq_line -- см. докстринг функции).
+        rug_line = format_watchlist_rug_line(sym, coin_map.get(sym))
+        rug_block = f"{rug_line}\n\n" if rug_line else ""
         text = (
             f" *   !*\n"
             f" {now_utc3()}\n\n"
@@ -6405,6 +6438,7 @@ async def check_watchlist(bot, chat_ids, coins):
             f" : `{fp(al['price'])}`\n"
             f" : `{fp(al['lo'])}  {fp(al['hi'])}`\n"
             f"{liq_line}\n\n"
+            f"{rug_block}"
             f" {al['note']}\n"
             f" : {al['source']}\n\n"
             f" : 2%  | SL \n\n"
