@@ -67,6 +67,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 
 import requests
 
@@ -143,6 +144,68 @@ def get_local_records() -> list:
     (bot._startup_integrity_check и т.п.), чтобы не тянуть private-функцию через
     границу модуля."""
     return _load_local()
+
+
+# НОЧЬ#3, Н4/Н8 (владелец): компактная таблица готовности по контурам --
+# n / порог / готово да-нет-сколько-осталось, переиспользуется утренней
+# сводкой (morning_metrics.py) и планируемым MORNING_BRIEF (tools/
+# morning_brief.py). Пороги -- та же методология, что SHADOW_ANALYSIS.md
+# (Пакет 14 DoD)/tools/night3_shadow_stats.py, НЕ дублирует полный анализ
+# оттуда -- только "готово к решению или нет", без распределений/дельт.
+CONTOUR_THRESHOLDS = {
+    "tz13": 100,
+    "patch05_bpr": 200,
+    "patch09_oi": 100,
+}
+
+
+def contour_readiness_summary(records: list = None) -> dict:
+    """Возвращает {contour: {"n": int, "threshold": int, "ready": bool,
+    "remaining": int}} для tz13/patch05_bpr/patch09_oi (числовые пороги) --
+    EMA-стек считается отдельно ниже (у него временнОе окно, не только n).
+    `records=None` -- читает journal/shadow_signals.json сам (get_local_records()),
+    передача списка явно -- для тестов на синтетике, без файла на диске."""
+    if records is None:
+        records = get_local_records()
+
+    n_tz13 = sum(1 for r in records if r.get("tz13_score") is not None)
+    n_bpr = sum(1 for r in records if r.get("bpr_zone_count") is not None)
+    n_oi = sum(1 for r in records
+               if r.get("oi_funding_ls_shadow") is not None
+               and "error" not in (r.get("oi_funding_ls_shadow") or {}))
+
+    def _entry(n, threshold):
+        return {"n": n, "threshold": threshold, "ready": n >= threshold,
+                "remaining": max(0, threshold - n)}
+
+    return {
+        "tz13": _entry(n_tz13, CONTOUR_THRESHOLDS["tz13"]),
+        "patch05_bpr": _entry(n_bpr, CONTOUR_THRESHOLDS["patch05_bpr"]),
+        "patch09_oi": _entry(n_oi, CONTOUR_THRESHOLDS["patch09_oi"]),
+    }
+
+
+def ema_stack_readiness_summary(records: list = None, now_ts: float = None,
+                                 fix_ts: float = None, window_sec: int = 3 * 24 * 3600) -> dict:
+    """EMA-стек отдельно от contour_readiness_summary() -- у него временнОе
+    окно (3 суток с починки потока), не числовой порог накопления. `fix_ts`
+    по умолчанию -- коммит 347c0a7 (2026-07-13T10:34:19+03:00), тот же
+    якорь, что tools/night3_shadow_stats.py. Возвращает n, elapsed/window
+    часы, ready (окно закрыто)."""
+    if records is None:
+        records = get_local_records()
+    if now_ts is None:
+        now_ts = time.time()
+    if fix_ts is None:
+        fix_ts = datetime.fromisoformat("2026-07-13T10:34:19+03:00").timestamp()
+
+    window_end = fix_ts + window_sec
+    n = sum(1 for r in records
+            if r.get("type") == "ema_stack_shadow" and fix_ts <= r.get("ts", 0) <= now_ts)
+    elapsed_hours = max(0.0, (min(now_ts, window_end) - fix_ts) / 3600)
+    window_hours = window_sec / 3600
+    return {"n": n, "elapsed_hours": elapsed_hours, "window_hours": window_hours,
+            "ready": now_ts >= window_end}
 
 
 def _dedup_key(rec: dict):

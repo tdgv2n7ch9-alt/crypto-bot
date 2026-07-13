@@ -271,3 +271,43 @@ def test_zone_touch_alert_carries_author_tier(monkeypatch):
     alerts = bot.check_watchlist_alerts_from_level_watch(coins)
     assert len(alerts) == 1
     assert alerts[0]["tier"] == "author"
+
+
+# ── author_zones_status_summary() -- НОЧЬ#3 Н4/Н8 ───────────────────────────
+
+def test_author_zones_status_summary_counts_by_status(monkeypatch):
+    config = {
+        "updated": "x", "source": "test",
+        "BTCUSDT": [_zone("LONG", 100, 110)],   # цена 105 -> В ЗОНЕ
+        "ETHUSDT": [_zone("LONG", 200, 210)],   # цена 150 -> ЖДЁМ
+        "SOLUSDT": [_zone("SHORT", 50, 60)],    # цена 40 -> ОТРАБОТАНА
+    }
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    monkeypatch.setattr(bot, "get_top500", lambda: [
+        {"symbol": "BTC", "quote": {"USDT": {"price": 105}}},
+        {"symbol": "ETH", "quote": {"USDT": {"price": 150}}},
+        {"symbol": "SOL", "quote": {"USDT": {"price": 40}}},
+    ])
+    result = bot.author_zones_status_summary()
+    assert result["total"] == 3
+    assert result["counts"]["ЦЕНА В ЗОНЕ"] == 1
+    assert result["counts"]["ЖДЁМ ЦЕНУ"] == 1
+    assert result["counts"]["ОТРАБОТАНА"] == 1
+
+
+def test_author_zones_status_summary_missing_price_is_honest_na(monkeypatch):
+    config = {"updated": "x", "source": "test", "BTCUSDT": [_zone("LONG", 100, 110)]}
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    monkeypatch.setattr(bot, "get_top500", lambda: [])  # символ не найден в снапшоте
+    result = bot.author_zones_status_summary()
+    assert result["total"] == 1
+    assert result["counts"]["н/д (нет цены)"] == 1
+
+
+def test_author_zones_status_summary_empty_when_no_zones(monkeypatch):
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones",
+                         lambda: {"updated": "x", "source": "y"})
+    monkeypatch.setattr(bot, "get_top500", lambda: [])
+    result = bot.author_zones_status_summary()
+    assert result["total"] == 0
+    assert result["zones"] == []

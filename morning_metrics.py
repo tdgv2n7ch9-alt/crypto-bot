@@ -31,6 +31,52 @@ PROGRESS_MD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PRO
 NIGHT_STATUS_TAIL_CHARS = 40_000
 NIGHT_STATUS_MAX_LINES = 12
 
+# НОЧЬ#3 (владелец, Н4): "Утренняя сводка обязана включать статус Пакета 18
+# по пунктам". Пакет 18 -- фиксированный, уже завершённый факт этой сессии
+# (см. PROGRESS.md, "DoD Пакета 18") -- статичная таблица, не пересчитывается
+# заново каждое утро (в отличие от night_package_status_summary() ниже,
+# которая читает live-хвост PROGRESS.md для БУДУЩИХ ночей). Формат таблицы
+# в PROGRESS.md (markdown `| № | Статус |`) не совпадает с grep-соглашением
+# `**Статус...**`, поэтому отдельная константа, а не общий парсер.
+PACKET18_STATUS_TABLE = [
+    ("1", "✅ готово (LEGACY-снос + деплой + живой лог)"),
+    ("2", "✅ готово (деплой)"),
+    ("3", "✅ готово (деплой + живой лог: прогрев подтверждён)"),
+    ("4", "✅ готово (деплой)"),
+    ("5", "✅ готово (деплой)"),
+    ("6", "✅ готово (деплой)"),
+    ("7", "✅ подтверждено (задеплоено ранее в сессии)"),
+    ("8", "✅ готово (деплой)"),
+    ("9", "✅ готово (деплой)"),
+    ("10", "✅ готово (документация, деплоя не требует)"),
+    ("11", "✅ готово (деплой)"),
+    ("13", "✅ готово (деплой)"),
+]
+
+# НОЧЬ#3 (владелец, Н4): "ответ по п.1 (BTC zone-touch: был/не был/причина)".
+# Диагностический факт, зафиксированный один раз в PROGRESS.md (см. "Пакет 18
+# п.1") -- не измеряется заново каждое утро, статична по той же причине, что
+# PACKET18_STATUS_TABLE выше.
+PACKET18_ITEM1_FINDING = (
+    "БЫЛ -- BTC зона 61840.9-62285.0 касалась вечером 13.07, live-alert "
+    "прошёл через unified-путь check_watchlist_alerts_from_level_watch() "
+    "(не LEGACY -- код доказательно был недостижим без оверрайда "
+    "ZONES_UNIFIED на Railway, которого не было). LEGACY-ветка снесена."
+)
+
+# НОЧЬ#3 (владелец, Н4): "статус ночных блоков" -- Н1-Н4/Н8, та же логика
+# статичности, что PACKET18_STATUS_TABLE (факт этой конкретной ночи, не
+# пересчитывается). Обновляется вручную по ходу ночи -- следующая ночная
+# сессия заведёт свой список под свои блоки, эта константа не претендует
+# быть общим шаблоном (в отличие от contour_readiness_lines()/
+# author_zones_lines(), которые живые и переиспользуются каждую ночь).
+NIGHT3_BLOCKS_STATUS = [
+    ("Н1", "✅ готово (SHADOW_ANALYSIS.md -- tz13/Патч05/Патч09/EMA-стек срезы)"),
+    ("Н2", "✅ готово (транскрибация подтверждена 100%, Блок 7 +2 файла в EVOLUTION.md)"),
+    ("Н3", "✅ готово (EVENT-RADAR М5 -- сводка ликвидности в On-Chain карточке)"),
+    ("Н4", "✅ готово (этот блок -- обязательные поля утренней сводки)"),
+]
+
 
 def night_package_status_summary(progress_md_path: str = None,
                                   tail_chars: int = NIGHT_STATUS_TAIL_CHARS) -> list:
@@ -76,6 +122,65 @@ def deploy_status_summary(bot_module) -> str:
     if sha == boot_sha:
         return f"актуален, коммит `{sha[:7]}` (совпадает с HEAD main)"
     return f"⚠️ main ушёл вперёд -- процесс на `{boot_sha[:7]}`, main на `{sha[:7]}`"
+
+
+def contour_readiness_lines() -> list:
+    """НОЧЬ#3 (владелец, Н4/Н8): "тень одной таблицей -- n, готово ли к
+    решению (да/нет/сколько осталось)". Переиспользует
+    shadow_engine.contour_readiness_summary()/ema_stack_readiness_summary()
+    (НОЧЬ#3 Н4) -- живой пересчёт по journal/shadow_signals.json на диске,
+    не статика (в отличие от PACKET18_STATUS_TABLE выше -- контуры копятся
+    и завтра дадут другие числа)."""
+    contours = shadow_engine.contour_readiness_summary()
+    ema = shadow_engine.ema_stack_readiness_summary()
+    lines = []
+    labels = {"tz13": "tz13", "patch05_bpr": "Патч 05 (BPR)", "patch09_oi": "Патч 09 (OI/funding/L-S)"}
+    for key, label in labels.items():
+        c = contours[key]
+        status = "готово" if c["ready"] else f"нет, осталось {c['remaining']}"
+        lines.append(f"  {label}: n={c['n']}/{c['threshold']} -- {status}")
+    ema_status = "готово (окно закрыто)" if ema["ready"] else \
+        f"нет, {ema['elapsed_hours']:.1f}/{ema['window_hours']:.0f}ч окна"
+    lines.append(f"  EMA-стек: n={ema['n']} -- {ema_status}")
+    return lines
+
+
+def author_zones_lines(bot_module) -> list:
+    """НОЧЬ#3 (владелец, Н4/Н8): "число активных author-зон и их статусы
+    (ЖДЁМ/В ЗОНЕ)". Переиспользует bot.author_zones_status_summary()
+    (Пакет 18 п.13 логика 1в1, НОЧЬ#3 Н4 обёртка)."""
+    try:
+        summary = bot_module.author_zones_status_summary()
+    except Exception as e:
+        return [f"  н/д (ошибка: {e})"]
+    counts = summary["counts"]
+    lines = [f"  Всего активных author-зон: {summary['total']}"]
+    lines.append(f"  ЖДЁМ ЦЕНУ: {counts.get('ЖДЁМ ЦЕНУ', 0)} · "
+                  f"ЦЕНА В ЗОНЕ: {counts.get('ЦЕНА В ЗОНЕ', 0)} · "
+                  f"ОТРАБОТАНА: {counts.get('ОТРАБОТАНА', 0)}")
+    in_zone = [z for z in summary["zones"] if z["status"] == "ЦЕНА В ЗОНЕ"]
+    if in_zone:
+        lines.append("  В зоне сейчас: " + ", ".join(f"{z['symbol']} {z['side']}" for z in in_zone))
+    return lines
+
+
+def zone_touch_alerts_tonight_lines(bot_module, now_ts: float, window_sec: int) -> list:
+    """НОЧЬ#3 (владелец, Н4): "любые ночные zone-touch алерты". Честная
+    оговорка: bot.watchlist_alerted -- {symbol: последний_alert_ts}
+    (кулдаун-словарь, не полный лог) -- если один и тот же символ алертил
+    дважды за ночь, здесь виден только факт "алертил", не количество раз.
+    Полноценный персистентный лог алертов -- отдельная задача на будущее,
+    не выдаю приближение за точный счётчик."""
+    try:
+        alerted = bot_module.watchlist_alerted
+    except Exception as e:
+        return [f"  н/д (ошибка: {e})"]
+    tonight = sorted(sym for sym, ts in alerted.items() if now_ts - ts <= window_sec)
+    if not tonight:
+        return ["  Ни одного zone-touch алерта за ночь"]
+    return [f"  {len(tonight)}: " + ", ".join(tonight) +
+            " (честно: словарь кулдауна хранит последний алерт на символ, "
+            "не полный счётчик повторов)"]
 
 
 def build_morning_digest(bot_module, now_ts: float = None) -> str:
@@ -157,6 +262,27 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
         lines.append(f"  Всего: {len(touches)}")
         seen_syms = sorted({t.get("symbol", "?") for t in touches})
         lines.append(f"  Символы: {', '.join(seen_syms)}")
+
+    # НОЧЬ#3, Н4 (владелец): обязательные поля утренней сводки -- zone-touch
+    # алерты за ночь, author-зоны (⭐ ЛИМИТКИ), shadow-готовность по контурам,
+    # статус Пакета 18 по пунктам + ответ по п.1.
+    lines += ["", "⭐ *Zone-touch алерты за ночь (author-зоны):*"]
+    lines += zone_touch_alerts_tonight_lines(bot_module, now, MORNING_WINDOW_SEC)
+
+    lines += ["", "⭐ *Author-зоны (⭐ ЛИМИТКИ):*"]
+    lines += author_zones_lines(bot_module)
+
+    lines += ["", "🔮 *Shadow-контуры, готовность к решению:*"]
+    lines += contour_readiness_lines()
+
+    lines += ["", "📋 *Пакет 18, статус по пунктам:*"]
+    for item, status in PACKET18_STATUS_TABLE:
+        lines.append(f"  п.{item}: {status}")
+    lines.append(f"  Ответ по п.1 (BTC zone-touch): {PACKET18_ITEM1_FINDING}")
+
+    lines += ["", "🌙 *Ночные блоки (НОЧЬ#3):*"]
+    for block, status in NIGHT3_BLOCKS_STATUS:
+        lines.append(f"  {block}: {status}")
 
     lines += ["", "🩺 *Здоровье источников:*"]
     bad = [f"{name}: {status}" for name, status in health.items() if status == "down"]

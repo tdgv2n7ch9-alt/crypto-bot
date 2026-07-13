@@ -4120,6 +4120,40 @@ def _check_author_zone_conflict(symbol: str, side: str, price: float) -> str:
     return ""
 
 
+def author_zones_status_summary() -> dict:
+    """НОЧЬ#3, Н4/Н8 (владелец): "число активных author-зон и их статусы"
+    для утренней сводки/MORNING_BRIEF. Переиспользует _limitki_collect_zones()/
+    _limitki_zone_status() (Пакет 18 п.13) -- 1в1 та же логика, что раздел
+    "⭐ ЛИМИТКИ", без пересчёта. Цена -- ТОЛЬКО из уже загруженного get_top500()
+    (один вызов на все зоны, обычно кэш-хит) -- без live WS resolve_price(),
+    это сводка для владельца в утреннем дайджесте, не карточка исполнения,
+    свежесть до нескольких минут вполне честна для счётчика. Символ без цены
+    в этом снапшоте -- честно пропускается из счёта status (остаётся в total),
+    не подставляется задним числом."""
+    items = _limitki_collect_zones()
+    price_map = {}
+    try:
+        for c in get_top500():
+            price_map[c["symbol"]] = c.get("quote", {}).get("USDT", {}).get("price", 0)
+    except Exception as e:
+        log.info(f"[MORNING] author_zones_status_summary price map: {e}")
+
+    counts = {"ЖДЁМ ЦЕНУ": 0, "ЦЕНА В ЗОНЕ": 0, "ОТРАБОТАНА": 0, "н/д (нет цены)": 0}
+    by_symbol = []
+    for it in items:
+        symbol = it["symbol"]
+        zone = it["zone"]
+        price = price_map.get(symbol) or 0
+        if price:
+            status, _ = _limitki_zone_status(zone["side"], zone["lo"], zone["hi"], price)
+        else:
+            status = "н/д (нет цены)"
+        counts[status] = counts.get(status, 0) + 1
+        by_symbol.append({"symbol": symbol, "side": zone["side"], "status": status})
+
+    return {"total": len(items), "counts": counts, "zones": by_symbol}
+
+
 def _mv2_tochki_collect_items(filter_mode: str = "all") -> list:
     """Собирает элементы ленты ТОЧКИ из уже существующих TOP_LONG_SIGNALS/
     TOP_SHORT_SIGNALS/SPOT_PORTFOLIO -- никакой новой сигнальной логики,

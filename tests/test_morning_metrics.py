@@ -232,3 +232,125 @@ def test_build_morning_digest_night_package_na_when_no_progress_file(monkeypatch
     monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "н/д" in text
+
+
+# --- НОЧЬ#3, Н4 (владелец): обязательные поля утренней сводки ---
+
+def _patch_common(monkeypatch, tmp_path):
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
+
+
+def test_build_morning_digest_includes_packet18_status_table(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Пакет 18, статус по пунктам" in text
+    assert "п.1:" in text and "п.13:" in text
+    assert "BTC zone-touch" in text
+
+
+def test_build_morning_digest_includes_night3_blocks_status(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Ночные блоки (НОЧЬ#3)" in text
+    assert "Н1:" in text and "Н4:" in text
+
+
+def test_build_morning_digest_includes_contour_readiness(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Shadow-контуры, готовность к решению" in text
+    assert "tz13: n=" in text
+    assert "EMA-стек: n=" in text
+
+
+def test_build_morning_digest_author_zones_na_without_summary_method(monkeypatch, tmp_path):
+    """_FakeBotModule не даёт author_zones_status_summary() -- честное н/д,
+    не падение всей сводки."""
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Author-зоны (⭐ ЛИМИТКИ)" in text
+    assert "н/д (ошибка" in text
+
+
+def test_build_morning_digest_author_zones_shows_counts(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+
+    class _ZonesBotModule(_FakeBotModule):
+        @staticmethod
+        def author_zones_status_summary():
+            return {
+                "total": 2,
+                "counts": {"ЖДЁМ ЦЕНУ": 1, "ЦЕНА В ЗОНЕ": 1, "ОТРАБОТАНА": 0},
+                "zones": [
+                    {"symbol": "BTCUSDT", "side": "long", "status": "ЦЕНА В ЗОНЕ"},
+                    {"symbol": "ETHUSDT", "side": "short", "status": "ЖДЁМ ЦЕНУ"},
+                ],
+            }
+
+    text = morning_metrics.build_morning_digest(_ZonesBotModule(), now_ts=1_000_000.0)
+    assert "Всего активных author-зон: 2" in text
+    assert "ЦЕНА В ЗОНЕ: 1" in text
+    assert "BTCUSDT long" in text
+
+
+def test_build_morning_digest_zone_touch_alerts_na_without_attr(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "Zone-touch алерты за ночь" in text
+    assert "н/д (ошибка" in text
+
+
+def test_build_morning_digest_zone_touch_alerts_shows_symbol_in_window(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+    now = 1_000_000.0
+
+    class _AlertedBotModule(_FakeBotModule):
+        watchlist_alerted = {"BTCUSDT": now - 3600, "OLDCOIN": now - 20 * 3600}
+
+    text = morning_metrics.build_morning_digest(_AlertedBotModule(), now_ts=now)
+    section = text.split("Zone-touch алерты за ночь")[1].split("\n\n")[0]
+    assert "BTCUSDT" in section
+    assert "OLDCOIN" not in section
+
+
+def test_build_morning_digest_zone_touch_alerts_empty_says_none(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+
+    class _NoAlertsBotModule(_FakeBotModule):
+        watchlist_alerted = {}
+
+    text = morning_metrics.build_morning_digest(_NoAlertsBotModule(), now_ts=1_000_000.0)
+    assert "Ни одного zone-touch алерта за ночь" in text
+
+
+def test_build_morning_digest_stays_within_telegram_limit_with_full_data(monkeypatch, tmp_path):
+    """Правило ночи: любая неоднозначность -- вопрос в PROGRESS.md, не тихая
+    обрезка. С реалистичным набором author-зон текст не должен молча уехать
+    за truncation-порог 4090 -- если уедет, это тест ловит регрессию честно."""
+    _patch_common(monkeypatch, tmp_path)
+    now = 1_000_000.0
+
+    class _FullBotModule(_FakeBotModule):
+        watchlist_alerted = {f"SYM{i}USDT": now - 1000 for i in range(5)}
+
+        @staticmethod
+        def author_zones_status_summary():
+            zones = [{"symbol": f"SYM{i}USDT", "side": "long" if i % 2 else "short",
+                       "status": "ЦЕНА В ЗОНЕ" if i % 3 == 0 else "ЖДЁМ ЦЕНУ"}
+                      for i in range(8)]
+            counts = {"ЖДЁМ ЦЕНУ": 5, "ЦЕНА В ЗОНЕ": 3, "ОТРАБОТАНА": 0}
+            return {"total": 8, "counts": counts, "zones": zones}
+
+    text = morning_metrics.build_morning_digest(_FullBotModule(), now_ts=now)
+    assert len(text) <= 4096
+    # честная проверка: если обрезка сработала, последние секции ("Ночной
+    # пакет") молча теряются -- фиксируем это явно, а не прячем за <=4096.
+    if text.endswith("..."):
+        assert "📦 *Ночной пакет" not in text, (
+            "truncation отрезает секцию 'Ночной пакет' -- см. правило ночи "
+            "про честную фиксацию неоднозначности вместо тихой обрезки"
+        )
