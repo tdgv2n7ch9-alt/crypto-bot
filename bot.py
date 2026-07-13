@@ -2532,6 +2532,84 @@ def format_watchlist_rug_line(symbol: str, coin: dict) -> str:
     return rug_radar.format_rug_alert_line(rug_risk)
 
 
+# Пакет 18, п.3 (владелец, кейс LAB DUMP 20:55 -- rug-строка ушла пустой из-за
+# 429 на CoinGecko в момент отправки алерта): для символов из watch_zones.json
+# rug-скор кэшируется на час вместо живого фетча в момент алерта. Живой фетч
+# (format_watchlist_rug_line напрямую) остаётся ТОЛЬКО для символов вне
+# watch_zones -- как и раньше, ничего не меняется.
+_RUG_LINE_CACHE: dict = {}          # {SYMBOL: (ts, line)}
+_RUG_LINE_CACHE_TTL = 3600           # час, как просил владелец
+
+
+def _watch_zone_symbol_set() -> set:
+    """level_watch.load_watch_zones() возвращает СЫРОЙ словарь файла --
+    вперемешку с символами там метаданные "updated"/"source" (см. её же
+    докстринг и check_watchlist_alerts_from_level_watch() выше, тот же
+    паттерн фильтрации: пропускаем не-list значения). Ключи файла -- пары
+    ("AVAXUSDT"), но ВСЕ реальные вызывающие стороны format_watchlist_rug_line()
+    (check_watchlist через al["symbol"] из check_watchlist_alerts_from_level_watch,
+    Whale Radar/Supertrend через coin["symbol"], Памп-радар через pump_detector)
+    уже работают с БАЗОВЫМ символом без суффикса USDT -- поэтому здесь тоже
+    приводим к базовому, иначе кэш никогда бы не матчился с тем, что реально
+    передают вызывающие."""
+    try:
+        config = level_watch.load_watch_zones()
+        return {sym.upper().replace("USDT", "") for sym, zones in config.items()
+                if sym not in ("updated", "source") and isinstance(zones, list)}
+    except Exception as e:
+        log.info(f"[RUG-CACHE] watch_zones read: {e}")
+        return set()
+
+
+def get_cached_rug_line(symbol: str, coin: dict) -> str:
+    """Читающая сторона для Памп-радара/Whale Radar/Supertrend/карточек сетапов
+    (владелец: "Памп-радар/Whale/Supertrend читают кэш, живой фетч только для
+    символов вне watch_zones"). Символ вне watch_zones -- поведение НЕ меняется
+    (тот же прямой format_watchlist_rug_line() на каждый вызов, как до этого
+    пакета). Символ из watch_zones -- отдаёт значение из часового кэша;
+    заполняется refresh_watch_zones_rug_cache() (почасовая job + первый прогон
+    при старте, см. scheduler.add_job), а не при обращении -- алерт никогда не
+    ждёт и не зависит от живого сетевого вызова в момент отправки."""
+    sym = (symbol or "").upper()
+    if sym not in _watch_zone_symbol_set():
+        return format_watchlist_rug_line(symbol, coin)
+    cached = _RUG_LINE_CACHE.get(sym)
+    if cached is not None:
+        return cached[1]
+    # Кэш ещё не прогрет (символ добавлен между часовыми прогонами) -- честный
+    # разовый живой фетч, чтобы не показывать пустую строку до следующего
+    # прогона; сам результат сразу кладём в кэш.
+    line = format_watchlist_rug_line(symbol, coin)
+    _RUG_LINE_CACHE[sym] = (time.time(), line)
+    return line
+
+
+async def refresh_watch_zones_rug_cache(bot=None):
+    """Почасовая job (см. scheduler.add_job, next_run_time=now -- первый
+    прогон сразу при старте, как просил владелец) + может вызываться вручную.
+    Best-effort по каждому символу отдельно: ошибка/429 на одном символе не
+    портит остальные и не роняет job -- следующий часовой прогон подхватит."""
+    symbols = _watch_zone_symbol_set()
+    if not symbols:
+        return
+    coin_map = {}
+    try:
+        coin_map = {c["symbol"]: c for c in get_top500()}
+    except Exception as e:
+        log.info(f"[RUG-CACHE] get_top500 для прогрева: {e}")
+    refreshed, failed = 0, 0
+    for sym in symbols:
+        try:
+            line = format_watchlist_rug_line(sym, coin_map.get(sym))
+            _RUG_LINE_CACHE[sym] = (time.time(), line)
+            refreshed += 1
+        except Exception as e:
+            failed += 1
+            log.info(f"[RUG-CACHE] прогрев {sym}: {e}")
+    log.info(f"[RUG-CACHE] прогрев завершён: {refreshed} символов, {failed} ошибок "
+              f"(всего в watch_zones: {len(symbols)})")
+
+
 def build_overview_text(ms: dict) -> str:
     sup = ms["btc_sup"]; res = ms["btc_res"]
     s_line = f"   : ${sup['level']:,} ({sup['label']})  {sup['dist']:.1f}% " if sup else ""
@@ -3987,7 +4065,8 @@ async def _mv2_show_razbor(bot, chat_id, kind, direction, symbol):
     # Мини-пакет (владелец, 2026-07-13, "Правило одно"): карточка сетапа --
     # ЕДИНЫЙ формат "🛑 RUG-RADAR: {score} — {детекторы}" через общий хелпер,
     # раньше тут дублировался тот же фетч+расчёт с другим форматом ("⚠️ RUG-РИСК").
-    rug_line = format_watchlist_rug_line(symbol, coin)
+    # Пакет 18, п.3: get_cached_rug_line -- часовой кэш для watch_zones символов.
+    rug_line = get_cached_rug_line(symbol, coin)
 
     liq_lines = []
     try:
@@ -5338,6 +5417,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     log.info(f"[EVENT-RADAR] young-flag pump_radar {symbol}: {e}")
                     return ""
 
+            # Пакет 18, п.3 (владелец, кейс LAB DUMP 20:55 без rug-строки):
+            # ТОЛЬКО для watch_zones символов, ТОЛЬКО из часового кэша -- не
+            # добавляет живой CoinGecko вызов на каждый активный памп/дамп при
+            # каждом рефреше этого экрана (в отличие от _young_flag_pr выше,
+            # который это уже делает для любого символа -- намеренно не
+            # расширяем ту же нагрузку на то, что владелец не размечал).
+            def _rug_flag_pr(symbol: str) -> str:
+                if symbol.upper() not in _watch_zone_symbol_set():
+                    return ""
+                cached = _RUG_LINE_CACHE.get(symbol.upper())
+                return f"  {cached[1]}" if cached and cached[1] else ""
+
             lines_pr.append("🔴 *Пампы (сценарий шорт):*\n")
             if st["pumps_active"]:
                 for a in st["pumps_active"]:
@@ -5347,6 +5438,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     yf = _young_flag_pr(a["symbol"])
                     if yf:
                         lines_pr.append(yf)
+                    rf = _rug_flag_pr(a["symbol"])
+                    if rf:
+                        lines_pr.append(rf)
             else:
                 lines_pr.append("Активных наблюдений нет")
             lines_pr.append("")
@@ -5360,6 +5454,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     yf = _young_flag_pr(a["symbol"])
                     if yf:
                         lines_pr.append(yf)
+                    rf = _rug_flag_pr(a["symbol"])
+                    if rf:
+                        lines_pr.append(rf)
             else:
                 lines_pr.append("Активных наблюдений нет")
             lines_pr.append("")
@@ -5725,7 +5822,7 @@ async def whale_monitor(bot: Bot):
             whale_rug_line = ""
             try:
                 whale_coin = next((c for c in get_all_coins() if c["symbol"] == sym), None)
-                whale_rug_line = format_watchlist_rug_line(sym, whale_coin)
+                whale_rug_line = get_cached_rug_line(sym, whale_coin)
             except Exception as e:
                 log.info(f"[WHALE] rug-risk {sym}: {e}")
             text = _format_whale_alert(w, rug_line=whale_rug_line)
@@ -6046,7 +6143,7 @@ async def check_supertrend_signals(bot, chat_ids, coins):
             # Мини-пакет (владелец, 2026-07-13, "rug-строка во ВСЕ алерты"):
             # score >= 40 -- общий хелпер, тот же, что watchlist/Памп-радар/Whale.
             try:
-                st_rug_line = format_watchlist_rug_line(sym, coin)
+                st_rug_line = get_cached_rug_line(sym, coin)
             except Exception as e:
                 st_rug_line = ""
                 log.info(f"[SUPERTREND] rug-risk {sym}: {e}")
@@ -6531,8 +6628,12 @@ async def check_watchlist(bot, chat_ids, coins):
             liq_line = f"🗺 Ликвидации рядом: н/д (ошибка: {e})"
         # Владелец, 2026-07-13 (кейс LAB): rug-score строка, если score >= WARN --
         # см. format_watchlist_rug_line(). Пустая строка -- не показывается вообще
-        # (не "н/д", в отличие от liq_line -- см. докстринг функции).
-        rug_line = format_watchlist_rug_line(sym, coin_map.get(sym))
+        # (не "н/д", в отличие от liq_line -- см. докстринг функции). Пакет 18,
+        # п.3: sym здесь ВСЕГДА из watch_zones (это и есть zone-touch алерт) --
+        # get_cached_rug_line читает часовой кэш вместо живого фетча в момент
+        # алерта, чтобы 429 на CoinGecko не съедал rug-строку, как в кейсе LAB
+        # DUMP 20:55.
+        rug_line = get_cached_rug_line(sym, coin_map.get(sym))
         rug_block = f"{rug_line}\n\n" if rug_line else ""
         text = (
             f" *   !*\n"
@@ -12191,6 +12292,15 @@ async def _start_pump_detector(app):
         "interval",
         minutes=5,
         args=[app.bot],
+    )
+    # Пакет 18, п.3 (владелец, кейс LAB DUMP 20:55): rug-кэш для watch_zones
+    # символов -- раз в час + первый прогон сразу при старте (next_run_time=
+    # now, тот же паттерн, что send_scheduled/whale_monitor выше).
+    scheduler.add_job(
+        refresh_watch_zones_rug_cache,
+        "interval",
+        minutes=60,
+        next_run_time=datetime.now(TZ),
     )
     # Дневной версионированный бэкап БД (ROADMAP П1.4) -- в 03:00 по TZ бота, вне часов
     # активности рынка/владельца, не конфликтует по времени с часовым GitHub sync журнала.
