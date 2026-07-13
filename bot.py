@@ -128,6 +128,7 @@ import derivatives_extra
 import event_radar
 import new_coin_scan
 import glossary
+import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -2687,6 +2688,55 @@ def main_kb():
         [InlineKeyboardButton("\U0001f4cb Полный анализ",  callback_data="menu_full")],
     ])
 
+
+# ── Меню v2 (Пакет 13, спецификация владельца 2026-07-13 + приёмка мокапа
+# 2026-07-13) -- 5 разделов вместо 13 кнопок. За флагом MENU_V2_ENABLED,
+# старое main_kb() остаётся дефолтным fallback до явного включения владельцем
+# (env-переменная на Railway, не хардкод в коде -- обратимо без деплоя).
+MENU_V2_ENABLED = os.getenv("MENU_V2_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def main_kb_v2():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎯 ТОЧКИ",   callback_data="mv2_tochki")],
+        [InlineKeyboardButton("📊 РЫНОК",   callback_data="mv2_rynok")],
+        [InlineKeyboardButton("📡 РАДАРЫ",  callback_data="mv2_radary")],
+        [InlineKeyboardButton("💼 МОИ",     callback_data="mv2_moi")],
+        [InlineKeyboardButton("⚙️ СИСТЕМА", callback_data="mv2_sistema")],
+    ])
+
+
+def active_main_kb():
+    """Единая точка входа для клавиатуры главного меню -- заменяет прямые
+    вызовы main_kb() во всех 6 местах (см. разведку Пакета 13), чтобы флаг
+    MENU_V2_ENABLED переключал раскладку атомарно в одном месте."""
+    return main_kb_v2() if MENU_V2_ENABLED else main_kb()
+
+
+def welcome_text_v2(bot_module) -> str:
+    """Приветствие Меню v2: источники -- ЖИВЫЕ из get_data_source_status()
+    (старый текст называл "Lookonchain / CMC Топ-500" -- честно неточно/
+    устарело, см. спецификацию владельца), риск 1-3% (по методологии, не
+    1-2%, как было). Лимит <=12 строк до кнопок."""
+    SEP = "━━━━━━━━━━━━━━━━━━━━"
+    try:
+        status = bot_module.get_data_source_status()
+        ok_sources = [name for name, s in status.items() if s.get("ok")]
+    except Exception:
+        ok_sources = []
+    src_line = ", ".join(ok_sources) if ok_sources else "проверяются..."
+    return (
+        f"👋 *BEST TRADE {BOT_VERSION}*\n"
+        f"{SEP}\n"
+        f"SMC/ICT · Order Blocks · FVG · BOS · Wyckoff · AMD\n"
+        f"Источники: {src_line}\n"
+        f"Автосигналы каждые 30 мин · Риск 1-3% депозита · SL обязателен\n"
+        f"Не финсовет.\n"
+        f"{SEP}\n"
+        f"👇 Выбери раздел:"
+    )
+
+
 def back_kb():
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("🏠 Главное меню", callback_data="show_menu"),
@@ -2959,6 +3009,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return  # защита в глубину -- сюда не должны попадать без роли/кода вообще
 
     await subscribers.subscribe(cid)
+    if MENU_V2_ENABLED:
+        await update.message.reply_text(
+            welcome_text_v2(sys.modules[__name__]),
+            parse_mode="Markdown", reply_markup=active_main_kb()
+        )
+        return
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     name = update.effective_user.first_name or "трейдер"
     await update.message.reply_text(
@@ -3667,22 +3723,438 @@ async def cmd_rockets(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ctx.bot.send_message(update.effective_chat.id, "\n".join(t2),
                                parse_mode="Markdown", reply_markup=nav)
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# Меню v2 (Пакет 13, спецификация владельца 2026-07-13, мокап принят
+# 2026-07-13) -- 5 разделов. Ниже -- ЖИВЫЕ обработчики за флагом
+# MENU_V2_ENABLED. Договорённости с владельцем по приёмке мокапа:
+#   1. ТОЧКИ -- компактная лента (светофор+символ+сила+вердикт+цена) +
+#      кнопка "Разбор" на полную карточку v2, НЕ полные карточки подряд.
+#   2. Rug-Radar/Event-Radar в РАДАРАХ -- пока как есть (строка на карточке +
+#      фоновый алертер), без новых сводных экранов -- отдельным пакетом.
+#   3. "Ёмкость зоны" -- честное "н/д" (нет чистой функции глубины стакана
+#      без live-состояния whale_radar) -- в бэклоге: вывести из
+#      whale_radar (там уже есть depth 200 по топ-50), отдельное решение.
+#   4. /terminology латиницей (Telegram-ограничение) + кнопка в СИСТЕМЕ.
+# ══════════════════════════════════════════════════════════════════════════
+
+TOCHKI_PAGE_SIZE = 6
+_TOCHKI_ZONE_TOLERANCE_PCT = 0.3  # +-0.3% вокруг entry для светофора -- первое приближение
+
+
+def _mv2_fake_update(q):
+    """Тот же паттерн FakeUpdate, что уже используют top_spot/top_long/top_short
+    ниже в этом файле -- позволяет вызвать message-based командные хендлеры
+    (cmd_zones/cmd_patterns/cmd_health/cmd_terminology) из callback-тапа."""
+    class _FakeUpdate:
+        effective_chat = q.message.chat
+        effective_user = q.from_user
+        message = q.message
+    return _FakeUpdate()
+
+
+def _mv2_back_kb(extra_rows=None):
+    rows = list(extra_rows or [])
+    rows.append([InlineKeyboardButton("🏠 Меню", callback_data="show_menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _mv2_tochki_collect_items(filter_mode: str = "all") -> list:
+    """Собирает элементы ленты ТОЧКИ из уже существующих TOP_LONG_SIGNALS/
+    TOP_SHORT_SIGNALS/SPOT_PORTFOLIO -- никакой новой сигнальной логики,
+    только чтение (тот же фильтр status != "done", что уже использует
+    "Монеты в работе" -- см. разведку Пакета 13)."""
+    items = []
+    for sym, v in TOP_LONG_SIGNALS.items():
+        if v.get("status") == "done":
+            continue
+        items.append({"symbol": sym, "direction": "LONG", "kind": "fut", "sig": v})
+    for sym, v in TOP_SHORT_SIGNALS.items():
+        if v.get("status") == "done":
+            continue
+        items.append({"symbol": sym, "direction": "SHORT", "kind": "fut", "sig": v})
+    for sym, info in SPOT_PORTFOLIO.items():
+        items.append({"symbol": sym, "direction": info.get("bias", "LONG"), "kind": "spot", "sig": info})
+    if filter_mode in ("spot", "fut"):
+        items = [i for i in items if i["kind"] == filter_mode]
+    return items
+
+
+async def _mv2_tochki_row_text(item: dict) -> str:
+    """Живой пересчёт силы сетапа для ОДНОЙ строки ленты -- через тот же
+    кэшируемый пайплайн, что /coin (_get_fa_engine_result_cached, 12с TTL) --
+    никакой отдельной новой сигнальной логики, просто чтение существующего
+    fa_engine.build_full_analysis() результата."""
+    symbol = item["symbol"]
+    sig = item["sig"]
+    entry = sig.get("entry")
+    score = None
+    try:
+        coins = get_top500()
+        coin = next((c for c in coins if c["symbol"] == symbol), None)
+        fa_result = await _get_fa_engine_result_cached(symbol, coin)
+        if fa_result and fa_result.get("ok"):
+            score = fa_result.get("block12_rocket", {}).get("score")
+    except Exception as e:
+        log.info(f"[MENU-V2] tochki row {symbol}: {e}")
+
+    price = entry
+    try:
+        stats = get_binance_24h(symbol)
+        if stats and stats.get("last"):
+            price = stats["last"]
+    except Exception:
+        pass
+
+    if entry and price:
+        tol = entry * _TOCHKI_ZONE_TOLERANCE_PCT / 100
+        traffic = card_v2.compute_traffic_light(price, entry - tol, entry + tol)
+    else:
+        traffic = card_v2.TRAFFIC_WAIT_PRICE
+    icon = traffic.split()[0]
+
+    if score is not None:
+        verdict = card_v2.compute_verdict(score)
+        score_txt = f"{score}/100 — {verdict['label']}"
+    else:
+        score_txt = "н/д"
+    kind_label = " (спот)" if item["kind"] == "spot" else ""
+    price_txt = card_v2.default_price_fmt(price) if price else "н/д"
+    return f"{icon} *{symbol}* {item['direction']}{kind_label} — {price_txt} — Сила {score_txt}"
+
+
+async def _mv2_render_tochki(bot, chat_id, message_id, filter_mode="all", offset=0):
+    all_items = _mv2_tochki_collect_items(filter_mode)
+    page = all_items[offset:offset + TOCHKI_PAGE_SIZE]
+
+    counts = {mode: len(_mv2_tochki_collect_items(mode)) for mode in ("all", "spot", "fut")}
+    mark = lambda m: "• " if filter_mode == m else ""
+    filter_row = [
+        InlineKeyboardButton(f"{mark('all')}Все ({counts['all']})", callback_data="mv2_tochki_all"),
+        InlineKeyboardButton(f"{mark('spot')}Спот ({counts['spot']})", callback_data="mv2_tochki_spot"),
+        InlineKeyboardButton(f"{mark('fut')}Фьючерс ({counts['fut']})", callback_data="mv2_tochki_fut"),
+    ]
+    x100_row = [InlineKeyboardButton("🚀 x100 (отдельный скан)", callback_data="x100_scan")]
+
+    lines = ["🎯 *ТОЧКИ*", ""]
+    kb_rows = [filter_row, x100_row]
+    if not page:
+        lines.append("Активных сигналов нет." if offset == 0 else "Больше сигналов нет.")
+    for it in page:
+        try:
+            lines.append(await _mv2_tochki_row_text(it))
+        except Exception as e:
+            lines.append(f"⚠️ {it['symbol']}: ошибка построения строки ({e})")
+        kb_rows.append([InlineKeyboardButton(
+            f"🔍 Разбор {it['symbol']}",
+            callback_data=f"mv2_razbor_{it['kind']}_{it['direction']}_{it['symbol']}")])
+    if offset + TOCHKI_PAGE_SIZE < len(all_items):
+        kb_rows.append([InlineKeyboardButton(
+            "Показать ещё", callback_data=f"mv2_tochki_more_{filter_mode}_{offset + TOCHKI_PAGE_SIZE}")])
+    kb_rows.append([InlineKeyboardButton("🏠 Меню", callback_data="show_menu")])
+
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:3980] + "\n… (список длинный, сузьте фильтром)"
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                 parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb_rows))
+
+
+async def _mv2_show_razbor(bot, chat_id, kind, direction, symbol):
+    """Полная карточка v2 по кнопке "🔍 Разбор". Для spot-вотчлиста (WATCHLIST_ZONES)
+    честно нет SL -- используется существующий 13-блочный /coin-анализ вместо
+    синтетической карточки v2 (см. договорённость 1 выше)."""
+    if kind == "spot":
+        await _do_full_analysis(bot, chat_id, symbol)
+        return
+
+    store = TOP_LONG_SIGNALS if direction == "LONG" else TOP_SHORT_SIGNALS
+    sig = store.get(symbol)
+    if not sig:
+        await bot.send_message(chat_id, f"⚠️ {symbol}: сигнал больше не активен, лента могла обновиться.")
+        return
+    entry = sig.get("entry"); sl = sig.get("sl")
+    tp1 = sig.get("tp1"); tp2 = sig.get("tp2"); tp3 = sig.get("tp3")
+    if not entry or not sl:
+        await bot.send_message(chat_id, f"⚠️ {symbol}: недостаточно данных (нет entry/SL) для карточки v2.")
+        return
+
+    coins = get_top500()
+    coin = next((c for c in coins if c["symbol"] == symbol), None)
+    fa_result = await _get_fa_engine_result_cached(symbol, coin)
+    if not fa_result or not fa_result.get("ok"):
+        await bot.send_message(chat_id, f"⚠️ {symbol}: не удалось построить структурный анализ сейчас "
+                                         f"(fa_engine недоступен/таймаут), попробуйте ещё раз чуть позже.")
+        return
+
+    checklist_items = fa_result.get("block5_checklist", {}).get("items", [])
+    rocket = fa_result.get("block12_rocket", {})
+    score = rocket.get("score", 0)
+    factors = rocket.get("factors", [])
+
+    strength_lines = card_v2.format_strength_block(score, checklist_items)
+
+    sl_risk_pct = abs(entry - sl) / entry * 100
+    capital_table = card_v2.compute_capital_table(entry, sl)
+    deposit_1000 = {pct: capital_table[1000][pct] for pct in card_v2.RISK_PCTS}
+
+    tp_list = [tp for tp in (tp1, tp2, tp3) if tp]
+    n = len(tp_list)
+    sell_pcts = {1: [100], 2: [50, 50], 3: [40, 30, 30]}.get(n, [round(100 / n)] * n if n else [])
+    tps = [{"price": tpv, "sell_pct": sell_pcts[i], "stop_note": "б/у" if i == 0 and n > 1 else None}
+           for i, tpv in enumerate(tp_list)]
+
+    what_to_do = card_v2.format_what_to_do(
+        direction, [(entry, 100)], sl, sl_risk_pct, tps, deposit_1000,
+        invalidation_note=f"структура сломана / цена закрылась за стопом {card_v2.default_price_fmt(sl)}",
+        valid_until_note="пока сигнал активен (см. ленту ТОЧКИ)",
+    )
+
+    pros_cons_lines = card_v2.format_pros_cons(factors)
+
+    try:
+        btc_ctx = get_btc_market_context()
+        btc_label = btc_ctx.get("label") or "н/д"
+    except Exception:
+        btc_label = "н/д"
+
+    rug_line = ""
+    try:
+        rug_cg_detail = _cg_get(
+            f"https://api.coingecko.com/api/v3/coins/{_cg_slug(symbol)}",
+            params={"localization": "false", "tickers": "true",
+                    "community_data": "false", "developer_data": "false"},
+            timeout=8) or {}
+        rug_coin_q = (coin or {}).get("quote", {}).get("USDT", {})
+        rug_risk = rug_radar.compute_rug_risk(symbol, {"quote": {"USDT": rug_coin_q}}, cg_detail=rug_cg_detail)
+        rug_line = rug_radar.format_rug_risk_line(rug_risk)
+    except Exception as e:
+        log.info(f"[MENU-V2] rug-risk {symbol}: {e}")
+
+    liq_lines = []
+    try:
+        anchor = tp_list[0] if tp_list else entry
+        zone = {"lo": min(entry, sl, anchor), "hi": max(entry, sl, anchor), "side": direction}
+        liq_line = level_watch.format_liquidation_cluster_line(symbol, zone, get_liq_data_fn=get_liq_data)
+        if liq_line:
+            liq_lines.append(liq_line)
+    except Exception as e:
+        log.info(f"[MENU-V2] liq-line {symbol}: {e}")
+
+    context_lines = card_v2.format_context(
+        higher_tf_trend="см. чеклист выше (пункт 1D)", btc_label=btc_label,
+        events_lines=[], rug_line=rug_line, liq_lines=liq_lines,
+    )
+    capital_lines = card_v2.format_capital_block(capital_table)
+
+    try:
+        kz = get_killzone_status()
+        active = kz.get("active") or {}
+        nxt = kz.get("next") or {}
+        timing_lines = card_v2.format_timing(
+            killzone_active=bool(active), killzone_name=active.get("name", "-"),
+            next_killzone_name=nxt.get("name"), next_killzone_in_min=nxt.get("in_min"),
+            distance_to_zone_pct=None,
+        )
+    except Exception:
+        timing_lines = ["🕐 *ТАЙМИНГ*", "", "  н/д"]
+
+    price = entry
+    try:
+        stats = get_binance_24h(symbol)
+        if stats and stats.get("last"):
+            price = stats["last"]
+    except Exception:
+        pass
+    invalidated = (direction == "LONG" and price <= sl) or (direction == "SHORT" and price >= sl)
+    tol = entry * _TOCHKI_ZONE_TOLERANCE_PCT / 100
+    traffic = card_v2.compute_traffic_light(price, entry - tol, entry + tol, invalidated=invalidated)
+
+    text = card_v2.assemble_card_v2(traffic, symbol, direction, strength_lines,
+                                     what_to_do["all_lines"], pros_cons_lines,
+                                     context_lines, capital_lines, timing_lines)
+    await bot.send_message(chat_id, text, parse_mode="Markdown")
+
+
+async def _mv2_render_rynok(q):
+    """РЫНОК v1 -- честно ЧАСТИЧНОЕ слияние (BTC-контекст + On-Chain в одном
+    сообщении, оба вызова дешёвые/уже кэшированы), Институционал/подробный
+    Тренд остаются отдельными кнопками ниже -- полное слияние всех 5 кусков
+    в один отчёт требует проверки стоимости "Институционал"-блока (не
+    измерена в этой сессии), честно не делаю это вслепую."""
+    lines = ["📊 *РЫНОК*", ""]
+    try:
+        btc_ctx = get_btc_market_context()
+        lines.append(f"BTC ${btc_ctx.get('btc_price', 0):,.0f} "
+                      f"({btc_ctx.get('btc_ch1h', 0):+.1f}% 1ч, {btc_ctx.get('btc_ch24h', 0):+.1f}% 24ч)")
+        lines.append(f"Dominance {btc_ctx.get('dominance', 0):.1f}% · Тренд 1H {btc_ctx.get('trend_1h', 'н/д')} "
+                      f"· 4H {btc_ctx.get('trend_4h', 'н/д')} · 1D {btc_ctx.get('trend_1d', 'н/д')}")
+        if btc_ctx.get("fear_greed") is not None:
+            lines.append(f"Fear&Greed: {btc_ctx['fear_greed']:.0f}")
+    except Exception as e:
+        lines.append(f"BTC-контекст: н/д ({e})")
+
+    lines.append("")
+    try:
+        lines.append(onchain_metrics.format_onchain_card_text("BTC"))
+    except Exception as e:
+        lines.append(f"On-Chain: н/д ({e})")
+
+    lines.append("")
+    lines.append("_Институционал и подробный тренд -- пока отдельными экранами (см. кнопки)._")
+
+    kb = [
+        [InlineKeyboardButton("🏦 Институционал", callback_data="institutional")],
+        [InlineKeyboardButton("📈 Тренд (подробно)", callback_data="trend_analysis")],
+    ]
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:3980] + "…"
+    await q.edit_message_text(text, parse_mode="Markdown", reply_markup=_mv2_back_kb(kb))
+
+
+async def _mv2_render_radary(q):
+    kb = [
+        [InlineKeyboardButton("⚡ Памп-радар", callback_data="pump_radar")],
+        [InlineKeyboardButton("🐋 Whale Radar", callback_data="whale_status")],
+        [InlineKeyboardButton("🦎 Rug-Radar", callback_data="mv2_radar_info_rug")],
+        [InlineKeyboardButton("🗺 Зоны", callback_data="mv2_radar_zones")],
+        [InlineKeyboardButton("📐 Паттерны дня", callback_data="mv2_radar_patterns")],
+        [InlineKeyboardButton("📰 События (Event-Radar)", callback_data="mv2_radar_info_events")],
+    ]
+    await q.edit_message_text("📡 *РАДАРЫ*\n\nВыберите сторож:", parse_mode="Markdown",
+                               reply_markup=_mv2_back_kb(kb))
+
+
+async def _mv2_render_moi(q):
+    try:
+        active, closed = signal_journal.get_status_counts()
+        journal_line = f"Журнал: {active} активных, {closed} закрытых"
+    except Exception as e:
+        journal_line = f"Журнал: н/д ({e})"
+    kb = [
+        [InlineKeyboardButton("💼 Монеты в работе", callback_data="top_trades")],
+        [InlineKeyboardButton("📈 Спот-скан", callback_data="top_spot")],
+        [InlineKeyboardButton("🗺 Мои разметки (/zones)", callback_data="mv2_moi_zones")],
+    ]
+    await q.edit_message_text(f"💼 *МОИ*\n\n{journal_line}", parse_mode="Markdown",
+                               reply_markup=_mv2_back_kb(kb))
+
+
+async def _mv2_render_sistema(q):
+    kb = [
+        [InlineKeyboardButton("🩺 /health (владелец)", callback_data="mv2_sistema_health")],
+        [InlineKeyboardButton("📡 Статус источников", callback_data="mv2_sistema_sources")],
+        [InlineKeyboardButton("📖 /terminology", callback_data="mv2_sistema_terminology")],
+    ]
+    text = f"⚙️ *СИСТЕМА*\n\nBEST TRADE {BOT_VERSION}\n\nРиск на сделку: 1-3% депозита. Не финсовет."
+    await q.edit_message_text(text, parse_mode="Markdown", reply_markup=_mv2_back_kb(kb))
+
+
+async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str):
+    q = update.callback_query
+    bot = ctx.bot
+    chat_id = q.message.chat_id
+
+    if data in ("mv2_tochki", "mv2_tochki_all", "mv2_tochki_spot", "mv2_tochki_fut") \
+            or data.startswith("mv2_tochki_more_"):
+        filter_mode, offset = "all", 0
+        if data == "mv2_tochki_spot":
+            filter_mode = "spot"
+        elif data == "mv2_tochki_fut":
+            filter_mode = "fut"
+        elif data.startswith("mv2_tochki_more_"):
+            rest = data[len("mv2_tochki_more_"):]
+            filter_mode, _, offset_s = rest.rpartition("_")
+            offset = int(offset_s) if offset_s.isdigit() else 0
+        await q.edit_message_text("🎯 Обновляю ТОЧКИ...", parse_mode="Markdown")
+        await _mv2_render_tochki(bot, chat_id, q.message.message_id, filter_mode, offset)
+
+    elif data.startswith("mv2_razbor_"):
+        rest = data[len("mv2_razbor_"):]
+        try:
+            kind, direction, symbol = rest.split("_", 2)
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await q.answer("Строю карточку...")
+        await _mv2_show_razbor(bot, chat_id, kind, direction, symbol)
+
+    elif data == "mv2_rynok":
+        await _mv2_render_rynok(q)
+
+    elif data == "mv2_radary":
+        await _mv2_render_radary(q)
+
+    elif data.startswith("mv2_radar_info_"):
+        which = data[len("mv2_radar_info_"):]
+        notes = {
+            "rug": "🦎 *Rug-Radar*\n\nПока без отдельного сводного экрана -- риск-скор "
+                   "уже показывается строкой на карточках x100/Памп-радара. Сводный экран "
+                   "по всем отслеживаемым монетам -- в очереди следующим пакетом.",
+            "events": "📰 *Event-Radar*\n\nРаботает как фоновый алертер (листинги/делистинги "
+                      "Bybit+Binance) -- присылает сообщение владельцу при срабатывании. "
+                      "Сводный экран \"последние 24ч\" -- в очереди следующим пакетом.",
+        }
+        await q.edit_message_text(notes.get(which, "н/д"), parse_mode="Markdown",
+                                   reply_markup=_mv2_back_kb([[InlineKeyboardButton(
+                                       "📡 РАДАРЫ", callback_data="mv2_radary")]]))
+
+    elif data == "mv2_radar_zones" or data == "mv2_moi_zones":
+        await cmd_zones(_mv2_fake_update(q), ctx)
+
+    elif data == "mv2_radar_patterns":
+        await cmd_patterns(_mv2_fake_update(q), ctx)
+
+    elif data == "mv2_moi":
+        await _mv2_render_moi(q)
+
+    elif data == "mv2_sistema":
+        await _mv2_render_sistema(q)
+
+    elif data == "mv2_sistema_health":
+        await cmd_health(_mv2_fake_update(q), ctx)
+
+    elif data == "mv2_sistema_terminology":
+        await cmd_terminology(_mv2_fake_update(q), ctx)
+
+    elif data == "mv2_sistema_sources":
+        try:
+            status = get_data_source_status()
+            lines = ["📡 *Статус источников*", ""]
+            for name, s in status.items():
+                icon = "🟢" if s.get("ok") else "🔴"
+                lines.append(f"{icon} {name}")
+        except Exception as e:
+            lines = ["📡 *Статус источников*", "", f"н/д ({e})"]
+        await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
+                                   reply_markup=_mv2_back_kb([[InlineKeyboardButton(
+                                       "⚙️ СИСТЕМА", callback_data="mv2_sistema")]]))
+
+
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; data = q.data; await q.answer()
 
     #     
     if data == "show_menu":
         ctx.user_data.pop("awaiting_full_symbol", None)
-        SEP = "━━━━━━━━━━━━━━━━━━━━"
-        await q.edit_message_text(
-            f"🚀 *BEST TRADE {BOT_VERSION}*\n"
-            f"_{now_utc3()}_\n"
-            f"{SEP}\n\n"
-            f"🧠 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
-            f"📡 On-chain · 🐋 Whale Monitor\n\n"
-            f"👇 *Выбери раздел:*",
-            parse_mode="Markdown", reply_markup=main_kb()
-        )
+        if MENU_V2_ENABLED:
+            await q.edit_message_text(welcome_text_v2(sys.modules[__name__]),
+                                       parse_mode="Markdown", reply_markup=active_main_kb())
+        else:
+            SEP = "━━━━━━━━━━━━━━━━━━━━"
+            await q.edit_message_text(
+                f"🚀 *BEST TRADE {BOT_VERSION}*\n"
+                f"_{now_utc3()}_\n"
+                f"{SEP}\n\n"
+                f"🧠 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
+                f"📡 On-chain · 🐋 Whale Monitor\n\n"
+                f"👇 *Выбери раздел:*",
+                parse_mode="Markdown", reply_markup=main_kb()
+            )
+
+    elif MENU_V2_ENABLED and (data.startswith("mv2_")):
+        await _mv2_callback_router(update, ctx, data)
 
     elif data == "top_spot":
         await q.edit_message_text("\U0001f504 Загружаю ТОП СПОТ...", parse_mode="Markdown")
@@ -9957,7 +10429,7 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ctx.bot.send_message(
         update.effective_chat.id,
         " *BEST TRADE   *\n\n  :",
-        parse_mode="Markdown", reply_markup=main_kb()
+        parse_mode="Markdown", reply_markup=active_main_kb()
     )
 
 
@@ -10153,7 +10625,7 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(
             update.effective_chat.id,
             "✅ *BEST TRADE — ТОП ЛОНГ готов*\n\nВыбери следующее действие:",
-            parse_mode="Markdown", reply_markup=main_kb()
+            parse_mode="Markdown", reply_markup=active_main_kb()
         )
     finally:
         _scan_busy["top_long"] = False
@@ -10432,7 +10904,7 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(
             update.effective_chat.id,
             "✅ *BEST TRADE — ТОП ШОРТ готов*\n\nВыбери следующее действие:",
-            parse_mode="Markdown", reply_markup=main_kb()
+            parse_mode="Markdown", reply_markup=active_main_kb()
         )
     finally:
         _scan_busy["top_short"] = False
@@ -11521,7 +11993,7 @@ def main():
     app.add_handler(CommandHandler("full",      cmd_full_v2))
     app.add_handler(CommandHandler("menu",      lambda u,c: u.message.reply_text(
         " *BEST TRADE   *\n\n  :",
-        parse_mode="Markdown", reply_markup=main_kb())))
+        parse_mode="Markdown", reply_markup=active_main_kb())))
     app.add_handler(CommandHandler("1",         cmd_market))
     app.add_handler(CommandHandler("2",         cmd_coin))
     app.add_handler(CommandHandler("3",         cmd_signals))
