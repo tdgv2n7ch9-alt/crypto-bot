@@ -9280,6 +9280,34 @@ def real_full_analysis(coin: dict) -> dict:
     except Exception as e:
         oi_funding_ls_shadow = {"error": str(e)}
 
+    # --- Пакет 14 (владелец, 2026-07-13): "тип сетапа" + 13-блочный shadow-вердикт --
+    # Параллельный, НЕЗАВИСИМЫЙ вердикт к каждому AUTO-сигналу (real_full_analysis_TZ.md
+    # не найден в репозитории -- см. ta_extra.build_13block_verdict() докстринг и
+    # PROGRESS.md за честную запись; состав синтезирован из reconstructed-доки +
+    # knowledge/_ocr/trading_guide_4_.txt + Kira ICT Trading Analysis.pdf +
+    # METHODOLOGY_CORE.md). SHADOW ONLY -- rocket/is_long/tp/sl/entry read-only, эта
+    # функция их не читает и не меняет. Killzone -- ЕДИНЫЙ источник get_killzone_status()
+    # (Патч 01), не четвёртое определение (см. ENGINE_UNIFICATION.md). oi_change/
+    # funding/ls_ratio/oi_combo -- читаются ИЗ УЖЕ ПОСЧИТАННОГО oi_funding_ls_shadow
+    # выше (НЕ повторный вызов _get_oi_change() -- та функция мутирует
+    # _OI_HISTORY[sym] и обязана вызываться РОВНО один раз за real_full_analysis(),
+    # см. её комментарий "ВНИМАНИЕ" в блоке oi_funding_ls_shadow выше). Никаких новых
+    # сетевых вызовов -- candles_1h/4h/1d уже получены в ta = real_ta(sym).
+    try:
+        c1h_tz13 = ta.get("candles_1h", []) if ta["ok"] else []
+        c4h_tz13 = ta.get("candles_4h", []) if ta["ok"] else []
+        c1d_tz13 = ta.get("candles_1d", []) if ta["ok"] else []
+        tz13_shadow = (ta_extra.build_13block_verdict(
+            c1h_tz13, c4h_tz13, c1d_tz13, price,
+            killzone_status=get_killzone_status(),
+            funding=oi_funding_ls_shadow.get("funding") if isinstance(oi_funding_ls_shadow, dict) else None,
+            oi_change=oi_funding_ls_shadow.get("oi_change_pct") if isinstance(oi_funding_ls_shadow, dict) else None,
+            oi_combo=oi_funding_ls_shadow.get("oi_combo") if isinstance(oi_funding_ls_shadow, dict) else None,
+            ls_ratio=oi_funding_ls_shadow.get("ls_ratio") if isinstance(oi_funding_ls_shadow, dict) else 1.0,
+        ) if c4h_tz13 else {"ok": False, "error": "нет 4h-свечей"})
+    except Exception as e:
+        tz13_shadow = {"ok": False, "error": str(e)}
+
     return {
         "label": rocket_label, "score": score_ta, "is_long": is_long,
         "rocket": rocket, "rocket_label": rocket_label,
@@ -9315,10 +9343,17 @@ def real_full_analysis(coin: dict) -> dict:
         # send_scheduled к теневому контуру. Уже посчитаны выше в ta = real_ta(sym) --
         # никаких новых сетевых вызовов, чистое добавление поля.
         "candles_4h": ta.get("candles_4h", []) if ta["ok"] else [],
+        # Пакет 14 (владелец, 2026-07-13): candles_1h/candles_1d -- тот же принцип,
+        # что candles_4h выше (уже посчитаны в ta = real_ta(sym), просто добавление
+        # поля, без новых сетевых вызовов) -- нужны для build_13block_verdict()
+        # при подключении к shadow_engine (Elliott 1D, фаза рынка, POI-зоны 1d).
+        "candles_1h": ta.get("candles_1h", []) if ta["ok"] else [],
+        "candles_1d": ta.get("candles_1d", []) if ta["ok"] else [],
         "structural_primitives_shadow": structural_primitives_shadow,
         "oi_funding_ls_shadow": oi_funding_ls_shadow,
         "bos_body_close_shadow": bos_body_close_shadow,
         "order_block_shadow": order_block_shadow,
+        "tz13_shadow": tz13_shadow,
     }
 
 

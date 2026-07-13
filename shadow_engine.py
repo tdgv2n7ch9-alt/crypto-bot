@@ -471,6 +471,15 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
     except Exception as e:
         discrepancy.append(f"inducement calc failed: {e}")
 
+    # Пакет 14 (владелец, 2026-07-13): параллельный 13-блочный вердикт --
+    # ta_extra.build_13block_verdict(), уже полностью посчитан вызывающей стороной
+    # (bot.real_full_analysis() -> result["tz13_shadow"], либо отсутствует для
+    # fa_engine.build_full_analysis()-пути, который его не считает -- честно None,
+    # не выдумываем). Верхнеуровневые tz13_* поля -- владелец, п.3: "score,
+    # направление, зона, SL/TP", для удобного логирования/сравнения без раскопки
+    # вложенности compute_shadow() уже даёт (те же имена, что fa_engine-путь).
+    tz13 = result.get("tz13_shadow") or {}
+
     return {
         "ts": time.time(),
         "symbol": symbol,
@@ -495,6 +504,13 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         "patches_affected": affected,
         "discrepancy": discrepancy,
         "live_journal_id": live_journal_id,
+        "tz13_shadow": tz13,
+        "tz13_score": tz13.get("score"),
+        "tz13_direction": tz13.get("direction"),
+        "tz13_setup_type": tz13.get("setup_type"),
+        "tz13_entry_zone": tz13.get("entry_zone"),
+        "tz13_sl": tz13.get("sl"),
+        "tz13_tp1": tz13.get("tp1"), "tz13_tp2": tz13.get("tp2"), "tz13_tp3": tz13.get("tp3"),
     }
 
 
@@ -608,6 +624,10 @@ def _adapt_send_scheduled_result(a: dict) -> dict:
         },
         "candles_4h": a.get("candles_4h") or [],
         "price": a.get("price"),
+        # Пакет 14 (владелец, 2026-07-13): tz13_shadow -- уже полностью посчитан
+        # внутри real_full_analysis() (ta_extra.build_13block_verdict()), просто
+        # прокидывается через адаптер к compute_shadow(), без пересчёта.
+        "tz13_shadow": a.get("tz13_shadow"),
     }
 
 

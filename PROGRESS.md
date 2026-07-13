@@ -6802,3 +6802,76 @@ py_compile чист, полный pytest 823 passed/1 skipped.
   для копирования с телефона -- НЕ применялась с этой сессии (сам заведёт).
 
 py_compile чист, полный pytest 826 passed/1 skipped.
+
+## 2026-07-13 -- Пакет 14: real_full_analysis() 13-блочный shadow-движок
+
+**Честная находка перед кодом**: `real_full_analysis_TZ.md` НЕ найден в
+репозитории (проверено `find` + `git log --all --diff-filter=A` по имени
+файла -- ноль совпадений). Единственный существующий артефакт --
+`real_full_analysis_TZ_reconstructed.md` (реконструкция 13 блоков по коду
+`fa_engine.py`, сама себя маркирует "РЕКОНСТРУКЦИЯ, НЕ ОРИГИНАЛ"), и её
+блок-список НЕ совпадает с блок-списком владельца дословно (у владельца
+"тип сетапа AMD/SH-BOS-RTO/Sweep/Cypher" -- этих терминов нет ни в
+reconstructed-доке, ни в METHODOLOGY_CORE.md). Проверка библиотеки нашла
+источник: `knowledge/_ocr/trading_guide_4_.txt` содержит раздел "Торговые
+сетапы" с ТОЧНЫМИ определениями AMD/"Stop Hunt - BOS - RTO"/"Liquidity
+Sweep"/"Паттерн Cypher" (строки ~195-270), и `knowledge/KNOWLEDGE_INDEX.md`
+подтверждает "Kira ICT Trading Analysis.pdf" как источник 6-пунктового
+чек-листа (уже отражён в `fa_engine.py` Block 5). Итоговая 13-блочная
+композиция синтезирована из ЭТИХ реальных источников -- не выдумана и не
+взята из несуществующего файла.
+
+**Код** (`ta_extra.py`, ~330 новых строк, без импорта bot.py/fa_engine.py --
+листовой модуль):
+- `detect_cypher_pattern(candles)` -- гармонический XABCD по Фибоначчи
+  (Даррен Оглсби), ищет 5 последних чередующихся фрактальных swing-точек,
+  проверяет B∈[0.382,0.618] XA, C∈[1.272,1.414] проекция XA, D=0.786
+  коррекция XC, с допуском 8% (честно эвристика на фракталах, не замена
+  инструмента точного рисования TradingView, как и говорит сам источник).
+- `classify_setup_type(candles_4h, direction)` -- приоритет Cypher → SH-BOS-RTO
+  (свежий sweep + BOS согласован с bias) → AMD (переиспользует уже
+  существующий `classify_amd_phase()`) → Sweep (свежий sweep без BOS) → None.
+- `build_13block_verdict(...)` -- НЕЗАВИСИМЫЙ полный вердикт (не читает
+  `is_long`/`rocket`/`tp`/`sl` боевого пути, строит своё направление заново
+  через `multi_tf_bias()`): 1 bias, 2 Elliott 1D+4H (обе, как просил
+  владелец), 3 тип сетапа, 4 POI/зоны, 5 чек-лист Kira|ICT (6 п.), 6
+  ликвидность/sweep, 7 OI-матрица, 8 killzone (см. ниже), 9 фаза рынка
+  (Wyckoff), 10 DCA 50/30/20, 11 TP1/2/3+R:R, 12 SL за структурой
+  (`SR_SL_BUFFER_PCT=2.5`, уже существующая константа -- буфер 2-3% из ТЗ
+  был реализован раньше, не новый), 13 итоговый вердикт. Верхнеуровневые
+  агрегаты `direction`/`score`/`entry_zone`/`sl`/`tp1-3`/`setup_type`
+  (владелец, п.3).
+- **Killzone -- единый источник**: `killzone_status` ПРИХОДИТ параметром от
+  вызывающей стороны (`bot.get_killzone_status()`, Патч 01), функция НЕ
+  считает часы сама -- НЕ четвёртое определение (владелец, п.2; см.
+  `ENGINE_UNIFICATION.md`). Тест `test_block8_killzone_reuses_single_source_not_recomputed`
+  проверяет это явно (`is` identity check, не просто equality).
+- **Ноль новых сетевых вызовов**: `bot.real_full_analysis()` (`bot.py`)
+  вызывает `build_13block_verdict()` с уже полученными `candles_1h/4h/1d`
+  (из `ta = real_ta(sym)`, добавлены в return-словарь тем же способом, что
+  уже есть `candles_4h`) и уже посчитанными `oi_change`/`funding`/`oi_combo`/
+  `ls_ratio` (читает их ИЗ `oi_funding_ls_shadow`, а не вызывает
+  `_get_oi_change()` повторно -- та функция мутирует состояние и обязана
+  вызываться РОВНО один раз за анализ, см. её собственный комментарий).
+  Результат -- `result["tz13_shadow"]`, SHADOW ONLY, try/except (тот же
+  паттерн, что `oi_funding_ls_shadow`/`bos_body_close_shadow`/
+  `order_block_shadow`).
+- **Логирование**: `shadow_engine._adapt_send_scheduled_result()` прокидывает
+  `tz13_shadow` в `compute_shadow()`, которая добавляет его целиком плюс
+  плоские `tz13_score`/`tz13_direction`/`tz13_setup_type`/`tz13_entry_zone`/
+  `tz13_sl`/`tz13_tp1-3` в итоговую запись `journal/shadow_signals.json` --
+  переиспользует УЖЕ существующий retry-catchup/GitHub-sync контур
+  (`log_send_scheduled_shadow_async()`, Пакет 4 М2), новый контур не
+  строился.
+- Методология сравнения tz13 vs боевой AUTO-путь -- новая секция в
+  `SHADOW_ANALYSIS.md` ("Пакет 14"): метрики (directional agreement rate,
+  setup-type distribution, R:R divergence, has_setup rate), предложенный
+  порог 100 записей ИЛИ 5 суток. Решение о переводе чего-либо в бой -- за
+  владельцем, ничего не внедрено.
+- 25 новых тестов: `tests/test_tz13_shadow.py` (23 -- Cypher/classify_setup_type
+  + один тест на каждый из 13 блоков + golden-тест на полностью замоканной
+  детерминированной 6/6-фикстуре) + `tests/test_shadow_send_scheduled.py`
+  (2 -- carries/missing-is-honest-empty для tz13_shadow, тот же паттерн, что
+  уже есть для oi_funding_ls_shadow/bos_body_close_shadow/order_block_shadow).
+
+py_compile чист, полный pytest 851 passed/1 skipped.

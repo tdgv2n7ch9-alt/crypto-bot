@@ -1383,3 +1383,290 @@ def detect_order_block(candles: list, price: float) -> dict:
                     meth["bear"], meth["bear_zone"] = True, (meth_lo, meth_hi)
 
     return {"live": live, "methodology": meth}
+
+
+# ── Пакет 14 (владелец, 2026-07-13): "тип сетапа" + 13-блочный shadow-вердикт ─
+# real_full_analysis_TZ.md НЕ найден в репозитории (проверено find + git log
+# --all по имени файла) -- состав ниже синтезирован из:
+#   - real_full_analysis_TZ_reconstructed.md (реконструкция 13 блоков по fa_engine.py)
+#   - knowledge/_ocr/trading_guide_4_.txt, раздел "Торговые сетапы" (AMD/
+#     SH-BOS-RTO/Sweep/Cypher -- строки ~195-270)
+#   - knowledge/KNOWLEDGE_INDEX.md, "Kira ICT Trading Analysis.pdf" (6-пунктовый
+#     чек-лист входа, OI-матрица)
+#   - knowledge/METHODOLOGY_CORE.md (killzone/DCA/общие правила)
+# Честно помечено в PROGRESS.md как синтез, не находка оригинального файла.
+
+CYPHER_XAB_RETRACE_LO = 0.382    # коррекция B от XA (нижняя граница)
+CYPHER_XAB_RETRACE_HI = 0.618    # коррекция B от XA (верхняя граница)
+CYPHER_XAC_PROJECTION_LO = 1.272 # C -- проекция XA (нижняя граница), т.е. |XC|/|XA|
+CYPHER_XAC_PROJECTION_HI = 1.414 # верхняя граница проекции
+CYPHER_XCD_RETRACE = 0.786       # D -- коррекция XC
+CYPHER_TOLERANCE = 0.08          # допуск на каждое отношение -- эвристика на фрактальных
+# точках, не инструмент точного рисования TradingView (источник прямо говорит: "На
+# TradingView есть специальный инструмент рисования для этого паттерна" -- эта функция
+# его НЕ заменяет, только грубый скрининг по свежим фракталам).
+
+
+def detect_cypher_pattern(candles: list) -> dict:
+    """Тип сетапа "Cypher" -- гармонический паттерн (Даррен Оглсби, Fibonacci-
+    based), см. knowledge/_ocr/trading_guide_4_.txt ("Паттерн Cypher"): коррекция
+    точки B первичного отрезка XA лежит между 0.382 и 0.618; точка C -- проекция
+    XA от 1.272 до 1.414; точка D -- 0.786 коррекции XC. TP1/TP2 -- 0.382/0.618
+    коррекция CD (от D к C), SL -- за точкой X.
+
+    Ищет ПОСЛЕДНИЕ 5 чередующихся фрактальных swing-точек (X-A-B-C-D, по
+    _find_fractals) и проверяет геометрию с допуском CYPHER_TOLERANCE на каждое
+    отношение. Честно возвращает bull=False/bear=False при отсутствии валидной
+    геометрии -- не "почти похоже". direction по чередованию: X-low/A-high/...
+    /D-low = bull (вход в лонг на D, цель -- назад к C), X-high/.../D-high = bear."""
+    out = {"bull": False, "bear": False, "points": None, "tp1": None, "tp2": None, "sl": None}
+    highs, lows = _find_fractals(candles)
+    tagged = sorted([(i, p, "H") for i, p in highs] + [(i, p, "L") for i, p in lows],
+                     key=lambda t: t[0])
+    merged = []
+    for i, p, kind in tagged:
+        if merged and merged[-1][2] == kind:
+            if (kind == "H" and p > merged[-1][1]) or (kind == "L" and p < merged[-1][1]):
+                merged[-1] = (i, p, kind)
+        else:
+            merged.append((i, p, kind))
+    if len(merged) < 5:
+        return out
+    X, A, B, C, D = merged[-5:]
+    kinds = [pt[2] for pt in (X, A, B, C, D)]
+    if kinds not in (["L", "H", "L", "H", "L"], ["H", "L", "H", "L", "H"]):
+        return out
+
+    xv, av, bv, cv, dv = X[1], A[1], B[1], C[1], D[1]
+    xa = av - xv
+    if xa == 0:
+        return out
+    ab_retrace = abs(av - bv) / abs(xa)
+    if not (CYPHER_XAB_RETRACE_LO - CYPHER_TOLERANCE <= ab_retrace <= CYPHER_XAB_RETRACE_HI + CYPHER_TOLERANCE):
+        return out
+    xc_projection = abs(cv - xv) / abs(xa)
+    if not (CYPHER_XAC_PROJECTION_LO - CYPHER_TOLERANCE <= xc_projection <= CYPHER_XAC_PROJECTION_HI + CYPHER_TOLERANCE):
+        return out
+    xc = cv - xv
+    if xc == 0:
+        return out
+    cd_retrace_of_xc = abs(cv - dv) / abs(xc)
+    if not (CYPHER_XCD_RETRACE - CYPHER_TOLERANCE <= cd_retrace_of_xc <= CYPHER_XCD_RETRACE + CYPHER_TOLERANCE):
+        return out
+
+    is_bull = kinds[0] == "L"
+    cd = cv - dv
+    tp1 = dv + cd * 0.382
+    tp2 = dv + cd * 0.618
+    sl = xv * (1 - SR_SL_BUFFER_PCT / 100) if is_bull else xv * (1 + SR_SL_BUFFER_PCT / 100)
+    common = {"points": {"X": xv, "A": av, "B": bv, "C": cv, "D": dv},
+              "tp1": tp1, "tp2": tp2, "sl": sl}
+    if is_bull:
+        out.update(bull=True, **common)
+    else:
+        out.update(bear=True, **common)
+    return out
+
+
+def classify_setup_type(candles_4h: list, direction: str = None, now_utc: "_dt.datetime" = None) -> dict:
+    """"Тип сетапа" (владелец, Пакет 14, 2026-07-13) -- 4 паттерна из
+    knowledge/_ocr/trading_guide_4_.txt ("Торговые сетапы"):
+      - Cypher -- гармонический XABCD, см. detect_cypher_pattern() выше.
+      - SH-BOS-RTO ("Stop Hunt - BOS - RTO. Часть 5") -- "первичный" разворот
+        по тексту источника: свип стопов -> слом структуры (BOS) -> возврат в
+        ориджин (RTO) для mitigation. Здесь: свежий sweep (в пределах
+        FRESH_SWEEP_BARS) + BOS согласован с bias (aligned=True от
+        smc_setup_type) -- прямое соответствие определению.
+      - AMD ("AMD (Accumulation, Manipulation, Distribution)") -- фаза
+        манипуляции/дистрибуции по уже существующей classify_amd_phase()
+        (NY-midnight сессионная эвристика) -- САМА classify_amd_phase() честно
+        помечена как упрощение (по часам сессии + цена vs NY-midnight, не
+        полный range+двусторонний sweep+POI-тест из текста источника).
+      - Sweep ("Liquidity Sweep") -- свежий sweep БЕЗ полного SH-BOS-RTO
+        подтверждения (BOS не согласован/структура не определена) -- по
+        тексту это более слабое/агрессивное условие ("преимущественное
+        отсутствие возможности консервативного входа с подтверждением на LTF").
+    Приоритет проверки: Cypher (самая специфичная геометрия) -> SH-BOS-RTO
+    ("первичный" сетап по тексту, остальные -- "производные") -> AMD -> Sweep
+    (самый общий случай) -> None. Возвращает {"setup_type": str|None, "label":
+    str, "detail": {...}}."""
+    cypher = detect_cypher_pattern(candles_4h)
+    if cypher.get("bull") or cypher.get("bear"):
+        side = "bull" if cypher["bull"] else "bear"
+        return {"setup_type": "Cypher",
+                "label": f"Cypher ({side}) — TP1 {smart_round(cypher['tp1'])} / "
+                         f"TP2 {smart_round(cypher['tp2'])}, SL {smart_round(cypher['sl'])}",
+                "detail": cypher}
+
+    sweep = detect_sweep(candles_4h)
+    bos = smc_setup_type(candles_4h, direction) if direction else {"aligned": None, "type": None,
+                                                                     "label": "bias не определён"}
+    if sweep and sweep["bars_ago"] <= FRESH_SWEEP_BARS and bos.get("aligned") is True:
+        return {"setup_type": "SH-BOS-RTO",
+                "label": f"SH-BOS-RTO — свип {sweep['type']} ({sweep['bars_ago']} баров назад) + {bos['label']}",
+                "detail": {"sweep": sweep, "bos": bos}}
+
+    amd = classify_amd_phase(candles_4h, now_utc)
+    if amd["phase"] in ("manipulation_bull", "manipulation_bear", "distribution_bull", "distribution_bear"):
+        return {"setup_type": "AMD",
+                "label": f"AMD — фаза {amd['phase']} (цена {amd['price_vs_nymidnight']} NY-midnight)",
+                "detail": amd}
+
+    if sweep and sweep["bars_ago"] <= FRESH_SWEEP_BARS:
+        return {"setup_type": "Sweep",
+                "label": f"Liquidity Sweep — {sweep['type']} ({sweep['bars_ago']} баров назад), без подтверждённого BOS",
+                "detail": sweep}
+
+    return {"setup_type": None,
+            "label": "чёткого сетапа из набора AMD/SH-BOS-RTO/Sweep/Cypher не найдено",
+            "detail": {}}
+
+
+TZ13_POI_PROXIMITY_PCT = 1.5        # "цена у POI" -- тот же порог, что fa_engine.POI_PROXIMITY_PCT
+TZ13_CHECKLIST_MIN_FOR_TRADE = 4    # тот же порог, что fa_engine.CHECKLIST_MIN_FOR_TRADE
+
+
+def _tz13_verdict_text(direction, has_setup: bool, checklist_score: int, setup_block: dict) -> str:
+    if not direction:
+        return "направление не определено (1D/4H не согласованы)"
+    side_ru = "лонг" if direction == "long" else "шорт"
+    setup_label = setup_block.get("label", "н/д") if setup_block else "н/д"
+    status = "сетап готов" if has_setup else "сетапа нет"
+    return f"{side_ru}: {status} (чеклист {checklist_score}/6), тип сетапа: {setup_label}"
+
+
+def build_13block_verdict(candles_1h: list, candles_4h: list, candles_1d: list,
+                           price: float, killzone_status: dict, funding: dict,
+                           oi_change, oi_combo, ls_ratio: float,
+                           now_utc: "_dt.datetime" = None) -> dict:
+    """Пакет 14 (владелец, 2026-07-13): полный НЕЗАВИСИМЫЙ 13-блочный вердикт,
+    параллельный bot.real_full_analysis() -- НЕ читает и не использует её
+    is_long/rocket/tp/sl/entry, строит СВОЁ направление и план заново из
+    ta_extra-примитивов (тот же принцип независимости, что и у остальных
+    shadow-патчей shadow_engine.compute_shadow()). Не делает НИКАКИХ новых
+    сетевых вызовов -- candles_1h/4h/1d, killzone_status, funding, oi_change/
+    oi_combo, ls_ratio все уже посчитаны вызывающей стороной для других целей
+    (см. bot.real_full_analysis() -- комментарий "уже посчитаны выше... без
+    новых сетевых вызовов", тот же принцип).
+
+    13 блоков: 1 bias, 2 Elliott 1D+4H, 3 тип сетапа, 4 POI/зоны, 5 чек-лист
+    Kira|ICT, 6 ликвидность/sweep, 7 OI-матрица, 8 killzone/сессия
+    (get_killzone_status() -- единый источник, см. ENGINE_UNIFICATION.md, НЕ
+    четвёртое определение часов), 9 фаза рынка, 10 DCA 50/30/20, 11 TP1/2/3+R:R,
+    12 SL за структурой (+2-3%, SR_SL_BUFFER_PCT), 13 итоговый вердикт.
+
+    Каждый блок в try/except на уровне вызывающей стороны (bot.py) -- сама эта
+    функция может упасть целиком, вызывающая сторона это уже ожидает (тот же
+    паттерн, что oi_funding_ls_shadow/bos_body_close_shadow/order_block_shadow)."""
+    out = {"ok": True}
+    closes_1d = [c["close"] for c in candles_1d] if candles_1d else [c["close"] for c in candles_4h]
+    closes_4h = [c["close"] for c in candles_4h]
+    rsi_1d = rsi(closes_1d, 14)
+    rsi_4h = rsi(closes_4h, 14)
+
+    # Блок 1: Multi-TF bias
+    b1 = multi_tf_bias(candles_1d, candles_4h, candles_1h)
+    direction = "long" if b1["bias"] == "LONG" else ("short" if b1["bias"] == "SHORT" else None)
+    out["block1_bias"] = b1
+
+    # Блок 2: Elliott Wave 1D + 4H (владелец явно просил обе -- "Elliott Wave 4H/1D")
+    out["block2_elliott"] = {
+        "elliott_1d": elliott_wave_heuristic(closes_1d, rsi_1d),
+        "elliott_4h": elliott_wave_heuristic(closes_4h, rsi_4h),
+    }
+
+    # Блок 3: тип сетапа AMD/SH-BOS-RTO/Sweep/Cypher
+    out["block3_setup_type"] = classify_setup_type(candles_4h, direction, now_utc)
+
+    # Блок 4: POI/K-LVL зоны (те же примитивы, что fa_engine.py/build_trade_from_structure)
+    ema_ctx = ema_context(candles_1h, candles_4h)
+    zones = find_sr_zones(candles_1h, candles_4h, candles_1d, price, ema_ctx=ema_ctx)
+    out["block4_zones"] = zones
+
+    # Блок 5: чек-лист Kira|ICT (6 пунктов) -- см. Kira ICT Trading Analysis.pdf
+    # (KNOWLEDGE_INDEX.md: "6-пунктовый чек-лист входа"), те же пункты, что уже
+    # реализованы в fa_engine.py Block 5 (независимая, но методологически
+    # идентичная реализация здесь -- без импорта fa_engine, ta_extra остаётся
+    # листовым модулем без зависимостей на bot.py/fa_engine.py).
+    sweep_1h = detect_sweep(candles_1h)
+    sweep_4h = detect_sweep(candles_4h)
+    items = []
+    struct_ok = bool(direction) and (
+        (direction == "long" and "аптренд" in b1.get("structure_1d", "")) or
+        (direction == "short" and "даунтренд" in b1.get("structure_1d", "")))
+    items.append(("Тренд старшего ТФ (1D) совпадает с направлением", struct_ok))
+    fresh_sweep = bool(direction) and sweep_score_delta(sweep_1h, sweep_4h, direction) > 0
+    items.append(("Свежий свип ликвидности в пользу направления", fresh_sweep))
+    entry_side = "below" if direction == "long" else ("above" if direction == "short" else None)
+    poi_zones = zones.get(entry_side, []) if entry_side else []
+    near_poi = bool(poi_zones and price and
+                     abs(poi_zones[0]["mid"] - price) / price * 100 <= TZ13_POI_PROXIMITY_PCT)
+    items.append(("Цена у зоны интереса (не в вакууме)", near_poi))
+    kz_ok = bool(killzone_status) and bool(
+        killzone_status.get("is_good") or
+        (killzone_status.get("next") and killzone_status["next"].get("in_min", 999) <= 60))
+    items.append(("Killzone активна или близко", kz_ok))
+    funding_ok = True
+    if funding and funding.get("ok") and direction:
+        rate = funding["rate"]
+        funding_ok = not (rate > 0.05 if direction == "long" else rate < -0.05)
+    items.append(("Funding не против позиции", funding_ok))
+    trade = build_trade_from_structure(direction, price, zones) if direction else None
+    rr_ok = bool(trade and trade["rr_gate_pass"])
+    items.append(("R:R по структуре ≥ 1:1.5", rr_ok))
+    checklist_score = sum(1 for _, ok in items if ok)
+    out["block5_checklist"] = {"items": items, "score": checklist_score}
+
+    # Блок 6: ликвидность/ловушки
+    out["block6_liquidity"] = {
+        "sweep_1h": sweep_1h, "sweep_4h": sweep_4h,
+        "equal_levels": equal_levels(candles_4h, tolerance_pct=0.3),
+    }
+
+    # Блок 7: OI-матрица + funding + L/S (уже посчитаны вызывающей стороной, см.
+    # bot.py oi_funding_ls_shadow -- один _get_oi_change() вызов на весь
+    # real_full_analysis(), эта функция его не дублирует)
+    out["block7_oi"] = {"oi_change_pct": oi_change, "oi_combo": oi_combo,
+                         "funding": funding, "ls_ratio": ls_ratio}
+
+    # Блок 8: killzone/сессия -- killzone_status ПРИХОДИТ от вызывающей стороны
+    # (bot.get_killzone_status(), Патч 01) -- единый источник часов, не заводим
+    # четвёртое определение (владелец, Задача Пакета 14 п.2; см. ENGINE_UNIFICATION.md).
+    out["block8_killzone"] = killzone_status
+
+    # Блок 9: фаза рынка (Wyckoff-эвристика)
+    vols_1d = [c.get("vol", 0) for c in candles_1d] if candles_1d else [c.get("vol", 0) for c in candles_4h]
+    out["block9_phase"] = wyckoff_phase_heuristic(closes_1d, price, vols_1d=vols_1d)
+
+    # Блок 10/11/12: DCA 50/30/20, TP1/TP2/TP3 c R:R, SL за структурой (+2-3%)
+    if trade:
+        out["block10_dca"] = {"entry1": trade["entry1"], "entry2": trade["entry2"],
+                               "entry3": trade["entry3"], "weights": "50/30/20"}
+        out["block11_tp_rr"] = {"tp1": trade["tp1"], "tp2": trade["tp2"], "tp3": trade["tp3"],
+                                 "rr_tp1": trade["rr_tp1"], "rr_tp2": trade["rr_tp2"],
+                                 "rr_tp3": trade["rr_tp3"], "rr_gate_pass": trade["rr_gate_pass"]}
+        out["block12_sl"] = {"sl": trade["sl"], "buffer_pct": SR_SL_BUFFER_PCT}
+    else:
+        out["block10_dca"] = {"entry1": None, "entry2": None, "entry3": None, "weights": "50/30/20"}
+        out["block11_tp_rr"] = {"tp1": None, "tp2": None, "tp3": None, "rr_tp1": None,
+                                 "rr_tp2": None, "rr_tp3": None, "rr_gate_pass": False}
+        out["block12_sl"] = {"sl": None, "buffer_pct": SR_SL_BUFFER_PCT}
+
+    # Блок 13: итоговый вердикт
+    has_setup = bool(trade and trade["rr_gate_pass"] and checklist_score >= TZ13_CHECKLIST_MIN_FOR_TRADE)
+    out["block13_verdict"] = {
+        "has_setup": has_setup, "direction": direction, "score": checklist_score,
+        "text": _tz13_verdict_text(direction, has_setup, checklist_score, out["block3_setup_type"]),
+    }
+
+    # Агрегированные поля верхнего уровня -- владелец, п.3: "score, направление,
+    # зона, SL/TP" -- для удобного логирования/сравнения без раскопки вложенности.
+    out["direction"] = direction
+    out["score"] = checklist_score
+    out["entry_zone"] = {"lo": trade["entry_lo"], "hi": trade["entry_hi"]} if trade else None
+    out["sl"] = trade["sl"] if trade else None
+    out["tp1"] = trade["tp1"] if trade else None
+    out["tp2"] = trade["tp2"] if trade else None
+    out["tp3"] = trade["tp3"] if trade else None
+    out["setup_type"] = out["block3_setup_type"]["setup_type"]
+    return out

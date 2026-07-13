@@ -301,3 +301,64 @@ def test_last_write_ts_not_updated_on_local_write_failure(monkeypatch):
 
     assert ok is False
     assert se.get_last_send_scheduled_write_ts() is None
+
+
+# --- Пакет 14 (владелец, 2026-07-13): tz13_shadow (13-блочный вердикт) передаётся
+# через в запись, тот же паттерн, что oi_funding_ls_shadow/bos_body_close_shadow/
+# order_block_shadow выше -----------------------------------------------------
+
+_FAKE_TZ13 = {
+    "ok": True, "direction": "long", "score": 5, "setup_type": "SH-BOS-RTO",
+    "entry_zone": {"lo": 95.0, "hi": 98.0}, "sl": 92.7,
+    "tp1": 104.0, "tp2": 108.0, "tp3": 112.0,
+}
+
+
+def test_log_send_scheduled_shadow_async_carries_tz13_shadow(monkeypatch):
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)
+    a["tz13_shadow"] = _FAKE_TZ13
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    rec = captured["record"]
+    assert rec["tz13_shadow"] == _FAKE_TZ13
+    assert rec["tz13_score"] == 5
+    assert rec["tz13_direction"] == "long"
+    assert rec["tz13_setup_type"] == "SH-BOS-RTO"
+    assert rec["tz13_entry_zone"] == {"lo": 95.0, "hi": 98.0}
+    assert rec["tz13_sl"] == 92.7
+    assert rec["tz13_tp1"] == 104.0
+    assert rec["tz13_tp2"] == 108.0
+    assert rec["tz13_tp3"] == 112.0
+
+
+def test_log_send_scheduled_shadow_async_missing_tz13_shadow_is_honest_empty(monkeypatch):
+    """fa_engine.build_full_analysis()-путь (signal_loop.py) НЕ считает tz13_shadow
+    -- честно {}/None, а не выдуманные значения."""
+    captured = {}
+
+    def fake_write_local(record):
+        captured["record"] = record
+        return True
+
+    monkeypatch.setattr(se, "_write_local", fake_write_local)
+    monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+
+    a = _fake_real_full_analysis_result(is_long=True)  # no tz13_shadow key
+    asyncio.run(se.log_send_scheduled_shadow_async(
+        "BTCUSDT", a, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
+
+    rec = captured["record"]
+    assert rec["tz13_shadow"] == {}
+    assert rec["tz13_score"] is None
+    assert rec["tz13_direction"] is None
+    assert rec["tz13_sl"] is None
