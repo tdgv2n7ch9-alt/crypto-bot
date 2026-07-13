@@ -5797,6 +5797,19 @@ lockdown не отзывает токены сам по себе, безопас
 фоллбэк на False, enforce() блокирует VIP при lockdown, пропускает OWNER,
 не блокирует, когда lockdown выключен). Полный `pytest`: 667 passed, 1 skipped.
 
-**Статус SEC М7: код+тесты готовы. Деплой/живая проверка -- следующим шагом
-(новый стандарт из «Верификация деплоя» в CLAUDE.md: логи контейнера/ответ бота,
-НЕ `railway run` для этой проверки, т.к. `/lockdown`/`/unlock` пишут в GitHub).**
+**Деплой подтверждён живьём** (`deployment d3a04916`, commit `de27bd5`, SUCCESS) --
+`railway logs` показал чистый старт ("Application started", "Scheduler started",
+`getMe`/`sendMessage` 200 OK), ни одной строки Traceback/ModuleNotFoundError/
+ImportError/AttributeError, связанной с этим коммитом (429 от CoinGecko derivatives
+-- предсуществующий шум, не связан с этим пакетом). Проверка по новому стандарту
+из «Верификация деплоя»: логи контейнера, БЕЗ `railway run` (т.к. `/lockdown`/
+`/unlock` пишут в GitHub -- см. правило М3 того же раздела).
+
+**Честно про пределы этой проверки**: не отправлял `/lockdown`/`/unlock` от лица
+живого Telegram-аккаунта в реальном чате с ботом -- проверено на уровне
+Python-логики (10 unit-тестов на `enforce()`+lockdown-состояние) и чистого старта
+контейнера с новым кодом, не на уровне полного end-to-end Telegram round-trip.
+Если понадобится живой прогон `/lockdown`→`/unlock` -- это тест владельца из
+Telegram, не выполнялся мной.
+
+**Статус SEC М7: ГОТОВ.**
