@@ -618,7 +618,16 @@ async def _level_watch_task(bot: Bot, owner_id: int):
         await bot.send_message(oid, text)
 
     try:
-        await level_watch.startup_sync()
+        synced = await level_watch.startup_sync()
+        # Владелец, 2026-07-13 (кейс AVAX): раньше НЕ было ни одной строки лога
+        # на успешный startup_sync (только print() на исключение) -- нечем было
+        # подтвердить живьём, что контейнер реально подтянул свежую разметку из
+        # GitHub. log.info с датой/источником/составом символов -- прямая улика.
+        cfg = level_watch.load_watch_zones()
+        zone_syms = sorted(k for k in cfg if k not in ("updated", "source"))
+        log.info(f"[LEVEL-WATCH] startup_sync={'OK' if synced else 'skip (GitHub н/д или пусто)'} "
+                 f"updated={cfg.get('updated')} source={cfg.get('source')} "
+                 f"symbols={len(zone_syms)} ({', '.join(zone_syms)})")
     except Exception as e:
         print(f"Level Watch: startup_sync упал ({type(e).__name__}: {e})")
     try:
