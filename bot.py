@@ -3621,6 +3621,12 @@ async def cmd_coin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ]]))
         return
 
+    # Пакет 18, п.11 (владелец, хвост Пакета 15): живая верификация /coin по
+    # логам, когда владелец сам отправит команду -- строка появляется ТОЛЬКО
+    # на успешном пути fa_engine (не на таймауте/ошибке выше), однозначно
+    # подтверждает, что карточка построена структурным движком, а не
+    # deprecated full_analysis().
+    log.info(f"[FA-PATH] cmd=coin symbol={symbol} engine=fa_engine")
     await _render_fa_result(ctx.bot, update.effective_chat.id, symbol, fa_result)
 
 async def cmd_signals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -6311,12 +6317,19 @@ async def cmd_precision(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             a_new = _precision_fields_from_fa_engine(fa_result, a_old)
             if not a_new.get("fa_engine_ok"):
                 log.info(f"[PRECISION] {sym}: fa_engine н/д ({a_new.get('rr_na_reason')}), карточка честно покажет н/д")
+            # Пакет 18, п.11 (владелец, хвост Пакета 15): живая верификация
+            # /precision по логам -- явно фиксирует, какой движок реально
+            # обслужил финалиста (fa_engine либо fa_engine_failed, если сам
+            # вызов упал/вернул ok:False -- см. _precision_fields_from_fa_engine).
+            engine_used = "fa_engine" if a_new.get("fa_engine_ok") else "fa_engine_failed"
+            log.info(f"[FA-PATH] cmd=precision symbol={sym} engine={engine_used}")
         else:
             try:
                 a_new = real_full_analysis(coin)
             except Exception as e:
                 log.error(f"[PRECISION] real_full_analysis {sym}: {e}")
                 a_new = a_old
+            log.info(f"[FA-PATH] cmd=precision symbol={sym} engine=real_full_analysis (PRECISION_FA_MIGRATED=false)")
         top_fixed.append((coin, a_new, ps_data))
     top = top_fixed
 
