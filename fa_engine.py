@@ -660,9 +660,28 @@ def render_full_analysis_card(result: dict) -> str:
     # 7. План сделки + Rocket Score
     b11 = result.get("block11_trade_plan", {})
     b12 = result.get("block12_rocket", {})
-    parts.append(f"🚀 *Rocket Score: {b12.get('score','?')}/100*")
-    for label, delta in b12.get("factors", [])[:8]:
-        parts.append(f"  {'+' if delta>0 else ''}{delta} {label}")
+    # Пакет 18 (владелец, кейс AVAX 15:17: "50/100 при всех компонентах 0" --
+    # непонятно, откуда 50, если ничего не начислено): база 50 -- это НЕ
+    # нейтральная оценка "средне", а буквально стартовое число до поправок
+    # (см. _rocket_score() ниже: score = 50, затем аддитивные дельты). Раньше
+    # карточка просто печатала итог + первые 8 факторов В ПОРЯДКЕ РАСЧЁТА
+    # (включая нулевые -- при NEUTRAL-bias/direction=None большинство дельт
+    # честно 0, что при cap [:8] могло обрезать реальные ненулевые поправки
+    # после 8-й позиции и захламить карточку строками "0 ..."). Теперь: явная
+    # строка "база 50" + сумма поправок, и список показывает ТОЛЬКО ненулевые
+    # факторы -- разложение гарантированно сходится (50 + сумма показанных
+    # дельт == итог), только текст, сама формула _rocket_score() не тронута.
+    score = b12.get("score", "?")
+    factors = b12.get("factors", [])
+    nonzero_factors = [(label, delta) for label, delta in factors if delta != 0]
+    delta_sum = sum(delta for _, delta in nonzero_factors)
+    if nonzero_factors:
+        parts.append(f"🚀 *Rocket Score: {score}/100* (база 50, поправки: {delta_sum:+d})")
+        for label, delta in nonzero_factors[:10]:
+            parts.append(f"  {'+' if delta>0 else ''}{delta} {label}")
+    else:
+        parts.append(f"🚀 *Rocket Score: {score}/100* (база 50, поправок нет — "
+                      f"направление не определено или все факторы нейтральны)")
     parts.append("")
     if b11.get("has_setup"):
         parts += [
