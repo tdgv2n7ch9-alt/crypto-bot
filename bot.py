@@ -127,6 +127,7 @@ import etherscan_whale
 import derivatives_extra
 import event_radar
 import new_coin_scan
+import inbox
 import glossary
 import card_v2
 
@@ -2828,11 +2829,17 @@ PRECISION_FA_MIGRATED = os.getenv("PRECISION_FA_MIGRATED", "true").strip().lower
 def main_kb_v2():
     # Пакет 18, п.13 (владелец, финально): "⭐ ЛИМИТКИ" -- первым разделом,
     # НАД ТОЧКИ. Разметки владельца = лучший сигнал в системе (см. CLAUDE.md).
+    # ПАКЕТ 19, П2 (владелец): счётчики непрочитанного на кнопках ТОЧКИ/
+    # РАДАРЫ -- "🎯 ТОЧКИ (3)" при unread>0, иначе базовая метка без
+    # изменений (inbox.menu_badge()). Всегда безопасно вызывать -- при
+    # INBOX_MODE_ENABLED=false ничего не пишет в inbox.json, счётчики
+    # остаются 0, метки не меняются.
+    counts = inbox.get_unread_counts()
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⭐ ЛИМИТКИ", callback_data="mv2_limitki")],
-        [InlineKeyboardButton("🎯 ТОЧКИ",   callback_data="mv2_tochki")],
+        [InlineKeyboardButton(inbox.menu_badge("tochki", "🎯 ТОЧКИ", counts), callback_data="mv2_tochki")],
         [InlineKeyboardButton("📊 РЫНОК",   callback_data="mv2_rynok")],
-        [InlineKeyboardButton("📡 РАДАРЫ",  callback_data="mv2_radary")],
+        [InlineKeyboardButton(inbox.menu_badge("radary", "📡 РАДАРЫ", counts), callback_data="mv2_radary")],
         [InlineKeyboardButton("💼 МОИ",     callback_data="mv2_moi")],
         [InlineKeyboardButton("⚙️ СИСТЕМА", callback_data="mv2_sistema")],
     ])
@@ -4305,8 +4312,16 @@ async def _mv2_render_tochki(bot, chat_id, message_id, filter_mode="all", offset
     # Единого маппинга score->цвет в проекте и не было (никакая функция его
     # не считает) -- честный фикс не "унификация несуществующей логики", а
     # явная легенда, снимающая ложную ассоциацию светофора со счётом.
-    lines = ["🎯 *ТОЧКИ*", "",
-              "🟢 цена в зоне входа · 🟡 ждём цену · 🔴 зона не актуальна "
+    lines = ["🎯 *ТОЧКИ*", ""]
+    # ПАКЕТ 19, П2 (владелец): "вход в раздел = прочитано, счётчик
+    # сбрасывается, сверху раздела строка 'Непрочитанных: N'" -- читаем
+    # unread ДО mark_read (иначе строка всегда покажет 0), затем сбрасываем.
+    unread_before = inbox.get_unread_counts().get("tochki", 0)
+    if unread_before:
+        lines.append(f"Непрочитанных: {unread_before}")
+        lines.append("")
+    inbox.mark_read("tochki")
+    lines += ["🟢 цена в зоне входа · 🟡 ждём цену · 🔴 зона не актуальна "
               "_(светофор — не Rocket Score)_", ""]
     kb_rows = [filter_row, x100_row]
     if not page:
@@ -4486,7 +4501,15 @@ async def _mv2_render_radary(q):
         [InlineKeyboardButton("📐 Паттерны дня", callback_data="mv2_radar_patterns")],
         [InlineKeyboardButton("📰 События (Event-Radar)", callback_data="mv2_radar_info_events")],
     ]
-    await q.edit_message_text("📡 *РАДАРЫ*\n\nВыберите сторож:", parse_mode="Markdown",
+    # ПАКЕТ 19, П2 (владелец): вход в раздел = прочитано, строка
+    # "Непрочитанных: N" сверху -- тот же принцип, что _mv2_render_tochki.
+    unread_before = inbox.get_unread_counts().get("radary", 0)
+    inbox.mark_read("radary")
+    header = "📡 *РАДАРЫ*\n\n"
+    if unread_before:
+        header += f"Непрочитанных: {unread_before}\n\n"
+    header += "Выберите сторож:"
+    await q.edit_message_text(header, parse_mode="Markdown",
                                reply_markup=_mv2_back_kb(kb))
 
 
@@ -6182,14 +6205,25 @@ async def whale_monitor(bot: Bot):
             text = _format_whale_alert(w, rug_line=whale_rug_line)
             _whale_last_alert[sym] = now
 
-            # Шлём владельцу
-            try:
-                await bot.send_message(owner_id, text,
-                                       parse_mode="Markdown",
-                                       disable_web_page_preview=True)
-                alerts_sent += 1
-            except Exception as e:
-                log.error(f"[WHALE] send owner: {e}")
+            # ПАКЕТ 19, П2 (владелец): whale-алерты не в bypass-списке (только
+            # ⭐ author zone-touch / rug WARN / rocket >=85) -- rug WARN здесь
+            # берём из уже посчитанного whale_rug_line (непустая строка =
+            # score >= WARN threshold, см. rug_radar.format_rug_alert_line()).
+            if inbox.INBOX_MODE_ENABLED and not inbox.should_bypass_inbox(rug_warn=bool(whale_rug_line)):
+                try:
+                    inbox.add_item("radary", {"kind": "whale", "symbol": sym})
+                    alerts_sent += 1
+                except Exception as e:
+                    log.error(f"[WHALE] inbox routing {sym}: {e}")
+            else:
+                # Шлём владельцу
+                try:
+                    await bot.send_message(owner_id, text,
+                                           parse_mode="Markdown",
+                                           disable_web_page_preview=True)
+                    alerts_sent += 1
+                except Exception as e:
+                    log.error(f"[WHALE] send owner: {e}")
 
             # Шлём в канал если есть
             if channel_id_str:
@@ -6231,6 +6265,15 @@ async def event_radar_monitor(bot: Bot):
         log.error(f"[EVENT-RADAR] poll failed: {e}")
         return
     for text in alerts:
+        # ПАКЕТ 19, П2 (владелец): событие листинга/делистинга не в
+        # bypass-списке -- при включённом инбоксе всегда в раздел "radary",
+        # не прямой отправкой.
+        if inbox.INBOX_MODE_ENABLED:
+            try:
+                inbox.add_item("radary", {"kind": "event", "text": text[:200]})
+            except Exception as e:
+                log.error(f"[EVENT-RADAR] inbox routing: {e}")
+            continue
         try:
             await bot.send_message(owner_id, text, disable_web_page_preview=True)
             await asyncio.sleep(1)
@@ -6416,7 +6459,27 @@ async def send_scheduled(bot: Bot):
             else:
                 sent_short += 1
 
+            # ПАКЕТ 19, П2 (владелец): антиспам-инбокс -- сигнал с rocket score
+            # <85 маршрутизируется в раздел "tochki" вместо прямой отправки,
+            # ТОЛЬКО для чата владельца (owner_id) и ТОЛЬКО при
+            # INBOX_MODE_ENABLED=true (владелец включает явно, Railway env var
+            # -- по умолчанию код здесь эквивалентен старому поведению).
+            # Любой ДРУГОЙ получатель (будущий реальный подписчик, сейчас их
+            # нет -- см. inbox.py докстринг) продолжает получать карточку
+            # напрямую без изменений -- инбокс это личная лента владельца, не
+            # общая рассылка.
+            owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
             for cid in chat_ids:
+                if (inbox.INBOX_MODE_ENABLED and cid == owner_id
+                        and not inbox.should_bypass_inbox(rocket_score=a.get("rocket"))):
+                    try:
+                        inbox.add_item("tochki", {
+                            "symbol": sym, "direction": "LONG" if is_long else "SHORT",
+                            "score": a.get("rocket"),
+                        })
+                    except Exception as e:
+                        log.error(f"[AUTO] inbox routing {sym} -> {cid}: {e}")
+                    continue
                 try:
                     await send_coin(bot, cid, sym, slug, a, text)
                 except Exception as e:
@@ -6514,7 +6577,19 @@ async def check_supertrend_signals(bot, chat_ids, coins):
                 InlineKeyboardButton("📊 TradingView", url=tv_link(sym)),
                 InlineKeyboardButton("CMC", url=cmc_link(slug)),
             ]]))
+            # ПАКЕТ 19, П2 (владелец): Supertrend не в bypass-списке -- rug
+            # WARN берём из уже посчитанного st_rug_line (непустая строка =
+            # score >= WARN, тот же принцип, что whale-алерты выше).
+            owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
             for cid in chat_ids:
+                if (inbox.INBOX_MODE_ENABLED and cid == owner_id
+                        and not inbox.should_bypass_inbox(rug_warn=bool(st_rug_line))):
+                    try:
+                        inbox.add_item("radary", {"kind": "supertrend", "symbol": sym,
+                                                    "direction": signal_lbl})
+                    except Exception as e:
+                        log.error(f"ST inbox routing {sym}: {e}")
+                    continue
                 try:
                     await bot.send_message(cid, text, parse_mode="HTML", reply_markup=kb)
                 except Exception as e:
@@ -7027,7 +7102,21 @@ async def check_watchlist(bot, chat_ids, coins):
         kb = attach_home_row(InlineKeyboardMarkup([[
             InlineKeyboardButton(" TradingView", url=tv_link(sym)),
         ]]))
+        # ПАКЕТ 19, П2 (владелец, дословный bypass-список): ⭐ author
+        # zone-touch -- ВСЕГДА напрямую (уже гарантировано веткой tier==
+        # "author" выше, здесь не трогаем). Обычный (не-author) zone-touch --
+        # bypass только если rug WARN (rug_line непустая), иначе в "radary".
+        is_author = al.get("tier") == "author"
+        owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
         for cid in chat_ids:
+            if (inbox.INBOX_MODE_ENABLED and cid == owner_id
+                    and not inbox.should_bypass_inbox(is_author_zone_touch=is_author,
+                                                        rug_warn=bool(rug_line))):
+                try:
+                    inbox.add_item("radary", {"kind": "zone_touch", "symbol": sym, "bias": al["bias"]})
+                except Exception as e:
+                    log.error(f"Watchlist inbox routing {cid}: {e}")
+                continue
             try:
                 await bot.send_message(cid, text, parse_mode="Markdown", reply_markup=kb)
             except Exception as e:
@@ -12753,6 +12842,17 @@ async def _start_pump_detector(app):
         security_log.sync_to_github,
         "interval",
         minutes=10,
+    )
+    # ПАКЕТ 19, П2 (владелец): дайджест инбокса раз в 30 мин -- тот же
+    # cron/interval паттерн, что daily/morning digest выше. Сама функция
+    # no-op, если inbox.INBOX_MODE_ENABLED=false (владелец включает явно
+    # через Railway env var после приёмки) -- регистрация job'а здесь
+    # безопасна независимо от флага.
+    scheduler.add_job(
+        inbox.send_inbox_digest,
+        "interval",
+        minutes=30,
+        args=[app.bot, owner_id],
     )
     scheduler.start()
 
