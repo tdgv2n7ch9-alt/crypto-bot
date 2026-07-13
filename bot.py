@@ -108,6 +108,7 @@ import signal_journal
 import subscribers
 import access_control
 import security_log
+import watermark
 import ta_extra
 import fa_engine
 import signal_loop
@@ -2741,7 +2742,15 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
         log.error(f"Chart FAILED {symbol}: {type(e).__name__}: {e}")
         chart = None
 
-    caption = text if len(text) <= 1024 else text[:1020].rsplit("\n", 1)[0] + "\n..."
+    # Пакет SECURITY-HARDENING М5 (владелец "да") -- невидимая zero-width метка на
+    # каждую карточку, уникальная на chat_id получателя (см. watermark.py). Отдельно
+    # для caption (может быть обрезан под лимит 1024) и для полного text -- у каждого
+    # свой хвост, обрезка caption не должна откусывать метку.
+    wm_reserve = 60  # запас под маркеры + биты (см. watermark.suffix), с запасом
+    caption = text if len(text) <= 1024 - wm_reserve else \
+        text[:1024 - wm_reserve].rsplit("\n", 1)[0] + "\n..."
+    caption = watermark.embed(caption, chat_id)
+    text = watermark.embed(text, chat_id)
 
     if chart is not None:
         try:
@@ -3076,6 +3085,44 @@ async def cmd_unlock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await access_control.set_lockdown(False)
     security_log.log_event(security_log.EVENT_UNLOCK, update.effective_chat.id, "")
     await update.message.reply_text("🔓 Lockdown снят. Бот работает в обычном режиме.")
+
+
+async def cmd_trace(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/trace -- Пакет SECURITY-HARDENING М5 (владелец "да"): декодирует невидимую
+    zero-width метку (см. watermark.py) из текста сигнальной карточки -- чей
+    экземпляр слили. Использование: ответить `/trace` НА пересланное/вставленное
+    сообщение с текстом карточки (реплай сохраняет полный текст/подпись целиком,
+    в отличие от аргументов команды, которые Telegram режет по пробелам). Либо
+    `/trace <текст>` одной строкой, если реплай неудобен.
+
+    ЧЕСТНО (см. watermark.py докстринг): метка переживает копипаст/форвард ТЕКСТА,
+    но НЕ переживает скриншот -- для растрового изображения невидимых unicode-
+    символов физически не существует."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    reply = update.message.reply_to_message
+    source_text = None
+    if reply is not None:
+        source_text = reply.text or reply.caption
+    if not source_text and ctx.args:
+        source_text = " ".join(ctx.args)
+    if not source_text:
+        await update.message.reply_text(
+            "Использование: ответь `/trace` на пересланное/вставленное сообщение "
+            "с текстом карточки, либо `/trace <текст>` одной строкой.",
+            parse_mode="Markdown")
+        return
+    traced_chat_id = watermark.extract(source_text)
+    if traced_chat_id is None:
+        await update.message.reply_text(
+            "🔍 Водяной знак не найден -- либо это не карточка этого бота, либо "
+            "метка повреждена/обрезана при пересылке, либо это скриншот "
+            "(невидимые символы не переживают растровое изображение).")
+        return
+    role = subscribers.get_role_raw(traced_chat_id)
+    await update.message.reply_text(
+        f"🔍 *Источник найден*: chat_id `{traced_chat_id}` (роль в сторе: `{role}`).",
+        parse_mode="Markdown")
 
 
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -11347,6 +11394,8 @@ def main():
     # Пакет SECURITY-HARDENING М7 (владелец "да") -- инцидент-кнопка.
     app.add_handler(CommandHandler("lockdown",  cmd_lockdown))
     app.add_handler(CommandHandler("unlock",    cmd_unlock))
+    # Пакет SECURITY-HARDENING М5 (владелец "да") -- декодер водяного знака.
+    app.add_handler(CommandHandler("trace",     cmd_trace))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     # Deny-by-default auth (group=-1, обрабатывается ДО всех хендлеров выше) --
