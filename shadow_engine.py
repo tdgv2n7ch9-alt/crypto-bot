@@ -902,3 +902,107 @@ async def log_ema_stack_shadow_async(symbol: str, ema_stack_shadow: dict,
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed for ema_stack_shadow ({symbol}): {e}")
     return True
+
+
+# ── ПАКЕТ 19, П4 (владелец): L/S ratio -- shadow A/B "за тренд vs контр" ──
+#
+# Живьём (Whale Radar, bot._analyze_whale_signal(), bot.py:5985-5992): L/S
+# ratio > 1.5 ("лонги явно доминируют") засчитывается как ПОДТВЕРЖДАЮЩИЙ
+# LONG-фактор -- крайний перекос толпы в лонги трактуется "за тренд".
+# Гипотеза владельца/планировщика: экстремальный перекос толпы -- КОНТР-
+# сигнал (переполненный лонг = риск лонг-сквиза, т.е. это скорее довод
+# ПРОТИВ лонга, не за него). НЕ трогаем боевой скоринг/гейт Whale Radar --
+# считаем ВТОРУЮ, контрарную трактовку ТОГО ЖЕ значения ls ПАРАЛЛЕЛЬНО,
+# копим обе стороны в shadow, решение -- владельца по накопленной
+# статистике (см. PROGRESS.md).
+
+LS_EXTREME_HIGH = 1.5   # тот же порог, что bot._analyze_whale_signal() live
+LS_EXTREME_LOW = 0.7    # тот же порог, что bot._analyze_whale_signal() live
+
+
+def compute_ls_ratio_contrarian_verdict(ls: float) -> dict:
+    """Чистая функция (без сети/файлов) -- ЗЕРКАЛЬНАЯ трактовка ls ПРОТИВ
+    толпы, те же пороги 1.5/0.7, что live-тренд-версия в
+    bot._analyze_whale_signal(), но противоположный вывод о направлении:
+    ls>1.5 (толпа перекошена в лонг) -> контрарно SHORT (риск лонг-сквиза),
+    ls<0.7 (толпа перекошена в шорт) -> контрарно LONG (риск шорт-сквиза).
+    В нейтральной зоне (0.7-1.5) обе трактовки совпадают -- NEUTRAL, там
+    расхождения по конструкции быть не может, честно не считаем это A/B-
+    случаем (см. `is_extreme` в возврате)."""
+    is_extreme = ls > LS_EXTREME_HIGH or ls < LS_EXTREME_LOW
+    if ls > LS_EXTREME_HIGH:
+        trend_direction, contrarian_direction = "LONG", "SHORT"
+    elif ls < LS_EXTREME_LOW:
+        trend_direction, contrarian_direction = "SHORT", "LONG"
+    else:
+        trend_direction = contrarian_direction = "NEUTRAL"
+    return {
+        "ls": ls, "is_extreme": is_extreme,
+        "trend_direction": trend_direction,
+        "contrarian_direction": contrarian_direction,
+        "diverges": is_extreme and trend_direction != contrarian_direction,
+    }
+
+
+def _build_ls_contrarian_shadow_record(symbol: str, ls: float, funding: float,
+                                         live_direction: str, live_score_100: int) -> dict:
+    """`live_direction`/`live_score_100` -- фактический БОЕВОЙ вывод Whale
+    Radar на этот же сигнал (`w["direction"]`/`w["score_100"]` из
+    `bot._analyze_whale_signal()`), передаётся как есть, эта запись его не
+    меняет и не влияет на него -- только фиксирует рядом для сравнения."""
+    verdict = compute_ls_ratio_contrarian_verdict(ls)
+    return {
+        "ts": time.time(),
+        "type": "ls_contrarian_shadow",
+        "symbol": symbol,
+        "ls": ls,
+        "funding": funding,
+        "is_extreme": verdict["is_extreme"],
+        "trend_direction": verdict["trend_direction"],
+        "contrarian_direction": verdict["contrarian_direction"],
+        "diverges": verdict["diverges"],
+        "live_direction": live_direction,
+        "live_score_100": live_score_100,
+    }
+
+
+async def log_ls_contrarian_shadow_async(symbol: str, ls: float, funding: float,
+                                           live_direction: str, live_score_100: int) -> bool:
+    """Вызывается из bot.whale_monitor() ПОСЛЕ того, как боевой алерт уже
+    отправлен (или решено не отправлять) -- best-effort, копит A/B-
+    статистику, не влияет ни на что боевое. Пишет запись ТОЛЬКО для
+    is_extreme=true случаев (ls>1.5 или ls<0.7) -- нейтральная зона не
+    несёт информации для A/B (обе трактовки совпадают по конструкции), не
+    засоряем журнал записями без сигнала."""
+    try:
+        record = _build_ls_contrarian_shadow_record(symbol, ls, funding, live_direction, live_score_100)
+    except Exception as e:
+        log.error(f"shadow_engine.log_ls_contrarian_shadow_async: build failed for {symbol}: {e}")
+        return False
+    if not record["is_extreme"]:
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        log.error(f"shadow_engine: GitHub sync failed for ls_contrarian_shadow ({symbol}): {e}")
+    return True
+
+
+def ls_contrarian_readiness_summary(records: list = None, threshold: int = 100) -> dict:
+    """Готовность контура ls_contrarian_shadow к решению владельца -- тот
+    же паттерн n/threshold, что `contour_readiness_summary()` (Н4).
+    Считает ТОЛЬКО diverges=true записи (случаи, где трактовки реально
+    разошлись) -- это и есть материал для решения, не общее число
+    is_extreme (та уже гарантированно совпадает с diverges при бинарном
+    LONG/SHORT, но явная фильтрация честнее, чем полагаться на побочный
+    факт конструкции)."""
+    if records is None:
+        records = get_local_records()
+    diverging = [r for r in records if r.get("type") == "ls_contrarian_shadow" and r.get("diverges")]
+    n = len(diverging)
+    return {"n": n, "threshold": threshold, "ready": n >= threshold,
+            "remaining": max(0, threshold - n)}

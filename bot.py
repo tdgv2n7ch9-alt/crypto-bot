@@ -6193,6 +6193,18 @@ async def whale_monitor(bot: Bot):
                                        fd.get("ch24h", 0), fd.get("ch7d", 0), fd.get("rank"), fd.get("vol", 0))
             if not w: continue
 
+            # ПАКЕТ 19, П4 (владелец): L/S ratio shadow A/B -- "за тренд"
+            # (боевая трактовка Whale Radar, w["direction"] выше) vs
+            # "контр" (гипотеза владельца: экстремальный перекос толпы --
+            # риск сквиза, не подтверждение). Best-effort, НЕ влияет на
+            # боевой алерт (уже посчитан в `w` строкой выше, эта запись
+            # только копит статистику для решения владельца по цифрам).
+            try:
+                await shadow_engine.log_ls_contrarian_shadow_async(
+                    sym, ls, funding, w["direction"], w["score_100"])
+            except Exception as e:
+                log.error(f"[WHALE] L/S contrarian shadow {sym}: {e}")
+
             # Мини-пакет (владелец, 2026-07-13, "rug-строка во ВСЕ алерты"):
             # Whale Radar -- score >= 40 добавляет "🛑 RUG-RADAR: ..." строку
             # (тот же общий хелпер, что watchlist/Памп-радар/Supertrend).
