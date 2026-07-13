@@ -30,3 +30,5 @@ backtest/_download_stdout.log
 data/whale/
 # Level Watch (Этап 4 АПГРЕЙД 11.07) -- тот же принцип, что data/whale/ выше.
 data/level_watch/
+# EVENT-RADAR М2 (Пакет 13) -- локальный dedup-файл, не тренировочные данные, эфемерен.
+data/event_radar/

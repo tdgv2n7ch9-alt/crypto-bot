@@ -125,6 +125,7 @@ import chart_patterns
 import rug_radar
 import etherscan_whale
 import derivatives_extra
+import event_radar
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -5177,6 +5178,28 @@ async def whale_monitor(bot: Bot):
 
     if alerts_sent:
         log.info(f"[WHALE]  {alerts_sent} алертов отправлено")
+
+
+async def event_radar_monitor(bot: Bot):
+    """EVENT-RADAR М2 (Пакет 13) -- листинги/делистинги, см. event_radar.py.
+    Опрашивает Bybit+Binance announcement-каналы, шлёт владельцу алерт на любой
+    делистинг + на листинг монеты из WATCHLIST_ZONES. Best-effort: ошибка
+    источника внутри event_radar.py уже не бросается наружу (fail-soft fetch_*),
+    здесь ловим только неожиданное (например, сбой самой отправки в Telegram)."""
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    try:
+        alerts = event_radar.poll_and_get_alerts(watch_symbols=set(WATCHLIST_ZONES.keys()))
+    except Exception as e:
+        log.error(f"[EVENT-RADAR] poll failed: {e}")
+        return
+    for text in alerts:
+        try:
+            await bot.send_message(owner_id, text, disable_web_page_preview=True)
+            await asyncio.sleep(1)
+        except Exception as e:
+            log.error(f"[EVENT-RADAR] send owner: {e}")
+    if alerts:
+        log.info(f"[EVENT-RADAR] {len(alerts)} алертов отправлено")
 
 
 AUTO_SCAN_CAP = 30  # макс. кандидатов на направление в прескрине -- см. докстринг send_scheduled
@@ -11300,6 +11323,7 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["send_scheduled"] = 30 * 60
     _job_expected_interval_sec["check_alerts"] = 5 * 60
     _job_expected_interval_sec["whale_monitor"] = 15 * 60
+    _job_expected_interval_sec["event_radar_monitor"] = 15 * 60
     _job_expected_interval_sec["signal_loop"] = signal_loop.STAGE1_INTERVAL_MIN * 60
     _job_expected_interval_sec["exit_tracker"] = signal_loop.EXIT_TRACKER_INTERVAL_MIN * 60
 
@@ -11318,6 +11342,14 @@ async def _start_pump_detector(app):
     )
     scheduler.add_job(
         _heartbeat_wrapper("whale_monitor", whale_monitor),
+        "interval",
+        minutes=15,
+        args=[app.bot],
+        next_run_time=datetime.now(TZ)
+    )
+    # EVENT-RADAR М2 (Пакет 13) -- листинги/делистинги, см. event_radar.py.
+    scheduler.add_job(
+        _heartbeat_wrapper("event_radar_monitor", event_radar_monitor),
         "interval",
         minutes=15,
         args=[app.bot],
