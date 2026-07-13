@@ -49,6 +49,14 @@ Railway-файловой системы, что у whale_radar.py -- при пе
 критично для редких событий этого типа). НЕ GitHub-синк -- это не тренировочные
 данные (в отличие от shadow_signals.json), а просто защита от повторного алерта на
 одно и то же объявление каждый цикл поллинга.
+
+Персистентность для EVENT-DIGEST (Пакет 13 М5): data/event_radar/events-YYYY-MM-DD.jsonl
+-- КАЖДОЕ новое событие (не только заалерченное -- листинги не-watch монет тоже
+пишутся, чтобы утренняя сводка честно показывала полную картину ночи, не только
+то, что дошло до владельца алертом), ротация по UTC-дате, тот же паттерн, что
+`whale_radar.EVENTS_DIR`. Та же честная оговорка про эфемерность Railway FS --
+цель этого лога сводка за 12-24ч, не история на годы, обнуление при передеплое
+не критично.
 """
 
 import json
@@ -71,6 +79,7 @@ BINANCE_CATALOG_DELISTING = 161
 
 SEEN_IDS_PATH = "data/event_radar/seen_ids.json"
 MAX_SEEN_IDS = 2000  # плоский список -- старые записи за пределами разумного окна поллинга не нужны
+EVENTS_DIR = "data/event_radar"
 
 _QUOTE_SUFFIXES = ("USDT", "USDC", "FDUSD", "TUSD", "BUSD", "BTC", "ETH", "EUR", "TRY", "BRL")
 
@@ -242,12 +251,16 @@ def format_event_alert(event: dict) -> str:
 
 
 def poll_and_get_alerts(watch_symbols: set, limit: int = 20,
-                         seen_ids_path: str = SEEN_IDS_PATH) -> list:
+                         seen_ids_path: str = SEEN_IDS_PATH,
+                         events_dir: str = EVENTS_DIR) -> list:
     """Главная точка входа для планировщика: опрашивает источники, отфильтровывает
     уже виденные объявления, среди новых отбирает те, что нужно алертить (по
     should_alert), помечает ВСЕ новые (не только заалерченные) как виденные --
     чтобы не алертить листинг не-watch монеты в будущем, если она внезапно
-    попадёт в watch (объявление всё равно устареет к тому моменту). Возвращает
+    попадёт в watch (объявление всё равно устареет к тому моменту). Каждое новое
+    событие (заалерченное или нет) дополнительно пишется в events-*.jsonl для
+    EVENT-DIGEST (Пакет 13 М5) -- утренняя сводка должна честно показывать
+    ВСЮ картину ночи, не только то, что дошло до владельца алертом. Возвращает
     список готовых текстов алертов (format_event_alert)."""
     events = fetch_all_events(limit=limit)
     seen = _load_seen_ids(seen_ids_path)
@@ -258,7 +271,89 @@ def poll_and_get_alerts(watch_symbols: set, limit: int = 20,
     alerts = []
     for e in new_events:
         seen.add(e["id"])
+        append_event_log(e, events_dir=events_dir)
         if should_alert(e, watch_symbols):
             alerts.append(format_event_alert(e))
     _save_seen_ids(seen, seen_ids_path)
     return alerts
+
+
+# ── Персистентность для EVENT-DIGEST (Пакет 13 М5) ──────────────────────────
+
+def append_event_log(event: dict, events_dir: str = EVENTS_DIR) -> None:
+    """Дописывает одно событие в текущий (по UTC-дате) events-*.jsonl. Best-effort
+    (тот же паттерн, что whale_radar.append_event) -- ошибка записи лога не должна
+    ронять поллинг-цикл."""
+    try:
+        os.makedirs(events_dir, exist_ok=True)
+        import datetime
+        dt = datetime.datetime.now(datetime.timezone.utc)
+        path = os.path.join(events_dir, f"events-{dt.strftime('%Y-%m-%d')}.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception as e:
+        log.error(f"event_radar: append_event_log failed ({type(e).__name__}: {e})")
+
+
+def read_recent_events(hours: float = 12.0, events_dir: str = EVENTS_DIR, now: float = None) -> list:
+    """Читает события за последние `hours` часов из events-*.jsonl (сегодняшний +
+    вчерашний файл -- достаточно для окна до 24ч с учётом ротации по UTC-дате).
+    Best-effort: отсутствующие/повреждённые файлы/строки тихо пропускаются."""
+    import datetime
+    now = now if now is not None else time.time()
+    cutoff = now - hours * 3600
+    out = []
+    now_dt = datetime.datetime.fromtimestamp(now, tz=datetime.timezone.utc)
+    for delta_days in (0, 1):
+        dt = now_dt - datetime.timedelta(days=delta_days)
+        path = os.path.join(events_dir, f"events-{dt.strftime('%Y-%m-%d')}.jsonl")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if e.get("ts", 0) >= cutoff:
+                        out.append(e)
+        except FileNotFoundError:
+            continue
+        except Exception as ex:
+            log.error(f"event_radar: read_recent_events failed for {path} ({type(ex).__name__}: {ex})")
+    return out
+
+
+def format_event_digest_section(hours: float = 12.0, events_dir: str = None,
+                                 now: float = None) -> str:
+    """EVENT-DIGEST (Пакет 13 М5) -- секция для утренней сводки/Метрики дня:
+    сколько листингов/делистингов за окно, топ по exchange, до 5 самых свежих
+    заголовков. Пустой список событий -- честное "событий не было", не пропуск
+    секции (владелец должен видеть, что радар РАБОТАЕТ, а не молчит по неизвестной
+    причине -- та же логика, что shadow-health счётчик).
+
+    `events_dir=None` -- разрешается в EVENTS_DIR ДИНАМИЧЕСКИ (не через значение
+    по умолчанию в сигнатуре, которое зафиксировалось бы при импорте модуля) --
+    чтобы тесты могли переопределить `event_radar.EVENTS_DIR` через monkeypatch,
+    тот же паттерн, что `daily_metrics.whale_radar.EVENTS_DIR` в остальных секциях
+    дайджеста."""
+    if events_dir is None:
+        events_dir = EVENTS_DIR
+    events = read_recent_events(hours=hours, events_dir=events_dir, now=now)
+    lines = [f"\n*EVENT-RADAR (листинги/делистинги, {hours:.0f}ч):*"]
+    if not events:
+        lines.append("  Событий не было.")
+        return "\n".join(lines)
+
+    listings = [e for e in events if e.get("kind") == "listing"]
+    delistings = [e for e in events if e.get("kind") == "delisting"]
+    lines.append(f"  Листингов: {len(listings)}  ·  Делистингов: {len(delistings)}")
+
+    recent = sorted(events, key=lambda e: e.get("ts", 0), reverse=True)[:5]
+    for e in recent:
+        icon = "🔴" if e.get("kind") == "delisting" else "🟢"
+        symbols_str = ", ".join(e.get("symbols", [])) or "н/д"
+        lines.append(f"  {icon} {e.get('exchange', '?').upper()} {symbols_str} — {e.get('title', '')[:60]}")
+    return "\n".join(lines)

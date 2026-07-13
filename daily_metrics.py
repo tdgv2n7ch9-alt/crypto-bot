@@ -25,6 +25,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+import event_radar
 import level_watch
 import security_log
 import signal_journal
@@ -216,6 +217,10 @@ def build_daily_digest(bot_module, now_ts: float = None) -> str:
         if td:
             mark = "✅ promoted" if td["promoted_live"] else "теневой"
             lines.append(f"  Топ-1 расхождение ({mark}): {td['symbol']} {td['direction']} — {td['detail']}")
+
+    # EVENT-RADAR М5 (Пакет 13) -- листинги/делистинги за сутки, то же окно
+    # DIGEST_WINDOW_SEC, что остальная «Метрика дня».
+    lines.append(event_radar.format_event_digest_section(hours=DIGEST_WINDOW_SEC / 3600, now=now))
 
     lines += ["", "🐋 *Whale-события, топ-3:*"]
     if not whales:

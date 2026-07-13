@@ -73,6 +73,7 @@ def test_build_morning_digest_no_crash_on_empty_data(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "УТРЕННЯЯ СВОДКА" in text
     assert "Итог ночи" in text
@@ -88,6 +89,7 @@ def test_build_morning_digest_uses_12h_window_not_24h(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
     assert "Закрыто: 0" in text
 
@@ -97,6 +99,7 @@ def test_build_morning_digest_includes_deploy_section(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "Деплой" in text
     assert "актуален" in text
@@ -109,6 +112,7 @@ def test_build_morning_digest_shadow_write_na_when_never_written(monkeypatch, tm
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     monkeypatch.setattr(morning_metrics.shadow_engine, "get_last_send_scheduled_write_ts", lambda: None)
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "Shadow-поток" in text
@@ -121,6 +125,7 @@ def test_build_morning_digest_shadow_write_fresh_no_warning(monkeypatch, tmp_pat
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     monkeypatch.setattr(morning_metrics.shadow_engine, "get_last_send_scheduled_write_ts",
                          lambda: now - 1800)  # 30 минут назад
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
@@ -134,6 +139,7 @@ def test_build_morning_digest_shadow_write_stale_shows_warning(monkeypatch, tmp_
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     monkeypatch.setattr(morning_metrics.shadow_engine, "get_last_send_scheduled_write_ts",
                          lambda: now - 5 * 3600)  # 5 часов назад -- за порогом 2ч
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
@@ -159,6 +165,7 @@ def test_build_morning_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=now)
     assert "Топ-1 расхождение" in text
     assert "BEAT" in text
@@ -210,6 +217,7 @@ def test_build_morning_digest_includes_night_package_section(monkeypatch, tmp_pa
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "Ночной пакет" in text
     assert "Статус М1: ГОТОВ." in text
@@ -221,5 +229,6 @@ def test_build_morning_digest_night_package_na_when_no_progress_file(monkeypatch
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(morning_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "н/д" in text

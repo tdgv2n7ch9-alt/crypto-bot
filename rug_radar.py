@@ -169,6 +169,31 @@ def detect_age_and_narrow_listing(age_days, age_is_approx: bool, num_exchanges) 
     return {"available": age_days is not None or num_exchanges is not None, "points": points, "reason": reason}
 
 
+def compute_age_days(cg_detail: dict) -> dict:
+    """Возраст токена по CoinGecko /coins/{id}: genesis_date, если есть, иначе
+    atl_date как ПРИБЛИЖЁННЫЙ proxy (см. докстринг модуля -- честно не
+    гарантированное поле, approx помечается отдельно). Вынесено из
+    compute_rug_risk() в Пакете 13 (EVENT-RADAR М4), чтобы new_coin_scan.py мог
+    переиспользовать тот же метод без дублирования логики.
+    Возвращает {"age_days": int|None, "age_is_approx": bool}."""
+    if not cg_detail:
+        return {"age_days": None, "age_is_approx": False}
+    md = cg_detail.get("market_data", {}) or {}
+    genesis = cg_detail.get("genesis_date")
+    atl_date = (md.get("atl_date") or {}).get("usd")
+    import datetime
+    ref_date = genesis or (atl_date[:10] if atl_date else None)
+    age_is_approx = genesis is None and atl_date is not None
+    age_days = None
+    if ref_date:
+        try:
+            d = datetime.date.fromisoformat(ref_date)
+            age_days = (datetime.date.today() - d).days
+        except (ValueError, TypeError):
+            age_days = None
+    return {"age_days": age_days, "age_is_approx": age_is_approx}
+
+
 def compute_rug_risk(symbol: str, coin: dict, cg_detail: dict = None,
                       holders_data=None, transfer_data=None) -> dict:
     """Главная точка входа. `coin` -- та же структура, что get_all_coins()[i]
@@ -184,23 +209,13 @@ def compute_rug_risk(symbol: str, coin: dict, cg_detail: dict = None,
     pct_30d = q.get("percent_change_30d")
 
     fdv = None
-    age_days = None
-    age_is_approx = False
     num_exchanges = None
+    age = compute_age_days(cg_detail)
+    age_days = age["age_days"]
+    age_is_approx = age["age_is_approx"]
     if cg_detail:
         md = cg_detail.get("market_data", {}) or {}
         fdv = (md.get("fully_diluted_valuation") or {}).get("usd")
-        genesis = cg_detail.get("genesis_date")
-        atl_date = (md.get("atl_date") or {}).get("usd")
-        import datetime
-        ref_date = genesis or (atl_date[:10] if atl_date else None)
-        age_is_approx = genesis is None and atl_date is not None
-        if ref_date:
-            try:
-                d = datetime.date.fromisoformat(ref_date)
-                age_days = (datetime.date.today() - d).days
-            except (ValueError, TypeError):
-                age_days = None
         tickers = cg_detail.get("tickers")
         if tickers is not None:
             num_exchanges = len({t.get("market", {}).get("name") for t in tickers if t.get("market")})

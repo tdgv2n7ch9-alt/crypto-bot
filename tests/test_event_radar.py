@@ -4,6 +4,7 @@ pytest для event_radar.py (Пакет 13, EVENT-RADAR М2 -- листинги
 чистые функции.
 """
 import json
+import time
 
 import pytest
 
@@ -186,16 +187,90 @@ def test_poll_and_get_alerts_end_to_end(monkeypatch, tmp_path):
     ]
     monkeypatch.setattr(er, "fetch_all_events", lambda limit=20: events)
     seen_path = str(tmp_path / "seen.json")
+    events_dir = str(tmp_path / "events")
 
-    alerts = er.poll_and_get_alerts(watch_symbols={"LINK"}, seen_ids_path=seen_path)
+    alerts = er.poll_and_get_alerts(watch_symbols={"LINK"}, seen_ids_path=seen_path, events_dir=events_dir)
     assert len(alerts) == 2  # delisting always + listing(LINK), NOT listing(NOTWATCHED)
 
     # second poll with same events -- already seen, no alerts
-    alerts2 = er.poll_and_get_alerts(watch_symbols={"LINK"}, seen_ids_path=seen_path)
+    alerts2 = er.poll_and_get_alerts(watch_symbols={"LINK"}, seen_ids_path=seen_path, events_dir=events_dir)
     assert alerts2 == []
 
 
 def test_poll_and_get_alerts_no_events_returns_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(er, "fetch_all_events", lambda limit=20: [])
-    alerts = er.poll_and_get_alerts(watch_symbols=set(), seen_ids_path=str(tmp_path / "seen.json"))
+    alerts = er.poll_and_get_alerts(watch_symbols=set(), seen_ids_path=str(tmp_path / "seen.json"),
+                                     events_dir=str(tmp_path / "events"))
     assert alerts == []
+
+
+# --- events log (EVENT-DIGEST, Пакет 13 М5) ---
+
+def test_append_event_log_and_read_recent_events(tmp_path):
+    # append_event_log всегда пишет в файл ПО РЕАЛЬНОЙ текущей UTC-дате (ротация
+    # завязана на системные часы, не на event["ts"]) -- поэтому now/ts здесь должны
+    # быть реалистичными (time.time()-based), иначе имя файла записи и имя файла
+    # чтения разъедутся (разные календарные даты).
+    events_dir = str(tmp_path / "events")
+    now = time.time()
+    e = _event(kind="delisting", eid="d1", symbols=["FOO"])
+    e["ts"] = now
+    er.append_event_log(e, events_dir=events_dir)
+    recent = er.read_recent_events(hours=12, events_dir=events_dir, now=now + 3600)
+    assert len(recent) == 1
+    assert recent[0]["id"] == "d1"
+
+
+def test_read_recent_events_excludes_older_than_window(tmp_path):
+    events_dir = str(tmp_path / "events")
+    now = time.time()
+    old = _event(eid="old", symbols=[])
+    old["ts"] = now
+    er.append_event_log(old, events_dir=events_dir)
+    recent = er.read_recent_events(hours=1, events_dir=events_dir, now=now + 3 * 3600)
+    assert recent == []
+
+
+def test_read_recent_events_missing_dir_returns_empty(tmp_path):
+    assert er.read_recent_events(hours=12, events_dir=str(tmp_path / "nope")) == []
+
+
+def test_poll_and_get_alerts_writes_events_log(monkeypatch, tmp_path):
+    now = time.time()
+    events = [{**_event(kind="delisting", eid="d1", symbols=["FOO"]), "ts": now}]
+    monkeypatch.setattr(er, "fetch_all_events", lambda limit=20: events)
+    events_dir = str(tmp_path / "events")
+    er.poll_and_get_alerts(watch_symbols=set(), seen_ids_path=str(tmp_path / "seen.json"),
+                            events_dir=events_dir)
+    recent = er.read_recent_events(hours=24, events_dir=events_dir, now=now + 10)
+    assert len(recent) == 1
+
+
+def test_format_event_digest_section_no_events(tmp_path):
+    text = er.format_event_digest_section(hours=12, events_dir=str(tmp_path / "empty"))
+    assert "EVENT-RADAR" in text
+    assert "не было" in text
+
+
+def test_format_event_digest_section_shows_counts(tmp_path):
+    events_dir = str(tmp_path / "events")
+    now = time.time()
+    er.append_event_log({**_event(kind="listing", eid="l1", symbols=["LINK"]), "ts": now}, events_dir=events_dir)
+    er.append_event_log({**_event(kind="delisting", eid="d1", symbols=["FOO"]), "ts": now}, events_dir=events_dir)
+    text = er.format_event_digest_section(hours=12, events_dir=events_dir, now=now + 10)
+    assert "Листингов: 1" in text
+    assert "Делистингов: 1" in text
+    assert "LINK" in text or "FOO" in text
+
+
+def test_format_event_digest_section_events_dir_none_uses_module_global(monkeypatch, tmp_path):
+    """events_dir=None должен резолвиться в event_radar.EVENTS_DIR ДИНАМИЧЕСКИ --
+    иначе monkeypatch на EVENTS_DIR (тот же паттерн, что у whale_radar/level_watch
+    в остальных секциях дайджеста) не подействует, т.к. значение по умолчанию в
+    сигнатуре фиксируется при импорте модуля, а не при каждом вызове."""
+    events_dir = str(tmp_path / "events")
+    monkeypatch.setattr(er, "EVENTS_DIR", events_dir)
+    now = time.time()
+    er.append_event_log({**_event(kind="listing", eid="l1", symbols=["LINK"]), "ts": now}, events_dir=events_dir)
+    text = er.format_event_digest_section(hours=12, now=now + 10)
+    assert "Листингов: 1" in text

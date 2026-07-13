@@ -244,6 +244,7 @@ def test_build_daily_digest_no_crash_on_empty_data(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     # security_log._events -- глобальное состояние процесса, могло быть засеяно другими
     # тестами (access_control.enforce() пишет в него по-настоящему) -- изолируем явно.
     monkeypatch.setattr(daily_metrics.security_log, "_events", [])
@@ -260,6 +261,7 @@ def test_build_daily_digest_shows_security_events(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     now = 1_000_000.0
     monkeypatch.setattr(daily_metrics.security_log, "_events", [
         {"ts": now - 10, "type": "denied", "chat_id": 1, "detail": ""},
@@ -278,6 +280,7 @@ def test_build_daily_digest_shows_down_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=1_000_000.0)
     assert "yahoo_finance: down" in text
 
@@ -300,6 +303,7 @@ def test_build_daily_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(shadow_file))
     monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=now)
     assert "Топ причин отказа" in text
     assert "rocket_or_grade" in text

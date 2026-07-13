@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import daily_metrics
+import event_radar
 import shadow_engine
 import signal_journal
 
@@ -133,6 +134,10 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
         hours_ago = (now - last_shadow_ts) / 3600
         warn = " ⚠️ >2ч без записи" if hours_ago > 2 else ""
         lines.append(f"  Последняя запись: {hours_ago:.1f}ч назад{warn}")
+
+    # EVENT-RADAR М5 (Пакет 13) -- листинги/делистинги за ночь (12ч окно, тот же
+    # период, что остальная утренняя сводка).
+    lines.append(event_radar.format_event_digest_section(hours=12.0, now=now))
 
     lines += ["", "🐋 *Whale-события, топ-3:*"]
     if not whales:

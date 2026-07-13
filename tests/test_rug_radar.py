@@ -154,6 +154,35 @@ def test_age_listing_no_trigger_wide_listing():
     assert r["points"] == 0
 
 
+# --- compute_age_days (вынесено в Пакете 13 EVENT-RADAR М4 для new_coin_scan.py) ---
+
+def test_compute_age_days_none_without_cg_detail():
+    r = rr.compute_age_days(None)
+    assert r == {"age_days": None, "age_is_approx": False}
+
+
+def test_compute_age_days_uses_genesis_date():
+    import datetime
+    genesis = (datetime.date.today() - datetime.timedelta(days=100)).isoformat()
+    r = rr.compute_age_days({"genesis_date": genesis, "market_data": {}})
+    assert r["age_days"] == 100
+    assert r["age_is_approx"] is False
+
+
+def test_compute_age_days_falls_back_to_atl_date_as_approx():
+    import datetime
+    atl = (datetime.date.today() - datetime.timedelta(days=60)).isoformat() + "T00:00:00.000Z"
+    r = rr.compute_age_days({"genesis_date": None,
+                              "market_data": {"atl_date": {"usd": atl}}})
+    assert r["age_days"] == 60
+    assert r["age_is_approx"] is True
+
+
+def test_compute_age_days_no_date_available():
+    r = rr.compute_age_days({"genesis_date": None, "market_data": {}})
+    assert r == {"age_days": None, "age_is_approx": False}
+
+
 # --- compute_rug_risk / format_rug_risk_line (synthetic LAB-like scenario) ---
 
 def test_compute_rug_risk_lab_like_scenario_partial_data():

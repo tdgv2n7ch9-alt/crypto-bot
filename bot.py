@@ -126,6 +126,7 @@ import rug_radar
 import etherscan_whale
 import derivatives_extra
 import event_radar
+import new_coin_scan
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
@@ -4787,12 +4788,34 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                        "REVERSAL_CONFIRMED": "\U0001f53b", "PROMOTED": "✅"}
             lines_pr = ["⚡ *ПАМП-РАДАР*", f"\U0001f550 _{now_utc3()}_", SEP, ""]
 
+            # EVENT-RADAR М4 (Пакет 13) -- флаг "молодая монета" на активных наблюдениях
+            # Памп-радара. Список обычно небольшой (единицы-десятки символов), поэтому
+            # доп. CoinGecko-вызов на символ приемлем; best-effort, ошибка на одном
+            # символе не должна ронять карточку целиком.
+            def _young_flag_pr(symbol: str) -> str:
+                try:
+                    cg_detail = _cg_get(
+                        f"https://api.coingecko.com/api/v3/coins/{_cg_slug(symbol)}",
+                        params={"localization": "false", "tickers": "false",
+                                "community_data": "false", "developer_data": "false"},
+                        timeout=6) or {}
+                    age = rug_radar.compute_age_days(cg_detail)
+                    flag = new_coin_scan.format_young_coin_flag(
+                        age["age_days"], age["age_is_approx"], cg_detail=cg_detail)
+                    return f"  {flag}" if flag else ""
+                except Exception as e:
+                    log.info(f"[EVENT-RADAR] young-flag pump_radar {symbol}: {e}")
+                    return ""
+
             lines_pr.append("🔴 *Пампы (сценарий шорт):*\n")
             if st["pumps_active"]:
                 for a in st["pumps_active"]:
                     e = stage_e.get(a["stage"], "•")
                     lines_pr.append(f"{e} *{a['symbol']}* — {a['stage']}  "
                                      f"({a['elapsed_min']:.0f} мин, {a['pct_from_level']:+.1f}% от пика)")
+                    yf = _young_flag_pr(a["symbol"])
+                    if yf:
+                        lines_pr.append(yf)
             else:
                 lines_pr.append("Активных наблюдений нет")
             lines_pr.append("")
@@ -4803,6 +4826,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     e = stage_e.get(a["stage"], "•")
                     lines_pr.append(f"{e} *{a['symbol']}* — {a['stage']}  "
                                      f"({a['elapsed_min']:.0f} мин, {a['pct_from_level']:+.1f}% от дна)")
+                    yf = _young_flag_pr(a["symbol"])
+                    if yf:
+                        lines_pr.append(yf)
             else:
                 lines_pr.append("Активных наблюдений нет")
             lines_pr.append("")
@@ -9465,6 +9491,7 @@ async def _cmd_x100_scanner_body(update, ctx):
                     # информационная строка ТОЛЬКО, score>=40 -- НЕ подана в c["score"]/
                     # ранжирование/фильтр выше (уже полностью решены к этой строке).
                     rug_line = ""
+                    rug_cg_detail = {}
                     try:
                         rug_cg_detail = _cg_get(
                             f"https://api.coingecko.com/api/v3/coins/{c['slug']}",
@@ -9482,6 +9509,16 @@ async def _cmd_x100_scanner_body(update, ctx):
                         rug_line = rug_radar.format_rug_risk_line(rug_risk)
                     except Exception as e:
                         log.info(f"[RUG-RADAR] x100 {c['sym']}: {e}")
+                    # EVENT-RADAR М4 (Пакет 13) -- флаг "молодая монета" по тому же
+                    # rug_cg_detail, что уже получен для RUG-RADAR выше -- без
+                    # дополнительного сетевого вызова (см. new_coin_scan.py).
+                    young_line = ""
+                    try:
+                        age = rug_radar.compute_age_days(rug_cg_detail)
+                        young_line = new_coin_scan.format_young_coin_flag(
+                            age["age_days"], age["age_is_approx"], cg_detail=rug_cg_detail)
+                    except Exception as e:
+                        log.info(f"[EVENT-RADAR] young-flag x100 {c['sym']}: {e}")
                     shown_x100 += 1
                     card_blocks += [
                         SEP,
@@ -9492,6 +9529,7 @@ async def _cmd_x100_scanner_body(update, ctx):
                         f"⚡ {' · '.join(c['reasons'])}",
                         f"🎯 Скор: {c['score']}/12",
                         *([rug_line] if rug_line else []),
+                        *([young_line] if young_line else []),
                         _journal_footer_line("x100"),
                     ]
             _x100_skip_note = f", {skipped_x100} skip без live-цены/EMA" if skipped_x100 else ""
@@ -11316,7 +11354,16 @@ async def _start_pump_detector(app):
     # watchdog просто не активируется в этом процессе (не ретраит бесконечно).
     _deploy_check_boot_sha["sha"], _deploy_check_boot_sha["date"] = _fetch_main_head_sync()
 
-    scheduler = AsyncIOScheduler(timezone=TZ)
+    # misfire_grace_time по умолчанию у APScheduler -- 1с. Найдено живьём (Пакет 13,
+    # деплой event_radar_monitor 2026-07-13): check_alerts (Supertrend-скан ~728
+    # символов) синхронно блокирует единственный asyncio event loop на 1-2+ минуты
+    # каждые 5 мин, из-за чего 15-минутные джобы (whale_monitor, event_radar_monitor)
+    # систематически "missed by" на 1-22с при каждом срабатывании и пропускались --
+    # то есть whale_monitor, судя по всему, реально исполнялся НАМНОГО реже
+    # заявленных 15 мин это же время. 300с запаса покрывает наблюдаемую задержку
+    # с большим запасом, ничего не меняет в сигнальной логике -- чисто инфраструктурная
+    # надёжность планировщика.
+    scheduler = AsyncIOScheduler(timezone=TZ, job_defaults={"misfire_grace_time": 300})
 
     # Heartbeat-обёртки (ROADMAP П1) -- регистрируем в планировщике heartbeat_* вместо
     # голых функций, сами задачи и их решения не меняются (см. _heartbeat_wrapper).
