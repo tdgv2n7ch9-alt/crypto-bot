@@ -554,21 +554,71 @@ async def _start_watch(ctx: PumpContext, symbol: str, kind: str, price: float, z
     rug_risk = await _get_rug_risk(ctx, sym)
     rug_warn = bool(rug_risk and rug_risk.get("warn"))
 
-    if kind == "pump":
-        stage_title = "PUMP DETECTED 🚀"
-        extra = ["🎯 Сценарий: возможен шорт после разворота",
-                 "⏳ Наблюдаю за откатом до 30 минут..."]
-    else:
-        stage_title = "DUMP DETECTED 🔻"
-        if rug_warn:
-            extra = ["🛑 Отскок — НЕ торговать против навеса, см. rug-скор",
-                     "⏳ Наблюдаю за разворотом до 30 минут..."]
-        else:
-            extra = ["🎯 Сценарий: возможен лонг после отскока от дна",
-                     "⏳ Наблюдаю за разворотом до 30 минут..."]
+    # Пакет 18, п.4 (владелец, кейс KITE 20:59: матрица красная -- Цена↓ OI↑,
+    # "давление шортов" -- а сценарий всё равно предлагал "возможен лонг"):
+    # OI/funding считаются ЗДЕСЬ, ОДИН раз (bot._get_oi_change() мутирует
+    # историю на каждый вызов -- второй вызов внутри _compose_alert() увидел
+    # бы уже "погашенную" дельту, тот же баг, что был найден на карточке EVAA,
+    # см. докстринг _compose_alert). market_snapshot передаётся дальше, чтобы
+    # _compose_alert() не фетчил повторно.
+    funding = 0.0; oi_now = 0.0; oi_chg = 0.0
+    try:
+        funding = ctx.get_funding_pct(sym)
+        oi_now = ctx.get_oi_usd(sym)
+        oi_chg = ctx.get_oi_change(sym)
+    except Exception:
+        pass
+    kz = None
+    try:
+        kz = ctx.get_killzone_status()
+    except Exception:
+        pass
+    market_snapshot = {"funding": funding, "oi_now": oi_now, "oi_chg": oi_chg, "kz": kz}
 
-    text = await _compose_alert(ctx, symbol, watch, stage_title, extra, rug_risk=rug_risk)
+    extra = _scenario_lines(kind, oi_chg, rug_warn)
+    stage_title = "PUMP DETECTED 🚀" if kind == "pump" else "DUMP DETECTED 🔻"
+
+    text = await _compose_alert(ctx, symbol, watch, stage_title, extra,
+                                 market_snapshot=market_snapshot, rug_risk=rug_risk)
     await _send_alert(ctx, symbol, text, watch, f"pump_sub_{sym}")
+
+
+def _scenario_lines(kind: str, oi_change_pct: float, rug_warn: bool) -> list:
+    """Пакет 18, п.4 (владелец, кейс KITE 20:59): текст сценария СОГЛАСОВАН с
+    OI-матрицей (ta_extra.classify_oi_matrix), а не выведен только из
+    kind (pump/dump), как было раньше -- отсюда и был баг: DUMP всегда писал
+    "возможен лонг", даже когда матрица показывала "Цена↓ OI↑" (новые
+    шорты, реальное давление -- разворот не подтверждён). Таблица владельца
+    (для DUMP, price_change_pct синтетически -1 -- на детекте абсолютная
+    величина ещё не нужна, важен только знак направления):
+      down_up   ("Цена↓ OI↑"): давление шортов, разворот не подтверждён — отскок не торговать
+      down_down ("Цена↓ OI↓"): выход из позиций, ждать признаков разворота
+      near_zero/no_data:       сценарий без OI-аргумента (текущий текст как есть)
+    Симметрично для PUMP (price_change_pct=+1, сценарий "возможен шорт после
+    разворота"): up_up (новые лонги, тренд силён) -- тем же принципом,
+    разворот не подтверждён, шорт не торговать; up_down (шорт-сквиз может
+    исчерпаться) согласуется с исходным сценарием разворота, текст не меняем.
+    rug_warn (только DUMP) имеет приоритет над OI-матрицей, как и раньше --
+    навес инсайдеров важнее технической картины."""
+    if kind == "dump":
+        if rug_warn:
+            return ["🛑 Отскок — НЕ торговать против навеса, см. rug-скор",
+                    "⏳ Наблюдаю за разворотом до 30 минут..."]
+        tag = ta_extra.classify_oi_matrix(oi_change_pct, -1.0)
+        if tag == "down_up":
+            return ["🎯 Сценарий: давление шортов, разворот не подтверждён — отскок не торговать",
+                    "⏳ Наблюдаю за разворотом до 30 минут..."]
+        if tag == "down_down":
+            return ["🎯 Сценарий: выход из позиций, ждать признаков разворота",
+                    "⏳ Наблюдаю за разворотом до 30 минут..."]
+        return ["🎯 Сценарий: возможен лонг после отскока от дна",
+                "⏳ Наблюдаю за разворотом до 30 минут..."]
+    tag = ta_extra.classify_oi_matrix(oi_change_pct, 1.0)
+    if tag == "up_up":
+        return ["🎯 Сценарий: новые лонги, тренд силён — разворот не подтверждён, шорт не торговать",
+                "⏳ Наблюдаю за откатом до 30 минут..."]
+    return ["🎯 Сценарий: возможен шорт после разворота",
+            "⏳ Наблюдаю за откатом до 30 минут..."]
 
 
 async def _notify_owner(ctx: PumpContext, text: str):

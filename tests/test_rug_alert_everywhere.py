@@ -71,7 +71,10 @@ class _FakeCtx:
         return 1e7
 
     def get_oi_change(self, sym):
-        return 0.5
+        # near-zero (< ta_extra.OI_MATRIX_NEAR_ZERO_PCT) -- эти тесты проверяют
+        # rug_warn override, не OI-матрицу (см. Пакет 18, п.4,
+        # tests/test_pump_oi_matrix_scenario.py -- там OI варьируется предметно).
+        return 0.0
 
     def get_killzone_status(self):
         return {"active": {"name": "NY Open", "quality": "A"}, "is_good": True, "next": None}
