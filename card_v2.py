@@ -99,9 +99,24 @@ def format_strength_block(score: int, checklist_items: list, missing_confirmatio
 
 # ── Блок 3: ЧТО ДЕЛАТЬ ────────────────────────────────────────────────────
 
+def default_price_fmt(v: float) -> str:
+    """Магнитуда-зависимое форматирование цены -- честная находка при сборке
+    приёмочного мокапа Меню v2 (2026-07-13): фиксированный `.0f` округлял
+    микрокапы вида $0.0120 (обычная цена x100-кандидата) до "0". Пороги --
+    тот же принцип, что общепринятое отображение цены крипто-активов
+    (BTC-масштаб -- целые, альты -- 2 знака, микрокапы -- 4-6 знаков)."""
+    if v >= 1000:
+        return f"{v:,.0f}"
+    if v >= 1:
+        return f"{v:,.2f}"
+    if v >= 0.01:
+        return f"{v:.4f}"
+    return f"{v:.6f}"
+
+
 def format_what_to_do(direction: str, entries: list, sl: float, sl_risk_pct: float,
                        tps: list, deposit_1000: dict, invalidation_note: str,
-                       valid_until_note: str, price_fmt=lambda v: f"{v:,.0f}") -> dict:
+                       valid_until_note: str, price_fmt=default_price_fmt) -> dict:
     """entries: [(price, pct), ...] по спецификации 50/30/20 (тот же принцип
     DCA-разбивки, что уже используется в x100-карточке, entry1/2/3).
     tps: [{"price": float, "sell_pct": int, "stop_note": str}, ...] -- stop_note

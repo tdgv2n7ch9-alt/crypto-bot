@@ -62,6 +62,26 @@ def test_verdict_boundary_39_is_observe_40_is_watch_close():
     assert cv.compute_verdict(40)["tier"] == cv.VERDICT_WATCH_CLOSE
 
 
+# --- default_price_fmt (найдено при сборке приёмочного мокапа: фиксированный
+# .0f округлял микрокапы вида $0.0120 до "0" -- обычная цена x100-кандидата) ---
+
+def test_default_price_fmt_btc_scale_no_decimals():
+    assert cv.default_price_fmt(60000.0) == "60,000"
+
+
+def test_default_price_fmt_altcoin_scale_two_decimals():
+    assert cv.default_price_fmt(15.20) == "15.20"
+
+
+def test_default_price_fmt_microcap_four_decimals_not_zero():
+    assert cv.default_price_fmt(0.0120) == "0.0120"
+    assert cv.default_price_fmt(0.0120) != "0"
+
+
+def test_default_price_fmt_sub_cent_six_decimals():
+    assert cv.default_price_fmt(0.000034) == "0.000034"
+
+
 # --- Блок 3: ЧТО ДЕЛАТЬ ---
 
 def test_format_what_to_do_returns_separated_signal_and_prose_lines():
