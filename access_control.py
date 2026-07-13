@@ -21,6 +21,9 @@ COMMAND_ROLE_MAP -- ЧЕСТНО, первый черновик распреде
 это ПРЕДЛОЖЕНИЕ на пересмотр владельцем, не финальное решение -- см.
 PROGRESS.md запись Пакета SECURITY-HARDENING М1.
 """
+import base64
+import json
+import os
 import time
 
 import subscribers
@@ -131,6 +134,149 @@ async def _maybe_alert_owner_flood(context) -> None:
         print(f"access_control: flood alert failed: {e}")
 
 
+# --- Lockdown (Пакет SECURITY-HARDENING М7, владелец "да") -----------------------
+# /lockdown (OWNER) мгновенно замораживает ВСЕ хендлеры кроме владельца -- до
+# /unlock. Проверка в enforce() -- чисто in-memory (никакого сетевого вызова на
+# каждый апдейт, тот же принцип, что security_log.log_event()). Персистентность --
+# best-effort через GitHub Contents API (тот же паттерн, что shadow_engine.py/
+# subscribers.py/security_log.py), чтобы состояние lockdown пережило рестарт
+# контейнера (Railway-редеплой посреди инцидента). ЧЕСТНО: если на старте GitHub
+# недоступен/не настроен -- дефолт FALSE (разблокировано), не FALSE-safe в обратную
+# сторону -- см. RUNBOOK_SECURITY.md, при активном инциденте после любого рестарта
+# владелец должен проверить статус и при необходимости переиздать /lockdown.
+
+LOCKDOWN_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "lockdown_state.json")
+GITHUB_LOCKDOWN_PATH = "data/lockdown_state.json"
+
+_lockdown_active = False
+
+
+def is_locked_down() -> bool:
+    return _lockdown_active
+
+
+def _atomic_write_json(path: str, obj) -> bool:
+    tmp_path = f"{path}.tmp{os.getpid()}"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp_path, "w") as f:
+            json.dump(obj, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+        return True
+    except Exception as e:
+        print(f"access_control: lockdown local write failed ({e})")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        return False
+
+
+def _load_lockdown_local() -> bool:
+    if not os.path.exists(LOCKDOWN_STATE_FILE):
+        return False
+    try:
+        with open(LOCKDOWN_STATE_FILE) as f:
+            data = json.load(f)
+        return bool(data.get("active", False))
+    except Exception:
+        return False
+
+
+def _github_get_lockdown_sync():
+    """Возвращает (active, sha) при успехе (sha=None, если файла ещё нет -- тогда
+    active=False по определению), либо (None, None) при недоступности/ошибке --
+    вызывающий код в этом случае честно остаётся на локальном/дефолтном значении,
+    не пытается угадать."""
+    import signal_journal
+    import requests
+    if not signal_journal._github_configured():
+        return None, None
+    token_issue = signal_journal._validate_github_token()
+    if token_issue:
+        print(f"access_control: {token_issue}")
+        return None, None
+    try:
+        r = requests.get(f"{signal_journal._github_api_base()}/contents/{GITHUB_LOCKDOWN_PATH}",
+                          headers=signal_journal._github_headers(), timeout=15)
+        if r.status_code == 404:
+            return False, None
+        r.raise_for_status()
+        data = r.json()
+        content = base64.b64decode(data["content"]).decode()
+        payload = json.loads(content)
+        return bool(payload.get("active", False)), data["sha"]
+    except Exception as e:
+        detail = getattr(getattr(e, "response", None), "text", "")
+        print(f"access_control: lockdown GitHub GET failed ({e} {detail[:300]})")
+        return None, None
+
+
+def _github_put_lockdown_sync(active: bool, sha):
+    import signal_journal
+    import requests
+    if not signal_journal._github_configured():
+        return None
+    token_issue = signal_journal._validate_github_token()
+    if token_issue:
+        print(f"access_control: {token_issue}")
+        return None
+    try:
+        payload = {"active": active, "ts": time.time()}
+        body = {
+            "message": f"lockdown: {'ON' if active else 'OFF'}",
+            "content": base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode(),
+        }
+        if sha:
+            body["sha"] = sha
+        r = requests.put(f"{signal_journal._github_api_base()}/contents/{GITHUB_LOCKDOWN_PATH}",
+                          headers=signal_journal._github_headers(), json=body, timeout=20)
+        if r.status_code == 409:
+            return "conflict"
+        r.raise_for_status()
+        return r.json()["content"]["sha"]
+    except Exception as e:
+        detail = getattr(getattr(e, "response", None), "text", "")
+        print(f"access_control: lockdown GitHub PUT failed ({e} {detail[:300]})")
+        return None
+
+
+async def load_lockdown_state() -> None:
+    """Вызывается на старте бота (post_init) -- пытается восстановить lockdown-
+    состояние из GitHub (переживает рестарт контейнера), иначе локальный файл,
+    иначе честный дефолт FALSE."""
+    global _lockdown_active
+    import asyncio
+    loop = asyncio.get_event_loop()
+    active, _sha = await loop.run_in_executor(None, _github_get_lockdown_sync)
+    if active is not None:
+        _lockdown_active = active
+        _atomic_write_json(LOCKDOWN_STATE_FILE, {"active": active, "ts": time.time()})
+        return
+    _lockdown_active = _load_lockdown_local()
+
+
+async def set_lockdown(active: bool) -> None:
+    """Мгновенный эффект -- флаг в памяти меняется ПЕРВЫМ, до любого сетевого
+    вызова (чтобы /lockdown действовал мгновенно даже если GitHub недоступен).
+    Локальная запись и GitHub-синк -- best-effort персистентность поверх этого."""
+    global _lockdown_active
+    _lockdown_active = active
+    _atomic_write_json(LOCKDOWN_STATE_FILE, {"active": active, "ts": time.time()})
+    import asyncio
+    loop = asyncio.get_event_loop()
+    _cur, sha = await loop.run_in_executor(None, _github_get_lockdown_sync)
+    for _attempt in range(2):
+        result = await loop.run_in_executor(None, _github_put_lockdown_sync, active, sha)
+        if result == "conflict":
+            _cur, sha = await loop.run_in_executor(None, _github_get_lockdown_sync)
+            continue
+        break
+
+
 def get_role(chat_id: int) -> str:
     """Роль chat_id С учётом hardcoded OWNER_CHAT_ID-обхода -- владелец ВСЕГДА OWNER,
     независимо от состояния хранилища (см. докстринг модуля)."""
@@ -229,6 +375,13 @@ async def enforce(update, context):
     if not _role_check(role, update, context):
         security_log.log_event(security_log.EVENT_DENIED, chat_id,
                                 f"role={role} cmd={_extract_command(update) or '(text/callback)'}")
+        raise ApplicationHandlerStop
+
+    # Lockdown (М7) -- проверяется ПОСЛЕ обычной ролевой проверки (т.е. работает даже
+    # для команд, на которые роли обычно хватило бы), но ДО анти-абьюза. OWNER
+    # полностью исключён -- иначе /unlock самого владельца было бы некому вызвать.
+    if _lockdown_active and role != ROLE_OWNER:
+        security_log.log_event(security_log.EVENT_DENIED, chat_id, "lockdown")
         raise ApplicationHandlerStop
 
     # Анти-абьюз (М3) -- ТОЛЬКО для прошедших ролевую проверку, OWNER полностью

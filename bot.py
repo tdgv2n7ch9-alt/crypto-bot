@@ -3054,6 +3054,30 @@ async def cmd_invite(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"Ссылка: `https://t.me/{bot_username}?start={code}`",
         parse_mode="Markdown")
 
+
+async def cmd_lockdown(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/lockdown -- Пакет SECURITY-HARDENING М7 (владелец "да"): мгновенно
+    замораживает ВСЕ хендлеры кроме владельца (см. access_control.enforce()),
+    до /unlock. Кнопка на случай инцидента (утёк токен/угнан GitHub/спам-атака) --
+    см. RUNBOOK_SECURITY.md."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    await access_control.set_lockdown(True)
+    security_log.log_event(security_log.EVENT_LOCKDOWN, update.effective_chat.id, "")
+    await update.message.reply_text(
+        "🔒 *LOCKDOWN активирован.* Все хендлеры, кроме владельца, заморожены.\n"
+        "Снять: `/unlock`", parse_mode="Markdown")
+
+
+async def cmd_unlock(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/unlock -- снять lockdown (см. cmd_lockdown)."""
+    if access_control.get_role(update.effective_chat.id) != access_control.ROLE_OWNER:
+        return
+    await access_control.set_lockdown(False)
+    security_log.log_event(security_log.EVENT_UNLOCK, update.effective_chat.id, "")
+    await update.message.reply_text("🔓 Lockdown снят. Бот работает в обычном режиме.")
+
+
 async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Загружаю обзор рынка...")
     try:
@@ -11141,6 +11165,7 @@ async def _start_pump_detector(app):
 
     await subscribers.startup_sync()
     security_log.load_startup_events()
+    await access_control.load_lockdown_state()
 
     # Планировщик (в т.ч. send_scheduled/whale_monitor с next_run_time=now(), т.е. первый
     # тик почти сразу) регистрируется ЗДЕСЬ, а не в main() -- раньше scheduler.start()
@@ -11319,6 +11344,9 @@ def main():
     app.add_handler(CommandHandler("revoke",    cmd_revoke))
     app.add_handler(CommandHandler("users",     cmd_users))
     app.add_handler(CommandHandler("invite",    cmd_invite))
+    # Пакет SECURITY-HARDENING М7 (владелец "да") -- инцидент-кнопка.
+    app.add_handler(CommandHandler("lockdown",  cmd_lockdown))
+    app.add_handler(CommandHandler("unlock",    cmd_unlock))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     # Deny-by-default auth (group=-1, обрабатывается ДО всех хендлеров выше) --

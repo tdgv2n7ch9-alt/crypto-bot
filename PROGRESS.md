@@ -5717,9 +5717,12 @@ catchup контракт GET (not-configured/error-vs-empty), sync_to_github (sk
 `tests/test_daily_metrics.py` на новый блок дайджеста (честно "Событий нет" /
 подсчёт по типам).
 
-`journal/security_log.json` добавлен в `.gitignore` -- та же логика, что
-`signal_journal.json`: реальные данные живут на GitHub через Contents API,
-не в обычных git-коммитах этого репозитория.
+`journal/security_log.json`: сначала ошибочно добавлен в `.gitignore` в этом же
+чекпоинте (по аналогии с `signal_journal.json`), затем исправлено -- на самом деле
+он следует тому же паттерну, что уже установленные `data/chat_ids.json` и
+`journal/shadow_signals.json`: реальный, ОТСЛЕЖИВАЕМЫЙ git-файл, коммитится живым
+ботом через GitHub Contents API (не через обычный git push), git-история служит
+аудит-следом. `.gitignore`-запись убрана обратно.
 
 Полный `pytest`: 657 passed, 1 skipped, без регрессий. `py_compile` чисто на
 всех тронутых файлах.
@@ -5768,3 +5771,32 @@ spawns a fresh, separate container") -- то предположение было
 
 **Статус SEC М4: ГОТОВ, живо подтверждено, живая находка (test isolation
 gap) исправлена этим же чекпоинтом.**
+
+## 2026-07-13 -- SEC М7: /lockdown + /unlock + RUNBOOK_SECURITY.md -- код и тесты готовы
+
+`access_control.py`: `is_locked_down()`/`set_lockdown()`/`load_lockdown_state()` --
+in-memory флаг (мгновенный эффект, никакого сетевого вызова на каждую проверку в
+`enforce()`), best-effort персистентность через GitHub Contents API
+(`data/lockdown_state.json`, тот же паттерн, что shadow_engine/subscribers/
+security_log) + локальный файловый кэш на случай недоступности GitHub при рестарте.
+`enforce()`: lockdown проверяется ПОСЛЕ обычной ролевой проверки, ДО анти-абьюза --
+OWNER полностью исключён (иначе некому вызвать `/unlock`).
+
+`bot.py`: `/lockdown` и `/unlock` (только OWNER, через `COMMAND_ROLE_MAP`, уже был
+зарезервирован в SEC М1) -- пишут `EVENT_LOCKDOWN`/`EVENT_UNLOCK` в security_log.
+`access_control.load_lockdown_state()` вызывается на старте (post_init), рядом с
+остальными `startup_sync()`.
+
+`RUNBOOK_SECURITY.md` -- три сценария (утёк токена, угон GitHub, спам-атака) с
+конкретными шагами, плюс честный раздел "Ограничения" (нет `/lockdown status`,
+lockdown не отзывает токены сам по себе, безопасный дефолт "разблокировано" при
+недоступности GitHub на рестарте во время активного инцидента).
+
+10 новых тестов в `tests/test_access_control.py` (default-false, set/get round-trip,
+персистентность в локальный файл, load предпочитает GitHub/фоллбэк на локальный/
+фоллбэк на False, enforce() блокирует VIP при lockdown, пропускает OWNER,
+не блокирует, когда lockdown выключен). Полный `pytest`: 667 passed, 1 skipped.
+
+**Статус SEC М7: код+тесты готовы. Деплой/живая проверка -- следующим шагом
+(новый стандарт из «Верификация деплоя» в CLAUDE.md: логи контейнера/ответ бота,
+НЕ `railway run` для этой проверки, т.к. `/lockdown`/`/unlock` пишут в GitHub).**

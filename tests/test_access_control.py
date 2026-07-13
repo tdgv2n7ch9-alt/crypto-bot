@@ -331,3 +331,91 @@ def test_non_owner_gets_rate_limited_in_enforce(monkeypatch):
         results.append(asyncio.run(_run_enforce(update)))
     assert results[0] == "ALLOWED"
     assert "DENIED" in results  # где-то после превышения лимита должен появиться отказ
+
+
+# --- Lockdown (Пакет SECURITY-HARDENING М7) -----------------------------------------
+
+def _reset_lockdown_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(ac, "_lockdown_active", False)
+    monkeypatch.setattr(ac, "LOCKDOWN_STATE_FILE", str(tmp_path / "lockdown_state.json"))
+
+
+def test_is_locked_down_default_false(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    assert ac.is_locked_down() is False
+
+
+def test_set_lockdown_true_sets_in_memory_flag_immediately(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(ac, "_github_get_lockdown_sync", lambda: (None, None))
+    monkeypatch.setattr(ac, "_github_put_lockdown_sync", lambda active, sha: None)
+    asyncio.run(ac.set_lockdown(True))
+    assert ac.is_locked_down() is True
+
+
+def test_set_lockdown_false_clears_flag(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(ac, "_github_get_lockdown_sync", lambda: (None, None))
+    monkeypatch.setattr(ac, "_github_put_lockdown_sync", lambda active, sha: None)
+    monkeypatch.setattr(ac, "_lockdown_active", True)
+    asyncio.run(ac.set_lockdown(False))
+    assert ac.is_locked_down() is False
+
+
+def test_set_lockdown_persists_to_local_file(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(ac, "_github_get_lockdown_sync", lambda: (None, None))
+    monkeypatch.setattr(ac, "_github_put_lockdown_sync", lambda active, sha: None)
+    asyncio.run(ac.set_lockdown(True))
+    assert ac._load_lockdown_local() is True
+
+
+def test_load_lockdown_state_prefers_github_when_available(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(ac, "_github_get_lockdown_sync", lambda: (True, "sha1"))
+    asyncio.run(ac.load_lockdown_state())
+    assert ac.is_locked_down() is True
+    # локальный кэш тоже обновлён -- переживает следующий рестарт, если GitHub недоступен
+    assert ac._load_lockdown_local() is True
+
+
+def test_load_lockdown_state_falls_back_to_local_on_github_failure(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    ac._atomic_write_json(ac.LOCKDOWN_STATE_FILE, {"active": True, "ts": 1.0})
+    monkeypatch.setattr(ac, "_github_get_lockdown_sync", lambda: (None, None))
+    asyncio.run(ac.load_lockdown_state())
+    assert ac.is_locked_down() is True
+
+
+def test_load_lockdown_state_defaults_false_when_nothing_available(monkeypatch, tmp_path):
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(ac, "_github_get_lockdown_sync", lambda: (None, None))
+    asyncio.run(ac.load_lockdown_state())
+    assert ac.is_locked_down() is False
+
+
+def test_enforce_denies_vip_during_lockdown(monkeypatch, tmp_path):
+    _reset_state(monkeypatch)
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    _set_role(555444, sub.ROLE_VIP, monkeypatch)
+    monkeypatch.setattr(ac, "_lockdown_active", True)
+    update = _FakeUpdate(chat_id=555444, text="/market")
+    assert asyncio.run(_run_enforce(update)) == "DENIED"
+
+
+def test_enforce_allows_owner_during_lockdown(monkeypatch, tmp_path):
+    """OWNER должен пройти даже во время lockdown -- иначе некому будет вызвать /unlock."""
+    _reset_state(monkeypatch)
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(ac, "_lockdown_active", True)
+    owner_id = ac._owner_id()
+    update = _FakeUpdate(chat_id=owner_id, text="/unlock")
+    assert asyncio.run(_run_enforce(update)) == "ALLOWED"
+
+
+def test_enforce_allows_vip_when_not_locked_down(monkeypatch, tmp_path):
+    _reset_state(monkeypatch)
+    _reset_lockdown_state(monkeypatch, tmp_path)
+    _set_role(555444, sub.ROLE_VIP, monkeypatch)
+    update = _FakeUpdate(chat_id=555444, text="/market")
+    assert asyncio.run(_run_enforce(update)) == "ALLOWED"
