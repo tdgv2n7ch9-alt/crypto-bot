@@ -6875,3 +6875,49 @@ Sweep"/"Паттерн Cypher" (строки ~195-270), и `knowledge/KNOWLEDGE_
   уже есть для oi_funding_ls_shadow/bos_body_close_shadow/order_block_shadow).
 
 py_compile чист, полный pytest 851 passed/1 skipped.
+
+## 2026-07-13 -- Мини-пакет: rug-строка во ВСЕ пользовательские алерты + фикс Supertrend
+
+**Найденный живьём баг (кейс LAB, DUMP-алерт 15:28, score 45)**: в
+`pump_detector._compose_alert()` `rug_line` СЧИТАЛАСЬ (rug_radar.compute_rug_risk +
+format_rug_risk_line), но НИКОГДА не добавлялась в `lines` -- dead variable.
+DUMP-алерт по WARN-монете (score 45) не показывал rug-предупреждение вообще и
+сценарий предлагал "возможен лонг после отскока от дна" без единой оговорки.
+
+1. **Единый формат** -- новая `rug_radar.format_rug_alert_line(rug_risk)`
+   ("🛑 RUG-RADAR: {score} — {детекторы}", score>=40) заменяет разнобой
+   старых форматов (`format_rug_risk_line()` -- "⚠️/🔴 RUG-РИСК") в местах,
+   которые владелец явно назвал: Памп-радар, Whale Monitor, Supertrend,
+   карточка сетапа (`_mv2_show_razbor`). `bot.format_watchlist_rug_line()`
+   (уже существовала для watchlist) теперь тоже делегирует форматирование
+   туда -- один источник правды, не три параллельные копии.
+2. **pump_detector.py фикс**: `rug_line` теперь реально попадает в текст
+   (`lines[1]` -- шапка карточки). Новая `_get_rug_risk(ctx, sym)` считает
+   rug_risk РАНЬШЕ построения сценарного текста в `_start_watch()` -- на
+   DUMP у WARN-монеты (score>=40) сценарий "возможен лонг после отскока от
+   дна" заменяется на "🛑 Отскок — НЕ торговать против навеса, см. rug-скор".
+   PUMP-сценарий НЕ тронут (владелец явно просил только DUMP).
+   `_compose_alert()` принимает опциональный `rug_risk` (не считает дважды).
+3. **Whale Monitor** (`_format_whale_alert`) и **Supertrend**
+   (`check_supertrend_signals`) -- та же rug-строка через общий
+   `bot.format_watchlist_rug_line(sym, coin)`.
+4. **Supertrend "Прошлый сигнал 0.32637 () -- 0.00%"** -- ДВА независимых
+   бага в `get_supertrend_signal()`: (а) поиск прошлого сигнала начинался с
+   len(st)-1 -- ПОСЛЕДНЕГО бара, где направление ТОЛЬКО ЧТО сменилось (сам
+   вызов происходит именно ради проверки смены направления) -- цикл находил
+   САМ СЕБЯ, `last_signal_price == current_price` (отсюда 0.00%); (б)
+   `candles[i].get("time")` -- такого ключа в словаре свечи НЕТ вообще
+   (реальный ключ -- `"timestamp"`, эпоха в мс) -- отсюда `last_signal_time`
+   был ВСЕГДА `None`, пустые скобки в тексте. Исправлено: поиск с `len(st)-2`
+   (текущий бар исключён) + правильный ключ + конвертация в `datetime`.
+   Честный фоллбек в `check_supertrend_signals()`: нет прошлого сигнала ->
+   "📍 Прошлый сигнал: н/д (первый сигнал)", не текущая цена.
+5. 14 новых тестов: `tests/test_rug_alert_everywhere.py` (8 -- формат
+   `format_rug_alert_line`, золотой кейс LAB "DUMP+rug-строка+НЕТ 'возможен
+   лонг'", non-WARN монета сохраняет старый сценарий, PUMP не тронут, честная
+   пустая строка без данных) + `tests/test_supertrend_prev_signal.py` (6 --
+   честный None при первом сигнале, находит ГЕНУИННЫЙ прошлый сигнал не
+   себя же, реальный datetime не epoch-int, честное "н/д" в тексте алерта,
+   rug-строка в Supertrend-алерте).
+
+py_compile чист, полный pytest 865 passed/1 skipped.

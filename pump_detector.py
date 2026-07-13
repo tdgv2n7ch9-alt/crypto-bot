@@ -274,6 +274,26 @@ def _oi_matrix_label(price_up: bool, oi_change_pct: float, funding: float) -> st
     return "🟡 Цена↓ OI↓ — выход из позиций, движение слабеет"
 
 
+async def _get_rug_risk(ctx: "PumpContext", sym: str):
+    """Мини-пакет (владелец, 2026-07-13, кейс LAB 15:28 -- DUMP-алерт предлагал
+    "возможен лонг" при score 45/WARN): единый best-effort фетч+расчёт rug_radar,
+    вынесен из _compose_alert() в отдельную функцию, чтобы _start_watch() мог
+    узнать score ДО того, как строит сценарный текст ("возможен лонг"/"возможен
+    шорт"), и не считать дважды (компонуется один раз, передаётся в
+    _compose_alert() параметром). None -- нет coin/ctx.get_cg_detail/ошибка сети
+    (честно, не выдумываем rug-риск на отсутствующих данных)."""
+    try:
+        coin = ctx.get_coin_by_symbol(sym)
+        if not (coin and ctx.get_cg_detail):
+            return None
+        cg_detail = ctx.get_cg_detail(sym) or {}
+        price = coin.get("quote", {}).get("USDT", {}).get("price", 0)
+        transfer_data = etherscan_whale.fetch_transfer_data(cg_detail, price) or None
+        return rug_radar.compute_rug_risk(sym, coin, cg_detail=cg_detail, transfer_data=transfer_data)
+    except Exception:
+        return None
+
+
 async def _discover_top_symbols() -> list:
     """Топ-N Binance Futures перпетуалов по 24h объёму через CoinGecko /derivatives
     (Binance REST запрещён — используем ту же точку входа, что и OI/funding в bot.py).
@@ -520,16 +540,28 @@ async def _start_watch(ctx: PumpContext, symbol: str, kind: str, price: float, z
     _ensure_history(symbol)
 
     sym = symbol.upper().replace("USDT", "")
+    # Мини-пакет (владелец, 2026-07-13, кейс LAB 15:28): rug_risk считается ЗДЕСЬ,
+    # ДО построения сценарного текста -- на DUMP у WARN-монеты (score>=40) сценарий
+    # "возможен лонг после отскока от дна" МЕНЯЕТСЯ на предупреждение, не торговать
+    # против навеса инсайдеров. Передаётся в _compose_alert() ниже, чтобы та не
+    # считала rug_risk повторно.
+    rug_risk = await _get_rug_risk(ctx, sym)
+    rug_warn = bool(rug_risk and rug_risk.get("warn"))
+
     if kind == "pump":
         stage_title = "PUMP DETECTED 🚀"
         extra = ["🎯 Сценарий: возможен шорт после разворота",
                  "⏳ Наблюдаю за откатом до 30 минут..."]
     else:
         stage_title = "DUMP DETECTED 🔻"
-        extra = ["🎯 Сценарий: возможен лонг после отскока от дна",
-                 "⏳ Наблюдаю за разворотом до 30 минут..."]
+        if rug_warn:
+            extra = ["🛑 Отскок — НЕ торговать против навеса, см. rug-скор",
+                     "⏳ Наблюдаю за разворотом до 30 минут..."]
+        else:
+            extra = ["🎯 Сценарий: возможен лонг после отскока от дна",
+                     "⏳ Наблюдаю за разворотом до 30 минут..."]
 
-    text = await _compose_alert(ctx, symbol, watch, stage_title, extra)
+    text = await _compose_alert(ctx, symbol, watch, stage_title, extra, rug_risk=rug_risk)
     await _send_alert(ctx, symbol, text, watch, f"pump_sub_{sym}")
 
 
@@ -961,11 +993,17 @@ def _risk_block(entry: float, sl: float) -> str:
 
 
 async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title: str,
-                          extra_lines: list, market_snapshot: dict = None) -> str:
+                          extra_lines: list, market_snapshot: dict = None,
+                          rug_risk: dict = None) -> str:
     """market_snapshot -- опционально: {"funding","oi_now","oi_chg","kz"} уже посчитанные
     ВЫЗЫВАЮЩЕЙ стороной ОДИН раз на всю карточку (см. _confirm_pump_reversal/
     _confirm_dump_reversal). Если не передан -- фетчит сам (как раньше, для ранних
     стадий алерта без блока РАЗБОР, где повторного фетча нет и бага нет).
+
+    rug_risk -- опционально, уже посчитанный вызывающей стороной (_start_watch()
+    считает его РАНЬШЕ, чтобы решить текст сценария на DUMP) через _get_rug_risk().
+    Если не передан -- считается здесь же (как раньше, для call site'ов без
+    rug-зависимого сценарного текста).
 
     Честная находка владельца (карточка EVAA, 2026-07-11): шапка и блок РАЗБОР
     показывали РАЗНЫЙ OI % за 5 мин в одном сообщении -- root cause: bot._get_oi_change()
@@ -1017,11 +1055,18 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
             memecoin_line = "\n⚠️ <b>МЕМКОИН</b> — низкая капитализация, повышенный риск манипуляции"
         # Rug-Radar (Пакет 9, кейс LAB, METHODOLOGY_CORE.md §21) -- информационно,
         # НЕ подано в _try_promote_pump()/боевой гейт (уже решается независимо).
-        if coin and ctx.get_cg_detail:
+        # Мини-пакет (владелец, 2026-07-13): rug_risk МОЖЕТ прийти уже посчитанным
+        # от _start_watch() -- не считаем повторно. Формат -- ЕДИНЫЙ через
+        # rug_radar.format_rug_alert_line() ("Правило одно"), не format_rug_risk_line().
+        # БАГ ДО ФИКСА (найдено живьём, кейс LAB 15:28): rug_line здесь считалась,
+        # но НИКОГДА не добавлялась в lines ниже -- строка молча терялась, поэтому
+        # DUMP-алерт по WARN-монете не показывал rug-предупреждение вообще.
+        if rug_risk is None and coin and ctx.get_cg_detail:
             cg_detail = ctx.get_cg_detail(sym) or {}
             transfer_data = etherscan_whale.fetch_transfer_data(cg_detail, price) or None
             rug_risk = rug_radar.compute_rug_risk(sym, coin, cg_detail=cg_detail, transfer_data=transfer_data)
-            rug_line_text = rug_radar.format_rug_risk_line(rug_risk)
+        if rug_risk:
+            rug_line_text = rug_radar.format_rug_alert_line(rug_risk)
             if rug_line_text:
                 rug_line = f"\n{html.escape(rug_line_text)}"
     except Exception:
@@ -1037,7 +1082,7 @@ async def _compose_alert(ctx: PumpContext, symbol: str, watch: dict, stage_title
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     lines = [
         f"⚡ <b>ПАМП-РАДАР — {stage_e}</b>",
-        f"<b>{sym_e}/USDT</b>{memecoin_line}",
+        f"<b>{sym_e}/USDT</b>{memecoin_line}{rug_line}",
         SEP, "",
         f"📍 Цена: <code>{_fmt_price(price)}</code>  <i>{html.escape(price_fresh)}</i>  ({pct_move:+.1f}% от детекта)",
         f"📊 Объём: x{watch.get('volume_mult', 0):.1f} от нормы · Z-Score: {watch.get('z_score', 0):.1f}σ",

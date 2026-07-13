@@ -260,6 +260,22 @@ def format_rug_risk_line(rug_risk: dict) -> str:
     return f"⚠️ RUG-РИСК: {score}/100 ({reasons_str})"
 
 
+def format_rug_alert_line(rug_risk: dict) -> str:
+    """Мини-пакет (владелец, 2026-07-13): единый формат rug-строки для ВСЕХ
+    пользовательских алертов (watchlist zone-touch, Памп-радар PUMP/DUMP, Whale
+    Monitor/Radar, Supertrend, карточки сетапов) -- "Правило одно: score >= 40 ->
+    строка 🛑 RUG-RADAR: {score} — {детекторы}". Раньше эти места использовали
+    format_rug_risk_line() выше (формат "⚠️/🔴 RUG-РИСК") или дублировали эту же
+    логику инлайн (bot.format_watchlist_rug_line() до выноса сюда) -- теперь один
+    источник форматирования, вызывающая сторона отвечает только за фетч/расчёт
+    rug_risk. Пустая строка при score < WARN или отсутствии rug_risk -- честно,
+    не засоряем карточку."""
+    if not rug_risk or rug_risk.get("score", 0) < RUG_RISK_WARN_THRESHOLD:
+        return ""
+    reasons_str = "; ".join(rug_risk.get("reasons", [])[:3]) or "детали н/д"
+    return f"🛑 RUG-RADAR: {rug_risk['score']} — {reasons_str}"
+
+
 def fetch_coingecko_detail(bot_module, symbol: str) -> dict:
     """Best-effort фетч CoinGecko /coins/{id} для FDV/supply/genesis/tickers.
     Использует уже существующие bot_module._cg_slug()/_cg_get() (тот же

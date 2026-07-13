@@ -1560,15 +1560,27 @@ def get_supertrend_signal(symbol: str) -> dict:
     current_dir = st[-1]["direction"]
     current_val = st[-1]["value"]
 
-    #   
+    # Мини-пакет (владелец, 2026-07-13, живой прогон: "Прошлый сигнал 0.32637
+    # () -- 0.00%"): ДВА бага здесь.
+    # 1) Поиск начинался с len(st)-1 -- ПОСЛЕДНЕГО бара. Если направление
+    #    именно НА НЁМ только что сменилось (а check_supertrend_signals()
+    #    вызывает эту функцию именно ради проверки смены направления), цикл
+    #    находил САМ СЕБЯ -- "прошлый" сигнал совпадал с текущим, отсюда
+    #    last_signal_price == current_price (0.00% изменения). Исправлено:
+    #    поиск ПРОШЛОГО сигнала начинается с len(st)-2, текущий бар исключён.
+    # 2) candles[i].get("time") -- такого ключа в словаре свечи НЕТ вообще
+    #    (см. _get_ohlc_bybit/_get_ohlc_coingecko: ключ "timestamp", эпоха в
+    #    мс) -- отсюда last_signal_time был ВСЕГДА None, пустые скобки в
+    #    тексте алерта. Исправлено: правильный ключ + конвертация в datetime.
     last_signal = None
     last_signal_price = None
     last_signal_time  = None
-    for i in range(len(st) - 1, -1, -1):
+    for i in range(len(st) - 2, -1, -1):
         if st[i]["signal"]:
             last_signal       = st[i]["signal"]
             last_signal_price = candles[i]["close"]
-            last_signal_time  = candles[i].get("time")
+            ts_ms = candles[i].get("timestamp")
+            last_signal_time  = datetime.fromtimestamp(ts_ms / 1000, tz=TZ) if ts_ms else None
             break
 
     current_price = candles[-1]["close"]
@@ -2506,15 +2518,16 @@ def check_watchlist_alerts_from_level_watch(coins: list) -> list:
 
 
 def format_watchlist_rug_line(symbol: str, coin: dict) -> str:
-    """Владелец, 2026-07-13 (кейс LAB): любой zone-touch алерт подписчикам
-    обязан включать строку rug-скора, если score >= rug_radar.RUG_RISK_WARN_THRESHOLD
-    (40) -- LAB первый символ сразу с активной зоной И WARN-скором (кейс §21,
-    knowledge/METHODOLOGY_CORE.md). Best-effort: сетевой CoinGecko-фетч
-    (тот же паттерн, что _mv2_show_razbor()) -- любая ошибка (сеть/рейт-
-    лимит/нет coin) -> тихая пустая строка, не блокирует и не портит остальной
-    текст алерта (в отличие от liq-line, здесь НЕТ обязательного "н/д" --
-    rug-риск не гарантированная строка на каждой карточке, только "есть
-    сигнал -- покажи", молчание при ошибке не искажает смысл алерта)."""
+    """Владелец, 2026-07-13 (кейс LAB, расширено в мини-пакете "rug-строка во ВСЕ
+    алерты"): ОБЩИЙ хелпер rug-строки для ЛЮБОГО пользовательского алерта, не
+    только zone-touch watchlist -- имя сохранено ради обратной совместимости
+    (уже используется/протестировано в check_watchlist()), но вызывающая сторона
+    может быть любой (Памп-радар, Whale Monitor, Supertrend, карточки сетапов),
+    сигнатура (symbol, coin) для всех одинаковая. Best-effort: сетевой
+    CoinGecko-фетч (тот же паттерн, что _mv2_show_razbor()) -- любая ошибка
+    (сеть/рейт-лимит/нет coin) -> тихая пустая строка, не блокирует и не портит
+    остальной текст алерта. Форматирование -- через ЕДИНЫЙ
+    rug_radar.format_rug_alert_line() ("Правило одно"), не дублируется здесь."""
     try:
         cg_detail = _cg_get(
             f"https://api.coingecko.com/api/v3/coins/{_cg_slug(symbol)}",
@@ -2524,12 +2537,9 @@ def format_watchlist_rug_line(symbol: str, coin: dict) -> str:
         coin_q = (coin or {}).get("quote", {}).get("USDT", {})
         rug_risk = rug_radar.compute_rug_risk(symbol, {"quote": {"USDT": coin_q}}, cg_detail=cg_detail)
     except Exception as e:
-        log.info(f"[WATCHLIST] rug-risk {symbol}: {e}")
+        log.info(f"[RUG-ALERT] rug-risk {symbol}: {e}")
         return ""
-    if rug_risk.get("score", 0) < rug_radar.RUG_RISK_WARN_THRESHOLD:
-        return ""
-    reasons_str = "; ".join(rug_risk.get("reasons", [])[:3]) or "детали н/д"
-    return f"🛑 RUG-RADAR: {rug_risk['score']} — {reasons_str}"
+    return rug_radar.format_rug_alert_line(rug_risk)
 
 
 def analyze_market(btc, eth, gm, coins):
@@ -4009,18 +4019,10 @@ async def _mv2_show_razbor(bot, chat_id, kind, direction, symbol):
     except Exception:
         btc_label = "н/д"
 
-    rug_line = ""
-    try:
-        rug_cg_detail = _cg_get(
-            f"https://api.coingecko.com/api/v3/coins/{_cg_slug(symbol)}",
-            params={"localization": "false", "tickers": "true",
-                    "community_data": "false", "developer_data": "false"},
-            timeout=8) or {}
-        rug_coin_q = (coin or {}).get("quote", {}).get("USDT", {})
-        rug_risk = rug_radar.compute_rug_risk(symbol, {"quote": {"USDT": rug_coin_q}}, cg_detail=rug_cg_detail)
-        rug_line = rug_radar.format_rug_risk_line(rug_risk)
-    except Exception as e:
-        log.info(f"[MENU-V2] rug-risk {symbol}: {e}")
+    # Мини-пакет (владелец, 2026-07-13, "Правило одно"): карточка сетапа --
+    # ЕДИНЫЙ формат "🛑 RUG-RADAR: {score} — {детекторы}" через общий хелпер,
+    # раньше тут дублировался тот же фетч+расчёт с другим форматом ("⚠️ RUG-РИСК").
+    rug_line = format_watchlist_rug_line(symbol, coin)
 
     liq_lines = []
     try:
@@ -5603,7 +5605,7 @@ def _get_large_trades(symbol: str) -> list:
     """Крупные сделки (заглушка — Binance недоступен на Railway)"""
     return []
 
-def _format_whale_alert(w: dict) -> str:
+def _format_whale_alert(w: dict, rug_line: str = "") -> str:
     """Форматирует алерт кита для отправки — блоки 1,2,3,6,7 единого шаблона
     + словесная интерпретация OI-матрицы."""
     fp = lambda v, d=2: (f"${v:,.{d}f}" if v >= 1 else f"${v:.{d}f}")
@@ -5690,6 +5692,13 @@ def _format_whale_alert(w: dict) -> str:
         "",
         "  Грейды: A+ ≥85 · A ≥65 · B ≥40 · C <40",
         "",
+    ]
+    if rug_line:
+        # Мини-пакет (владелец, 2026-07-13): rug-строка перед хэштегом --
+        # тот же общий хелпер (bot.format_watchlist_rug_line() ->
+        # rug_radar.format_rug_alert_line()), что watchlist/Памп-радар/Supertrend.
+        lines_out += [rug_line, ""]
+    lines_out += [
         SEP,
         f"#{sym}USDT",
     ]
@@ -5739,7 +5748,16 @@ async def whale_monitor(bot: Bot):
                                        fd.get("ch24h", 0), fd.get("ch7d", 0), fd.get("rank"), fd.get("vol", 0))
             if not w: continue
 
-            text = _format_whale_alert(w)
+            # Мини-пакет (владелец, 2026-07-13, "rug-строка во ВСЕ алерты"):
+            # Whale Monitor -- score >= 40 добавляет "🛑 RUG-RADAR: ..." строку
+            # (тот же общий хелпер, что watchlist/Памп-радар/Supertrend).
+            whale_rug_line = ""
+            try:
+                whale_coin = next((c for c in get_all_coins() if c["symbol"] == sym), None)
+                whale_rug_line = format_watchlist_rug_line(sym, whale_coin)
+            except Exception as e:
+                log.info(f"[WHALE] rug-risk {sym}: {e}")
+            text = _format_whale_alert(w, rug_line=whale_rug_line)
             _whale_last_alert[sym] = now
 
             # Шлём владельцу
@@ -6044,6 +6062,21 @@ async def check_supertrend_signals(bot, chat_ids, coins):
             if last_price:
                 text += f"📍 Прошлый сигнал: <code>{fp(last_price)}</code> ({time_str})\n"
                 text += f"📊 Изменение с прошлого сигнала: <code>{pct_str}</code>\n"
+            else:
+                # Мини-пакет (владелец, 2026-07-13): честно "н/д (первый сигнал)"
+                # вместо текущей цены -- нет прошлого сигнала в истории (первый
+                # после рестарта/недостаточно 4h-свечей), см. get_supertrend_signal().
+                text += f"📍 Прошлый сигнал: н/д (первый сигнал)\n"
+
+            # Мини-пакет (владелец, 2026-07-13, "rug-строка во ВСЕ алерты"):
+            # score >= 40 -- общий хелпер, тот же, что watchlist/Памп-радар/Whale.
+            try:
+                st_rug_line = format_watchlist_rug_line(sym, coin)
+            except Exception as e:
+                st_rug_line = ""
+                log.info(f"[SUPERTREND] rug-risk {sym}: {e}")
+            if st_rug_line:
+                text += f"{st_rug_line}\n"
 
             text += (
                 f"\n"
