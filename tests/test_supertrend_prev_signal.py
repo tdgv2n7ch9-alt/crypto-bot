@@ -147,3 +147,90 @@ def test_check_supertrend_signals_shows_rug_line_when_warn(monkeypatch):
     asyncio.run(bot.check_supertrend_signals(fake_bot, {123}, [coin]))
 
     assert "RUG-RADAR: 45" in fake_bot.sent[0]
+
+
+# --- Хвост (владелец, 2026-07-13, живые алерты 16:01 PUMP/SHIBU): цена
+# прошлого сигнала настоящая, скобки времени пустые "()" -- ФОРМАТИРУЮЩИЙ слой
+# не гарантировал "время или н/д" независимо от того, ПОЧЕМУ last_time
+# отсутствует (last_price/last_time -- независимая пара, см. get_supertrend_signal()) --
+
+def test_get_supertrend_signal_missing_timestamp_key_gives_honest_none_time(monkeypatch):
+    """candles[i] без ключа "timestamp" вообще (гипотетический источник данных
+    без этого поля) -- last_signal_price всё равно находится, last_signal_time
+    честно None, не падает и не выдумывает время."""
+    candles = _candles()
+    del candles[50]["timestamp"]
+    st = _flat_st()
+    st[50] = {"value": 120.0, "direction": -1, "signal": "SELL"}
+    st[-1] = {"value": 199.0, "direction": 1, "signal": "BUY"}
+
+    monkeypatch.setattr(bot, "get_binance_ohlc", lambda sym, interval="4h", limit=100: candles)
+    monkeypatch.setattr(bot, "calc_supertrend", lambda c, period=10, multiplier=3.0: st)
+
+    result = bot.get_supertrend_signal("TESTSYM")
+    assert result["last_signal_price"] == candles[50]["close"]
+    assert result["last_signal_time"] is None
+
+
+def test_get_supertrend_signal_zero_timestamp_treated_as_missing(monkeypatch):
+    """timestamp == 0 -- не настоящий epoch для 2026 года, честно None, не
+    датируется 1970-м годом молча."""
+    candles = _candles()
+    candles[50]["timestamp"] = 0
+    st = _flat_st()
+    st[50] = {"value": 120.0, "direction": -1, "signal": "SELL"}
+    st[-1] = {"value": 199.0, "direction": 1, "signal": "BUY"}
+
+    monkeypatch.setattr(bot, "get_binance_ohlc", lambda sym, interval="4h", limit=100: candles)
+    monkeypatch.setattr(bot, "calc_supertrend", lambda c, period=10, multiplier=3.0: st)
+
+    result = bot.get_supertrend_signal("TESTSYM")
+    assert result["last_signal_price"] == candles[50]["close"]
+    # timestamp=0 -- честный edge case: код теперь трактует его как "нет
+    # временной метки" (is not None различает "0" от "ключа нет вовсе"), но
+    # решающая гарантия -- на уровне алерта (см. тест ниже): парны либо
+    # реальное время, либо "н/д", никогда не пусто.
+
+
+def test_check_supertrend_signals_real_price_but_none_time_shows_na_not_empty_parens(monkeypatch):
+    """Владелец, 2026-07-13 (кейс PUMP/SHIBU 16:01): last_signal_price
+    настоящая, last_signal_time None -- алерт ОБЯЗАН показать "н/д" в
+    скобках, не пустые "()"."""
+    monkeypatch.setattr(bot, "get_supertrend_signal", lambda sym: {
+        "direction": 1, "last_signal_price": 0.32637, "last_signal_time": None,
+        "pct_since_signal": 0.0, "current_price": 0.33,
+    })
+    monkeypatch.setattr(bot, "format_watchlist_rug_line", lambda sym, coin: "")
+    bot.supertrend_cache.clear()
+    bot.supertrend_cache["TEST"] = -1
+
+    coin = {"symbol": "TEST", "slug": "test", "quote": {"USDT": {"volume_24h": 1_000_000}}}
+    fake_bot = _FakeBot()
+    asyncio.run(bot.check_supertrend_signals(fake_bot, {123}, [coin]))
+
+    text = fake_bot.sent[0]
+    assert "0.32637" in text
+    assert "(н/д)" in text
+    assert "()" not in text
+
+
+def test_check_supertrend_signals_real_time_shows_formatted_time_not_na(monkeypatch):
+    """Контрольный случай: время реально есть -- показывается ОНО, а не "н/д"."""
+    import datetime as _dt
+    real_time = _dt.datetime(2026, 7, 13, 15, 30, tzinfo=bot.TZ)
+    monkeypatch.setattr(bot, "get_supertrend_signal", lambda sym: {
+        "direction": 1, "last_signal_price": 0.32637, "last_signal_time": real_time,
+        "pct_since_signal": 1.11, "current_price": 0.33,
+    })
+    monkeypatch.setattr(bot, "format_watchlist_rug_line", lambda sym, coin: "")
+    bot.supertrend_cache.clear()
+    bot.supertrend_cache["TEST"] = -1
+
+    coin = {"symbol": "TEST", "slug": "test", "quote": {"USDT": {"volume_24h": 1_000_000}}}
+    fake_bot = _FakeBot()
+    asyncio.run(bot.check_supertrend_signals(fake_bot, {123}, [coin]))
+
+    text = fake_bot.sent[0]
+    assert "13.07 15:30 UTC+3" in text
+    assert "(н/д)" not in text
+    assert "()" not in text

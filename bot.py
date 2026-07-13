@@ -1572,6 +1572,17 @@ def get_supertrend_signal(symbol: str) -> dict:
     #    (см. _get_ohlc_bybit/_get_ohlc_coingecko: ключ "timestamp", эпоха в
     #    мс) -- отсюда last_signal_time был ВСЕГДА None, пустые скобки в
     #    тексте алерта. Исправлено: правильный ключ + конвертация в datetime.
+    # Хвост (владелец, 2026-07-13, живые алерты 16:01 PUMP/SHIBU): цена
+    # прошлого сигнала настоящая, скобки времени пустые "()". Root cause --
+    # last_signal_price/last_signal_time находятся ЗДЕСЬ, в одной итерации,
+    # но конвертация времени могла тихо давать None при truthy-проверке
+    # `if ts_ms` (0 -- валидный, хоть и абсурдный, epoch -- трактовался как
+    # "нет времени") и без защиты от исключения datetime.fromtimestamp() на
+    # аномальном значении (тогда last_signal_time -- None, last_signal_price
+    # -- уже установлена). Отдельно (см. check_supertrend_signals()) сама
+    # ФОРМАТИРОВКА не гарантировала "время или н/д" -- пустая строка молча
+    # превращалась в пустые скобки. Оба места исправлены отдельно, это --
+    # только источник данных.
     last_signal = None
     last_signal_price = None
     last_signal_time  = None
@@ -1580,7 +1591,11 @@ def get_supertrend_signal(symbol: str) -> dict:
             last_signal       = st[i]["signal"]
             last_signal_price = candles[i]["close"]
             ts_ms = candles[i].get("timestamp")
-            last_signal_time  = datetime.fromtimestamp(ts_ms / 1000, tz=TZ) if ts_ms else None
+            if ts_ms is not None:
+                try:
+                    last_signal_time = datetime.fromtimestamp(ts_ms / 1000, tz=TZ)
+                except (ValueError, OSError, OverflowError):
+                    last_signal_time = None
             break
 
     current_price = candles[-1]["close"]
@@ -6050,7 +6065,11 @@ async def check_supertrend_signals(bot, chat_ids, coins):
             last_price = st_data.get("last_signal_price")
             last_time  = st_data.get("last_signal_time")
 
-            time_str = last_time.strftime("%d.%m %H:%M UTC+3") if last_time else ""
+            # Хвост (владелец, 2026-07-13): время ИЛИ "н/д" -- пустых скобок не
+            # бывает, независимо от ПРИЧИНЫ отсутствия last_time (цена при этом
+            # может быть настоящей -- см. get_supertrend_signal(), это
+            # НЕЗАВИСИМАЯ пара значений).
+            time_str = last_time.strftime("%d.%m %H:%M UTC+3") if last_time else "н/д"
             pct_str  = f"+{pct:.2f}%" if pct >= 0 else f"{pct:.2f}%"
 
             text = (
