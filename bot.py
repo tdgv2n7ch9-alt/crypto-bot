@@ -3928,11 +3928,25 @@ async def _mv2_tochki_row_text(item: dict) -> str:
     """Живой пересчёт силы сетапа для ОДНОЙ строки ленты -- через тот же
     кэшируемый пайплайн, что /coin (_get_fa_engine_result_cached, 12с TTL) --
     никакой отдельной новой сигнальной логики, просто чтение существующего
-    fa_engine.build_full_analysis() результата."""
+    fa_engine.build_full_analysis() результата.
+
+    Пакет 18, п.6а/б (владелец, живые кейсы): AVAX "н/д" -- единственным
+    источником цены был get_binance_24h() без фоллбека, а у SPOT-записей
+    WATCHLIST_ZONES вообще нет числового "entry" (только диапазон "long"),
+    так что при любом сбое живого фетча цена пропадала целиком; ETH "1,610"
+    -- при сбое живого фетча код тихо показывал entry (старая цена ВХОДА
+    сигнала) как будто это текущая цена, без единой пометки. Оба случая
+    закрыты одним честным источником -- live_prices.resolve_price(), тот же,
+    что уже используют x100/precision: живая WS-цена с фоллбеком на
+    CoinGecko-цену из get_top500() и ЧЕСТНОЙ пометкой задержки; entry
+    больше никогда не выдаётся за текущую цену."""
+    from live_prices import resolve_price
+
     symbol = item["symbol"]
     sig = item["sig"]
     entry = sig.get("entry")
     score = None
+    coin = None
     try:
         coins = get_top500()
         coin = next((c for c in coins if c["symbol"] == symbol), None)
@@ -3942,13 +3956,14 @@ async def _mv2_tochki_row_text(item: dict) -> str:
     except Exception as e:
         log.info(f"[MENU-V2] tochki row {symbol}: {e}")
 
-    price = entry
+    cg_price = (coin.get("quote", {}).get("USDT", {}).get("price", 0) if coin else 0) or 0
     try:
-        stats = get_binance_24h(symbol)
-        if stats and stats.get("last"):
-            price = stats["last"]
-    except Exception:
-        pass
+        price, price_fresh = resolve_price(symbol, cg_price)
+    except Exception as e:
+        log.info(f"[MENU-V2] tochki price {symbol}: {e}")
+        price, price_fresh = cg_price, ""
+    if not price or price <= 0:
+        price = None
 
     if entry and price:
         tol = entry * _TOCHKI_ZONE_TOLERANCE_PCT / 100
@@ -3963,7 +3978,7 @@ async def _mv2_tochki_row_text(item: dict) -> str:
     else:
         score_txt = "н/д"
     kind_label = " (спот)" if item["kind"] == "spot" else ""
-    price_txt = card_v2.default_price_fmt(price) if price else "н/д"
+    price_txt = f"{card_v2.default_price_fmt(price)} _{price_fresh}_" if price else "н/д"
     return f"{icon} *{symbol}* {item['direction']}{kind_label} — {price_txt} — Сила {score_txt}"
 
 
@@ -3980,7 +3995,16 @@ async def _mv2_render_tochki(bot, chat_id, message_id, filter_mode="all", offset
     ]
     x100_row = [InlineKeyboardButton("🚀 x100 (отдельный скан)", callback_data="x100_scan")]
 
-    lines = ["🎯 *ТОЧКИ*", ""]
+    # Пакет 18, п.6в (владелец, кейс "ETH 73 зелёный vs LINK 73 жёлтый --
+    # рассинхрон"): светофор в ленте -- ЦЕНА ОТНОСИТЕЛЬНО ЗОНЫ ВХОДА
+    # (card_v2.compute_traffic_light), НЕ цвет от Rocket Score -- их
+    # совпадение случайно, отсюда путаница при одинаковом счёте "Сила".
+    # Единого маппинга score->цвет в проекте и не было (никакая функция его
+    # не считает) -- честный фикс не "унификация несуществующей логики", а
+    # явная легенда, снимающая ложную ассоциацию светофора со счётом.
+    lines = ["🎯 *ТОЧКИ*", "",
+              "🟢 цена в зоне входа · 🟡 ждём цену · 🔴 зона не актуальна "
+              "_(светофор — не Rocket Score)_", ""]
     kb_rows = [filter_row, x100_row]
     if not page:
         lines.append("Активных сигналов нет." if offset == 0 else "Больше сигналов нет.")
