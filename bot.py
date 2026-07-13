@@ -345,6 +345,21 @@ _DATA_SOURCE_STATUS = {
     "cmc_global_metrics": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
     "yahoo_finance": {"ok": None, "last_error": None, "last_ts": 0, "consecutive_failures": 0},
 }
+# ПАКЕТ 19, П1 (владелец, регресс): ключи _DATA_SOURCE_STATUS содержат "_" --
+# голый "_" в тексте с parse_mode="Markdown" (legacy) -- маркер курсива;
+# нечётное число подчёркиваний в собранной строке = telegram.error.BadRequest
+# "Can't parse entities" (живой краш /start и кнопки "🏠 Меню", см. PROGRESS.md
+# "ПАКЕТ 19, П0"). Человекочитаемые метки БЕЗ "_" -- тот же паттерн, что уже
+# был безопасно реализован в /radar_status и /health (bot.py, отдельные
+# инлайн-словари) -- здесь общий источник для welcome_text_v2()/
+# mv2_sistema_sources, чтобы не плодить третью копию маппинга.
+SOURCE_DISPLAY_LABELS = {
+    "coingecko_markets": "CoinGecko markets",
+    "coingecko_global": "CoinGecko global",
+    "cmc": "CMC (опц. фоллбек)",
+    "cmc_global_metrics": "CMC global (опц. фоллбек)",
+    "yahoo_finance": "Yahoo (DXY/S&P/Gold/VIX)",
+}
 _SOURCE_ALERT_THRESHOLD = 3   # подряд неудач источника -> алерт владельцу (run_watchdog)
 _source_alerted = set()       # источники, по которым уже отправлен алерт (дедуп, как _job_alerted_stale)
 # ROADMAP: CMC перестал быть критическим источником (решение владельца, 2026-07-10) --
@@ -2834,11 +2849,15 @@ def welcome_text_v2(bot_module) -> str:
     """Приветствие Меню v2: источники -- ЖИВЫЕ из get_data_source_status()
     (старый текст называл "Lookonchain / CMC Топ-500" -- честно неточно/
     устарело, см. спецификацию владельца), риск 1-3% (по методологии, не
-    1-2%, как было). Лимит <=12 строк до кнопок."""
+    1-2%, как было). Лимит <=12 строк до кнопок.
+
+    ПАКЕТ 19, П1 (владелец, регресс): человекочитаемые метки через
+    SOURCE_DISPLAY_LABELS, НЕ сырые ключи (см. докстринг константы --
+    сырой ключ с "_" ломает parse_mode="Markdown", живой краш /start)."""
     SEP = "━━━━━━━━━━━━━━━━━━━━"
     try:
         status = bot_module.get_data_source_status()
-        ok_sources = [name for name, s in status.items() if s.get("ok")]
+        ok_sources = [SOURCE_DISPLAY_LABELS.get(name, name.replace("_", " ")) for name, s in status.items() if s.get("ok")]
     except Exception:
         ok_sources = []
     src_line = ", ".join(ok_sources) if ok_sources else "проверяются..."
@@ -3003,8 +3022,26 @@ async def send_coin(bot, chat_id, symbol, slug, a, text):
             except Exception as e2:
                 log.error(f"send_photo split FAILED {symbol}: {e2}")
 
-    await bot.send_message(chat_id, text, parse_mode="HTML",
-                           reply_markup=kb, disable_web_page_preview=True)
+    try:
+        await bot.send_message(chat_id, text, parse_mode="HTML",
+                               reply_markup=kb, disable_web_page_preview=True)
+    except Exception as e3:
+        # ПАКЕТ 19, П1 (владелец, регресс "живой пост без ряда [Меню]"): если
+        # ВСЕ попытки выше провалились (обычно из-за одной и той же поломки в
+        # `text` -- например невалидный HTML-фрагмент, та же категория бага,
+        # что Markdown-краш welcome_text_v2() в П0), эта ветка раньше не была
+        # накрыта try/except -- исключение улетало наверх и получатель не
+        # получал НИЧЕГО, ни карточки, ни кнопки "🏠 Меню". Гарантированный
+        # последний рубеж -- голый текст без parse_mode (не может сломаться
+        # на разметке) с ОДНОЙ кнопкой домой, чтобы пользователь не застревал
+        # без навигации, даже если сама карточка сигнала не смогла уйти.
+        log.error(f"send_message FAILED {symbol}: {type(e3).__name__}: {e3}")
+        try:
+            await bot.send_message(
+                chat_id, f"⚠️ Не удалось отправить карточку {symbol} (ошибка форматирования).",
+                reply_markup=attach_home_row(None))
+        except Exception as e4:
+            log.error(f"send_message last-resort FAILED {symbol}: {type(e4).__name__}: {e4}")
 
 async def send_signals_batch(bot, chat_id, coins):
     analyzed = [(c, full_analysis(c)) for c in coins]
@@ -4568,7 +4605,8 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
             lines = ["📡 *Статус источников*", ""]
             for name, s in status.items():
                 icon = "🟢" if s.get("ok") else "🔴"
-                lines.append(f"{icon} {name}")
+                label = SOURCE_DISPLAY_LABELS.get(name, name.replace("_", " "))
+                lines.append(f"{icon} {label}")
         except Exception as e:
             lines = ["📡 *Статус источников*", "", f"н/д ({e})"]
         await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
