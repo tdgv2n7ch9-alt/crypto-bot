@@ -2502,6 +2502,9 @@ def check_watchlist_alerts_from_level_watch(coins: list) -> list:
                     "lo": lo, "hi": hi,
                     "bias": bias, "emoji": "🟢" if bias == "LONG" else "🔴",
                     "note": zone.get("note", ""), "source": source,
+                    # Пакет 18, п.13.4: tier="author" -- заголовок алерта
+                    # переключается на "⭐ ЛИМИТКИ", см. check_watchlist().
+                    "tier": zone.get("tier"),
                 })
 
     return alerts
@@ -2808,7 +2811,10 @@ PRECISION_FA_MIGRATED = os.getenv("PRECISION_FA_MIGRATED", "true").strip().lower
 
 
 def main_kb_v2():
+    # Пакет 18, п.13 (владелец, финально): "⭐ ЛИМИТКИ" -- первым разделом,
+    # НАД ТОЧКИ. Разметки владельца = лучший сигнал в системе (см. CLAUDE.md).
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ ЛИМИТКИ", callback_data="mv2_limitki")],
         [InlineKeyboardButton("🎯 ТОЧКИ",   callback_data="mv2_tochki")],
         [InlineKeyboardButton("📊 РЫНОК",   callback_data="mv2_rynok")],
         [InlineKeyboardButton("📡 РАДАРЫ",  callback_data="mv2_radary")],
@@ -3903,6 +3909,217 @@ def _mv2_back_kb(extra_rows=None):
     return InlineKeyboardMarkup(rows)
 
 
+# ── ⭐ ЛИМИТКИ (Пакет 18, п.13, владелец, финальное название) ───────────────
+# Отдельный раздел под разметки автора watch_zones.json -- применяются 1в1,
+# без пересчёта/интерпретации движком (см. CLAUDE.md: "разметки владельца --
+# лучший сигнал в системе"). Единственное, что бот добавляет от себя --
+# карточка ИСПОЛНЕНИЯ (лестница/SL/размер позиции/ликвидации/rug-строка) по
+# тапу, не сам анализ зоны.
+
+def _limitki_collect_zones() -> list:
+    """Все author-tier зоны из watch_zones.json, по одной строке на зону (не
+    на символ -- у ETH, например, 5 независимых зон, каждая своя строка,
+    "1в1" с разметкой). INFO-зоны (маркеры уровня, side="INFO") пропускаются
+    -- у них нет стороны для сделки, тот же принцип, что
+    check_watchlist_alerts_from_level_watch()."""
+    try:
+        config = level_watch.load_watch_zones()
+    except Exception as e:
+        log.info(f"[LIMITKI] watch_zones read: {e}")
+        return []
+    items = []
+    for pair_symbol, zones in config.items():
+        if pair_symbol in ("updated", "source") or not isinstance(zones, list):
+            continue
+        for zone in zones:
+            if zone.get("tier") != "author":
+                continue
+            if zone.get("side") not in ("LONG", "SHORT"):
+                continue
+            items.append({"symbol": pair_symbol.upper().replace("USDT", ""), "zone": zone})
+    items.sort(key=lambda it: (it["symbol"], it["zone"].get("prio", 99)))
+    return items
+
+
+def _limitki_zone_status(side: str, lo: float, hi: float, price: float):
+    """Статус 1 из 3 (владелец): ЖДЁМ ЦЕНУ / ЦЕНА В ЗОНЕ / ОТРАБОТАНА --
+    стейтлес, вычисляется только из текущей цены и границ зоны (без
+    персистентного "уже коснулась" флага -- переживает рестарт без потери
+    состояния). ОТРАБОТАНА = цена уже прошла зону НАСКВОЗЬ и ушла в сторону
+    тейка (для LONG -- выше hi, для SHORT -- ниже lo); честно означает
+    "возможность мимо" (был там или нет трейдер -- бот не знает и не
+    утверждает), не заявление об исполненной сделке. Возвращает
+    (label, distance_pct) -- distance_pct = 0 внутри зоны, иначе % от
+    текущей цены до ближней границы."""
+    lo, hi = min(lo, hi), max(lo, hi)
+    if lo <= price <= hi:
+        return "ЦЕНА В ЗОНЕ", 0.0
+    if side == "LONG":
+        if price > hi:
+            return "ОТРАБОТАНА", (price - hi) / price * 100 if price else 0.0
+        return "ЖДЁМ ЦЕНУ", (lo - price) / price * 100 if price else 0.0
+    else:  # SHORT
+        if price < lo:
+            return "ОТРАБОТАНА", (lo - price) / price * 100 if price else 0.0
+        return "ЖДЁМ ЦЕНУ", (price - hi) / price * 100 if price else 0.0
+
+
+async def _limitki_row_text(item: dict) -> str:
+    """Одна строка ленты ЛИМИТКИ -- 1в1 с разметкой (side/зона/prio/note),
+    статус и дистанция посчитаны от честной живой цены (тот же источник,
+    что Пакет 18 п.6 -- live_prices.resolve_price с CoinGecko-фоллбеком)."""
+    from live_prices import resolve_price
+    symbol = item["symbol"]
+    zone = item["zone"]
+    side = zone["side"]
+    lo, hi = zone["lo"], zone["hi"]
+
+    cg_price = 0.0
+    try:
+        coins = get_top500()
+        coin = next((c for c in coins if c["symbol"] == symbol), None)
+        cg_price = (coin.get("quote", {}).get("USDT", {}).get("price", 0) if coin else 0) or 0
+    except Exception as e:
+        log.info(f"[LIMITKI] price {symbol}: {e}")
+
+    try:
+        price, price_fresh = resolve_price(symbol, cg_price)
+    except Exception:
+        price, price_fresh = cg_price, ""
+    price = price or 0
+
+    if price:
+        status, dist = _limitki_zone_status(side, lo, hi, price)
+        status_icon = {"ЦЕНА В ЗОНЕ": "🟢", "ЖДЁМ ЦЕНУ": "🟡", "ОТРАБОТАНА": "⚪"}[status]
+        status_txt = f"{status_icon} {status} ({dist:.1f}%)"
+    else:
+        status_txt = "н/д (нет цены)"
+
+    prio = zone.get("prio")
+    prio_txt = f" · prio {prio}" if prio is not None else ""
+    lines = [f"*{symbol}* {side} {fp(lo)}–{fp(hi)}{prio_txt} — {status_txt}"]
+    note = zone.get("note")
+    if note:
+        lines.append(f"  _{note}_")
+    return "\n".join(lines)
+
+
+async def _mv2_render_limitki(bot, chat_id, message_id):
+    items = _limitki_collect_zones()
+    lines = ["⭐ *ЛИМИТКИ*", "",
+              "_Разметки владельца, 1в1 -- без пересчёта движком._", ""]
+    kb_rows = []
+    if not items:
+        lines.append("Активных зон автора нет.")
+    for it in items:
+        try:
+            lines.append(await _limitki_row_text(it))
+        except Exception as e:
+            lines.append(f"⚠️ {it['symbol']}: ошибка построения строки ({e})")
+        kb_rows.append([InlineKeyboardButton(
+            f"🎯 Исполнение {it['symbol']} {it['zone']['side']}",
+            callback_data=f"mv2_limitki_card_{it['symbol']}_{it['zone']['side']}_"
+                          f"{it['zone']['lo']}_{it['zone']['hi']}")])
+        lines.append("")
+    kb_rows.append([InlineKeyboardButton("🏠 Меню", callback_data="show_menu")])
+    text = "\n".join(lines)
+    if len(text) > 4090:
+        text = text[:4087] + "..."
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                 parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb_rows))
+
+
+async def _limitki_execution_card_text(symbol: str, side: str, lo: float, hi: float) -> str:
+    """Единственное, что бот добавляет ОТ СЕБЯ к разметке автора (владелец,
+    п.13.3): карточка ИСПОЛНЕНИЯ -- лимитки 50/30/20 внутри зоны автора (сама
+    зона НЕ пересчитывается, только разбивается на транши), SL за зоной
+    +2-3% (SR_SL_BUFFER_PCT -- тот же буфер, что x100/build_trade_from_structure,
+    Пакет 18 п.5), размер позиции 1/2/3% для депозита $1000, ликвидации,
+    rug-строка если WARN. Ладдер использует ТОТ ЖЕ принцип "entry1 -- ближняя
+    к цене граница", что ta_extra.build_trade_from_structure()."""
+    lo, hi = min(lo, hi), max(lo, hi)
+    if side == "LONG":
+        entry1, entry3 = hi, lo
+        sl = lo * (1 - ta_extra.SR_SL_BUFFER_PCT / 100)
+    else:
+        entry1, entry3 = lo, hi
+        sl = hi * (1 + ta_extra.SR_SL_BUFFER_PCT / 100)
+    entry2 = (entry1 + entry3) / 2
+
+    capital_table = card_v2.compute_capital_table(entry1, sl)
+    row1000 = capital_table.get(1000, {})
+
+    lines = [
+        f"⭐ *ЛИМИТКИ — {symbol} {side}*",
+        f"Зона автора: {fp(lo)}–{fp(hi)}",
+        "",
+        "📍 *Лимитки (DCA 50/30/20):*",
+        f"  Вход 1 (50%): {fp(entry1)}",
+        f"  Вход 2 (30%): {fp(entry2)}",
+        f"  Вход 3 (20%): {fp(entry3)}",
+        f"  SL: {fp(sl)} (за зоной, буфер {ta_extra.SR_SL_BUFFER_PCT:.1f}%)",
+        "",
+        "💰 *Размер позиции (депозит $1000):*",
+    ]
+    for pct in card_v2.RISK_PCTS:
+        r = row1000.get(pct, {})
+        pos = r.get("position_usd")
+        risk = r.get("risk_usd")
+        if pos is not None:
+            lines.append(f"  {pct}% риска: позиция ${pos:,.0f} (риск ${risk:,.0f})")
+        else:
+            lines.append(f"  {pct}% риска: н/д (SL совпадает со входом)")
+
+    try:
+        liq_line = level_watch.format_liquidation_cluster_line(
+            symbol, {"lo": lo, "hi": hi, "side": side}, get_liq_data_fn=get_liq_data)
+        if liq_line:
+            lines += ["", liq_line]
+    except Exception as e:
+        log.info(f"[LIMITKI] liq {symbol}: {e}")
+
+    try:
+        coins = get_top500()
+        coin = next((c for c in coins if c["symbol"] == symbol), None)
+        rug_line = get_cached_rug_line(symbol, coin)
+        if rug_line:
+            lines += ["", rug_line]
+    except Exception as e:
+        log.info(f"[LIMITKI] rug {symbol}: {e}")
+
+    lines += ["", "⚠️ Только лимитные ордера, не входить по рынку. Разметка владельца -- 1в1."]
+    return "\n".join(lines)
+
+
+def _check_author_zone_conflict(symbol: str, side: str, price: float) -> str:
+    """Пакет 18, п.13.5 (владелец): конфликтная строка в ЧУЖИХ сигналах
+    (не author-зонах самих) -- если символ+цена оказались в пределах 2% от
+    author-зоны ПРОТИВОПОЛОЖНОЙ стороны, честно предупреждаем, а не молчим.
+    Пустая строка -- конфликта нет (не показывается вообще, тот же принцип,
+    что rug-строка)."""
+    if not price:
+        return ""
+    try:
+        config = level_watch.load_watch_zones()
+    except Exception:
+        return ""
+    pair_symbol_variants = (f"{symbol.upper()}USDT",)
+    for pair_symbol, zones in config.items():
+        if pair_symbol not in pair_symbol_variants or not isinstance(zones, list):
+            continue
+        for zone in zones:
+            if zone.get("tier") != "author" or zone.get("side") not in ("LONG", "SHORT"):
+                continue
+            if zone["side"] == side:
+                continue  # тот же side -- не конфликт, подтверждение
+            lo, hi = min(zone["lo"], zone["hi"]), max(zone["lo"], zone["hi"])
+            near = lo * (1 - 2 / 100)
+            far = hi * (1 + 2 / 100)
+            if near <= price <= far:
+                return "⚠️ против зоны автора"
+    return ""
+
+
 def _mv2_tochki_collect_items(filter_mode: str = "all") -> list:
     """Собирает элементы ленты ТОЧКИ из уже существующих TOP_LONG_SIGNALS/
     TOP_SHORT_SIGNALS/SPOT_PORTFOLIO -- никакой новой сигнальной логики,
@@ -3979,7 +4196,19 @@ async def _mv2_tochki_row_text(item: dict) -> str:
         score_txt = "н/д"
     kind_label = " (спот)" if item["kind"] == "spot" else ""
     price_txt = f"{card_v2.default_price_fmt(price)} _{price_fresh}_" if price else "н/д"
-    return f"{icon} *{symbol}* {item['direction']}{kind_label} — {price_txt} — Сила {score_txt}"
+    line = f"{icon} *{symbol}* {item['direction']}{kind_label} — {price_txt} — Сила {score_txt}"
+
+    # Пакет 18, п.13.5 (владелец): конфликт с зоной автора в пределах 2% --
+    # честная строка вместо тишины, разметки владельца не должны молча
+    # перебиваться АВТО-сигналом противоположного направления.
+    try:
+        conflict = _check_author_zone_conflict(symbol, item["direction"], price)
+        if conflict:
+            line += f"\n  {conflict}"
+    except Exception as e:
+        log.info(f"[MENU-V2] tochki conflict {symbol}: {e}")
+
+    return line
 
 
 async def _mv2_render_tochki(bot, chat_id, message_id, filter_mode="all", offset=0):
@@ -4217,7 +4446,24 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
     bot = ctx.bot
     chat_id = q.message.chat_id
 
-    if data in ("mv2_tochki", "mv2_tochki_all", "mv2_tochki_spot", "mv2_tochki_fut") \
+    if data == "mv2_limitki":
+        await q.edit_message_text("⭐ Обновляю ЛИМИТКИ...", parse_mode="Markdown")
+        await _mv2_render_limitki(bot, chat_id, q.message.message_id)
+
+    elif data.startswith("mv2_limitki_card_"):
+        rest = data[len("mv2_limitki_card_"):]
+        try:
+            symbol, side, lo_s, hi_s = rest.split("_", 3)
+            lo, hi = float(lo_s), float(hi_s)
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await q.answer("Строю карточку исполнения...")
+        text = await _limitki_execution_card_text(symbol, side, lo, hi)
+        await bot.send_message(chat_id, text, parse_mode="Markdown",
+                                reply_markup=attach_home_row(None))
+
+    elif data in ("mv2_tochki", "mv2_tochki_all", "mv2_tochki_spot", "mv2_tochki_fut") \
             or data.startswith("mv2_tochki_more_"):
         filter_mode, offset = "all", 0
         if data == "mv2_tochki_spot":
@@ -6659,19 +6905,41 @@ async def check_watchlist(bot, chat_ids, coins):
         # DUMP 20:55.
         rug_line = get_cached_rug_line(sym, coin_map.get(sym))
         rug_block = f"{rug_line}\n\n" if rug_line else ""
-        text = (
-            f" *   !*\n"
-            f" {now_utc3()}\n\n"
-            f"{al['emoji']} *{sym}USDT  {al['bias']}*\n"
-            f" : `{fp(al['price'])}`\n"
-            f" : `{fp(al['lo'])}  {fp(al['hi'])}`\n"
-            f"{liq_line}\n\n"
-            f"{rug_block}"
-            f" {al['note']}\n"
-            f" : {al['source']}\n\n"
-            f" : 2%  | SL \n\n"
-            f"#{sym}USDT"
-        )
+        # Пакет 18, п.13.4 (владелец): author-зона ("галочка автора",
+        # tier="author") -- отдельный заголовок "⭐ ЛИМИТКИ" + та же карточка
+        # ИСПОЛНЕНИЯ, что открывается по тапу в разделе меню. По ходу найдена
+        # и исправлена честная находка: заголовок этого алерта для обычных
+        # (не-author) зон был пуст (одни пробелы вместо текста) с прошлой
+        # сессии -- py_compile/тесты синтаксис не ловят, содержание строки не
+        # проверяли; восстановлен по образцу level_watch.format_level_alert().
+        if al.get("tier") == "author":
+            try:
+                exec_card = await _limitki_execution_card_text(sym, al["bias"], al["lo"], al["hi"])
+            except Exception as e:
+                exec_card = f"⚠️ Не удалось построить карточку исполнения: {e}"
+            text = (
+                f"⭐ *ЛИМИТКИ — {sym}USDT {al['bias']} — цена в зоне*\n"
+                f"🕐 {now_utc3()}\n\n"
+                f"💰 Цена: `{fp(al['price'])}`\n"
+                f"{liq_line}\n\n"
+                f"{rug_block}"
+                f"{exec_card}\n\n"
+                f"#{sym}USDT"
+            )
+        else:
+            text = (
+                f"🎯 *Цена вошла в зону!*\n"
+                f"🕐 {now_utc3()}\n\n"
+                f"{al['emoji']} *{sym}USDT — {al['bias']}*\n"
+                f"💰 Цена: `{fp(al['price'])}`\n"
+                f"📍 Зона: `{fp(al['lo'])} – {fp(al['hi'])}`\n"
+                f"{liq_line}\n\n"
+                f"{rug_block}"
+                f"📝 {al['note']}\n"
+                f"🗂 Источник: {al['source']}\n\n"
+                f"⚠️ Толерантность: 2% | SL обязателен\n\n"
+                f"#{sym}USDT"
+            )
         kb = attach_home_row(InlineKeyboardMarkup([[
             InlineKeyboardButton(" TradingView", url=tv_link(sym)),
         ]]))
