@@ -12031,6 +12031,7 @@ def main():
     # subscribers.startup_sync()/signal_journal.startup_sync() -- см. комментарий там же
     # про гонку немедленного первого тика (next_run_time=now()) с загрузкой подписчиков.
     log.info(" BEST TRADE v32.0 | Supply/Demand | Real-time signals | UTC+3")
+    log.info(f"[MENU-V2] MENU_V2_ENABLED={MENU_V2_ENABLED}")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
