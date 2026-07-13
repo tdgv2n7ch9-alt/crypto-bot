@@ -80,6 +80,84 @@ def test_github_get_shadow_sync_not_configured_returns_none_none(monkeypatch):
     assert sha is None
 
 
+# --- НАХОДКА 2026-07-13 (владелец "да" -- Находка 1): Contents API отдаёт
+# encoding="none"/content="" для файлов >1MB -- json.loads("") даёт ровно
+# "Expecting value: line 1 column 1 (char 0)", подтверждено живьём прямым запросом
+# (journal/shadow_signals.json = 1 049 083 байт на момент находки). Фикс -- Git Blobs
+# API fallback (лимит 100MB) по тому же sha, вместо капа файла (shadow_signals.json
+# сознательно НЕ капается, см. докстринг модуля). -----------------------------------
+
+import base64
+import json
+
+
+def test_github_get_shadow_sync_large_file_falls_back_to_blob_api(monkeypatch):
+    """encoding=none/content="" (файл >1MB) -> второй запрос к git/blobs/{sha},
+    декодируется корректно."""
+    _github_ready(monkeypatch)
+    records_payload = {"schema_version": 1, "records": [{"symbol": "BTCUSDT", "ts": 111.0}]}
+    blob_content_b64 = base64.b64encode(json.dumps(records_payload).encode()).decode()
+
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        if "/git/blobs/" in url:
+            assert url.endswith("/git/blobs/abc123sha")
+            return _FakeResponse(status_code=200, json_data={"content": blob_content_b64})
+        return _FakeResponse(status_code=200, json_data={
+            "content": "", "encoding": "none", "sha": "abc123sha",
+        })
+
+    monkeypatch.setattr(se.requests, "get", fake_get)
+    records, sha = se._github_get_shadow_sync()
+
+    assert len(calls) == 2  # Contents API, затем Git Blobs API
+    assert records == [{"symbol": "BTCUSDT", "ts": 111.0}]
+    assert sha == "abc123sha"
+
+
+def test_github_get_shadow_sync_small_file_does_not_call_blob_api(monkeypatch):
+    """Файл <1MB -- encoding="base64" как обычно, НЕ должен делать второй запрос
+    (регрессия -- fallback только для encoding=='none')."""
+    _github_ready(monkeypatch)
+    records_payload = {"schema_version": 1, "records": [{"symbol": "ETHUSDT", "ts": 222.0}]}
+    content_b64 = base64.b64encode(json.dumps(records_payload).encode()).decode()
+
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        return _FakeResponse(status_code=200, json_data={
+            "content": content_b64, "encoding": "base64", "sha": "def456sha",
+        })
+
+    monkeypatch.setattr(se.requests, "get", fake_get)
+    records, sha = se._github_get_shadow_sync()
+
+    assert len(calls) == 1  # только Contents API, blob fallback не тронут
+    assert records == [{"symbol": "ETHUSDT", "ts": 222.0}]
+    assert sha == "def456sha"
+
+
+def test_github_get_shadow_sync_blob_api_failure_returns_false_not_crash(monkeypatch):
+    """Если и блоб-запрос падает -- честная ошибка (False, None), не крэш и не
+    подмена на пустой файл."""
+    _github_ready(monkeypatch)
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/git/blobs/" in url:
+            raise ConnectionError("blob fetch failed")
+        return _FakeResponse(status_code=200, json_data={
+            "content": "", "encoding": "none", "sha": "abc123sha",
+        })
+
+    monkeypatch.setattr(se.requests, "get", fake_get)
+    records, sha = se._github_get_shadow_sync()
+    assert records is False
+    assert sha is None
+
+
 def test_sync_aborts_on_get_error_does_not_attempt_put(monkeypatch):
     """Ключевой регрессионный тест: транзиентная ошибка GET не должна приводить к
     попытке PUT (риск создания файла без sha поверх существующего)."""

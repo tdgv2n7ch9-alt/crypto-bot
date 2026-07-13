@@ -160,6 +160,18 @@ def _github_get_shadow_sync():
       - Файла действительно ещё нет (404) -> ([], None) -- пустой список, безопасно создавать.
       - Запрос не удался (сеть/парсинг/rate-limit) -> (False, None) -- ОШИБКА, не пустой
         файл; вызывающий код обязан прервать синк, а не создавать файл поверх существующего.
+
+    НАХОДКА 2026-07-13 (owner "да" -- Находка 1, п.1-3): корневая причина 16+-часового
+    молчания shadow-потока -- GitHub Contents API отдаёт `content` ТОЛЬКО для файлов
+    <1MB; для файлов больше отдаёт `encoding: "none"`, `content: ""` -- реальный размер
+    journal/shadow_signals.json на момент находки: 1 049 083 байт, пересёк порог.
+    `json.loads("")` -- ровно ошибка "Expecting value: line 1 column 1 (char 0)", которая
+    молча повторялась в логах КАЖДЫЙ раз (раньше в print(), см. находка 1). Подтверждено
+    живьём прямым запросом к Contents API (не догадка). Файл ЦЕЛЕНАПРАВЛЕННО НЕ капается
+    (в отличие от security_log.py -- см. докстринг наверху этого файла: "каждая запись --
+    ценные данные для анализа надолго"), поэтому фикс -- не урезать файл, а переключиться
+    на Git Blobs API (лимит 100MB, тот же `sha`, который Contents API уже отдаёт) для
+    случая `encoding == "none"`, вместо капа/потери исторических данных.
     Синхронно -- вызывать только через run_in_executor из async-кода (см.
     signal_journal._github_get_file_sync, тот же паттерн)."""
     if not signal_journal._github_configured():
@@ -175,7 +187,16 @@ def _github_get_shadow_sync():
             return [], None
         r.raise_for_status()
         data = r.json()
-        content = base64.b64decode(data["content"]).decode()
+        if data.get("encoding") == "none":
+            # Файл >1MB -- Contents API не отдаёт content, см. находку в докстринге выше.
+            # Тот же sha уже есть -- фетчим блоб напрямую (лимит Git Blobs API 100MB).
+            blob_r = requests.get(f"{signal_journal._github_api_base()}/git/blobs/{data['sha']}",
+                                   headers=signal_journal._github_headers(), timeout=25)
+            blob_r.raise_for_status()
+            blob_data = blob_r.json()
+            content = base64.b64decode(blob_data["content"]).decode()
+        else:
+            content = base64.b64decode(data["content"]).decode()
         payload = json.loads(content)
         records = payload.get("records", []) if isinstance(payload, dict) else []
         return records, data["sha"]
