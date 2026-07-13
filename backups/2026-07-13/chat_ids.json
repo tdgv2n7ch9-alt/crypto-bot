@@ -1,0 +1,14 @@
+{
+  "subscribers": {
+    "7009350191": {
+      "subscribed": true,
+      "updated_ts": 1783893486.3783417
+    },
+    "-1": {
+      "subscribed": false,
+      "role": "NONE",
+      "role_expires_ts": null,
+      "updated_ts": 1783896305.6765382
+    }
+  }
+}
