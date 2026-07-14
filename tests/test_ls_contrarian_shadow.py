@@ -15,6 +15,11 @@ import shadow_engine as se
 
 def _iso(monkeypatch, tmp_path):
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
+    # П-Ротация (владелец): get_local_records() по умолчанию include_archive=True и
+    # читает se.ARCHIVE_DIR -- без изоляции тест видел реальный journal/archive/ на
+    # диске (после recovery-коммита с 4 записями) и падал на "8 more items". Тот же
+    # паттерн, что tests/test_shadow_rotation.py.
+    monkeypatch.setattr(se, "ARCHIVE_DIR", str(tmp_path / "archive"))
     # GitHub-синк не должен пытаться реально стучаться в сеть в тестах.
     monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: None)
 

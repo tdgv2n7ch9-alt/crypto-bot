@@ -1169,6 +1169,85 @@ async def log_auto_ema_stack_shadow_async(symbol: str, a: dict, promoted_live: b
     return True
 
 
+# ── Фаза B Derivatives, shadow-continuation инкремент 1 (владелец, задание ──
+# после закрытия ночи 15->16.07: "Порядок: текущий инкремент Фазы B (CVD +
+# premium shadow) НЕ прерывать") -- CVD + Perp/Spot премия по КАЖДОМУ AUTO-
+# кандидату (не только promoted), для будущей корреляции с исходами. Тот же
+# безопасный паттерн, что EMA-стек-shadow выше: флаг первой строкой функции,
+# гарантированный no-op ДО любого I/O при DERIV_AUTO_SHADOW_ENABLED=False.
+#
+# Честная оговорка про стоимость (см. PROGRESS.md checkpoint этого инкремента):
+# CVD -- уже расшаренное состояние Whale Radar (тот же WS-поток, что whale-
+# детекция), НОЛЬ новых сетевых вызовов. Perp/Spot премия (bot.get_perp_spot_
+# premium()) -- ДВА новых блокирующих REST-запроса к Bybit НА КАЖДЫЙ AUTO-
+# кандидат (без кэша, в отличие от get_options_data()) -- реальная добавленная
+# нагрузка, если флаг когда-нибудь включат в бою на полном AUTO_SCAN_CAP
+# трафике; вызывается через run_in_executor, чтобы не блокировать event loop
+# цикла send_scheduled(), но сетевая стоимость остаётся -- владелец должен
+# видеть эту цифру ПЕРЕД словом "да", не только факт "флаг есть".
+#
+# Честная оговорка про сами данные (whale_radar.WhaleRadarState.cvd_summary()
+# докстринг): символ без накопленных CVD-данных возвращает те же нули/
+# "нейтрально", что и реально плоский поток -- из cvd_1h==0 разделить эти два
+# случая нельзя, это ограничение источника, не баг записи ниже.
+DERIV_AUTO_SHADOW_ENABLED = False
+
+
+def _build_auto_derivatives_shadow_record(symbol: str, a: dict, promoted_live: bool,
+                                           bot_module, premium: dict) -> dict:
+    """CVD 1ч/4ч через bot_module.get_cvd_summary() (уже расшаренное состояние Whale
+    Radar) + Perp/Spot премия, переданная вызывающей стороной (`premium` -- уже
+    посчитана через run_in_executor, см. log_auto_derivatives_shadow_async ниже, эта
+    функция сама сеть не трогает). Согласие CVD-знака с направлением сигнала -- та же
+    логика, что карточка Институционал показывает словами (bot.py:5548-5550, 5695-5697),
+    не новая эвристика."""
+    direction = "long" if a.get("is_long") else "short"
+    cvd = bot_module.get_cvd_summary(f"{symbol}USDT")
+    cvd_1h = cvd.get("cvd_1h", 0)
+    cvd_4h = cvd.get("cvd_4h", 0)
+    aligned_1h = (cvd_1h > 0 and direction == "long") or (cvd_1h < 0 and direction == "short")
+    opposed_1h = (cvd_1h > 0 and direction == "short") or (cvd_1h < 0 and direction == "long")
+    premium_ok = bool(premium.get("ok"))
+    premium_pct = premium.get("premium_pct") if premium_ok else None
+    return {
+        "ts": time.time(),
+        "type": "auto_derivatives_shadow",
+        "symbol": symbol,
+        "direction": direction,
+        "promoted_live": promoted_live,
+        "cvd_1h": cvd_1h,
+        "cvd_4h": cvd_4h,
+        "cvd_aligned_1h": aligned_1h,
+        "cvd_opposed_1h": opposed_1h,
+        "premium_ok": premium_ok,
+        "premium_pct": premium_pct,
+    }
+
+
+async def log_auto_derivatives_shadow_async(symbol: str, a: dict, promoted_live: bool,
+                                             bot_module) -> bool:
+    """Вызывается из bot.send_scheduled() ПОСЛЕ того, как боевое решение уже принято --
+    см. DERIV_AUTO_SHADOW_ENABLED докстринг выше. При выключенном флаге -- гарантированный
+    no-op (флаг первой строкой, ДО любого I/O, включая Perp/Spot запрос)."""
+    if not DERIV_AUTO_SHADOW_ENABLED:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        premium = await loop.run_in_executor(None, bot_module.get_perp_spot_premium, symbol)
+        record = _build_auto_derivatives_shadow_record(symbol, a, promoted_live, bot_module, premium)
+    except Exception as e:
+        log.error(f"shadow_engine.log_auto_derivatives_shadow_async: build failed for {symbol}: {e}")
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        log.error(f"shadow_engine: GitHub sync failed for auto_derivatives_shadow ({symbol}): {e}")
+    return True
+
+
 # ── ПАКЕТ 19, П4 (владелец): L/S ratio -- shadow A/B "за тренд vs контр" ──
 #
 # Живьём (Whale Radar, bot._analyze_whale_signal(), bot.py:5985-5992): L/S
