@@ -4339,6 +4339,8 @@ async def _mv2_render_tochki(bot, chat_id, message_id, filter_mode="all", offset
         InlineKeyboardButton(f"{mark('fut')}Фьючерс ({counts['fut']})", callback_data="mv2_tochki_fut"),
     ]
     x100_row = [InlineKeyboardButton("🚀 x100 (отдельный скан)", callback_data="x100_scan")]
+    # ПАКЕТ UX-НАВИГАЦИЯ п.2 (владелец, живая приёмка 14.07).
+    glossary_row = [InlineKeyboardButton("❓ Словарь", callback_data="glossary_tochki")]
 
     # Пакет 18, п.6в (владелец, кейс "ETH 73 зелёный vs LINK 73 жёлтый --
     # рассинхрон"): светофор в ленте -- ЦЕНА ОТНОСИТЕЛЬНО ЗОНЫ ВХОДА
@@ -4358,7 +4360,7 @@ async def _mv2_render_tochki(bot, chat_id, message_id, filter_mode="all", offset
     inbox.mark_read("tochki")
     lines += ["🟢 цена в зоне входа · 🟡 ждём цену · 🔴 зона не актуальна "
               "_(светофор — не Rocket Score)_", ""]
-    kb_rows = [filter_row, x100_row]
+    kb_rows = [filter_row, x100_row, glossary_row]
     if not page:
         lines.append("Активных сигналов нет." if offset == 0 else "Больше сигналов нет.")
     for it in page:
@@ -4679,6 +4681,18 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
             lines = ["📡 *Статус источников*", "", f"н/д ({e})"]
         await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
                                    reply_markup=_mv2_back_kb(back_to="mv2_sistema"))
+
+    elif data.startswith("glossary_"):
+        # ПАКЕТ UX-НАВИГАЦИЯ п.2 (владелец, живая приёмка 14.07): [❓ Словарь]
+        # на карточках -- расшифровка ТОЛЬКО терминов этой карточки, не
+        # полный /терминология список. "Назад" -- на саму карточку
+        # (не на раздел), чтобы тап по Словарю не терял контекст экрана.
+        card = data[len("glossary_"):]
+        card_back = {"whale": "whale_status", "pump": "pump_radar",
+                     "tochki": "mv2_tochki", "x100": "x100_scan"}.get(card)
+        text = glossary.format_card_glossary_text(card)
+        await q.edit_message_text(text, parse_mode="Markdown",
+                                   reply_markup=attach_home_row(None, back_to=card_back))
 
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
