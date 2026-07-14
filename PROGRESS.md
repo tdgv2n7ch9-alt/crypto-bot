@@ -8715,3 +8715,30 @@ py_compile отдельным шагом чисто (`bot.py`, `glossary.py`,
 правка), подтвердить оба SUCCESS без ручного вмешательства, живая
 проверка `/zones` (railway run) на новые BTCUSDT/ADAUSDT зоны,
 Telegram-подтверждение владельцу.
+
+## 2026-07-14 -- deploy.sh первый пуш SUCCESS + x100 Словарь-кнопка
+
+Первый пуш через `tools/deploy.sh` (deploy-resilience + разметка Королёва,
+коммит 27e40dc -> запушенный 37c4503): SKIPPED не было -- сразу
+`SUCCESS`, deployment id `9a5f3eed-f20a-4d6d-882d-04785c490ecc`, без
+ручного вмешательства. watchPatterns hit: yes (bot.py и др. затронуты).
+
+Второй шаг для DoD ("два подряд пуша без ручного вмешательства"):
+маленькая безопасная правка UX-НАВИГАЦИЯ п.2 -- кнопка [❓ Словарь] на
+x100-карточке (единственный живой x100_scan-рендер -- `_cmd_x100_scanner_body`,
+bot.py ~10967; найден и НЕ трогался соседний мёртвый код -- дублирующий
+`elif data == "x100_scan":` в callback_handler на ~5448, недостижим,
+т.к. первый `elif data == "x100_scan":` на ~4754 уже перехватывает --
+не наша задача сейчас, не трогаю). Кнопка ведёт на `glossary_x100`,
+`card_back` для x100 уже был замаплен на `x100_scan` в прошлом шаге.
+
+py_compile отдельным шагом чисто, `pytest` -- 1150 passed, 1 skipped
+(без регрессий).
+
+**СЕЙЧАС ДЕЛАЮ**: коммичу x100-правку и пушу ВТОРОЙ раз через
+`tools/deploy.sh` -- вторая из двух подряд проверок DoD.
+**СЛЕДУЮЩИЙ**: если SUCCESS -- DoD deploy-resilience закрыт; живая
+проверка `/zones` (railway run) на новые BTCUSDT/ADAUSDT зоны,
+Telegram-подтверждение владельцу, затем продолжить остаток
+UX-НАВИГАЦИЯ (back_to для razbor/limitki-card/institutional/
+trend_analysis/top_trades/top_spot).

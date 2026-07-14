@@ -10964,10 +10964,10 @@ async def _cmd_x100_scanner_body(update, ctx):
             else:
                 lines.append("\n❌ Кандидатов не найдено")
             lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Обновить", callback_data="x100_scan"),
-                 InlineKeyboardButton("🏠 Меню",    callback_data="show_menu")],
-            ])
+            kb = attach_home_row(
+                [[InlineKeyboardButton("🔄 Обновить", callback_data="x100_scan"),
+                  InlineKeyboardButton("❓ Словарь", callback_data="glossary_x100")]]
+            )
             text = "\n".join(lines)
             if len(text) > 4090: text = text[:4087] + "..."
             return text, kb
