@@ -6520,7 +6520,12 @@ async def send_scheduled(bot: Bot):
                 continue
 
             slug = coin.get("slug", sym.lower())
-            text = _build_signal_post(sym, a, {}, mode=mode)
+            try:
+                liq_line = await _fetch_auto_liq_line(sym, a, mode=mode)
+            except Exception as e:
+                log.error(f"[AUTO] liq-cluster line (не блокирует сигнал) {sym}: {e}")
+                liq_line = None
+            text = _build_signal_post(sym, a, {}, mode=mode, liq_line=liq_line)
             target_dict = TOP_LONG_SIGNALS if is_long else TOP_SHORT_SIGNALS
             target_dict[sym] = {
                 "time": datetime.now(TZ), "entry": a["price"],
@@ -10314,8 +10319,37 @@ def _format_chart_pattern_line(a: dict, fp) -> str:
     return ""
 
 
+async def _fetch_auto_liq_line(symbol: str, a: dict, mode: str = "long") -> str:
+    """П-LiqCluster (владелец, ночное задание 14->15.07, Пакет 1) -- готовит
+    `liq_line` для `_build_signal_post()`. Зона строится из диапазона входа
+    (entry1/entry3), тот же порядок сторон, что и везде в AUTO-пути (см.
+    bot.py:6496 -- для LONG entry3 ниже entry1, для SHORT наоборот).
+    `get_liq_data()` блокирующая (до 3 последовательных HTTP к OKX, но с
+    300с кэшем per-symbol -- см. её докстринг) -- вызывается через
+    `run_in_executor`, чтобы не блокировать event loop (тот же паттерн,
+    что `shadow_engine._sync_to_github_sync`). Вызывается ТОЛЬКО для уже
+    promoted/отправляемых сигналов (после гейтов), не для каждого
+    просканированного кандидата -- латентность AUTO-цикла ограничена
+    количеством реально отправляемых карточек, не размером скана (см.
+    измерение в PROGRESS.md, Пакет 1 П-LiqCluster)."""
+    try:
+        is_long = mode in ("long", "spot")
+        entry1, entry3 = a.get("entry1"), a.get("entry3")
+        if entry1 is None or entry3 is None:
+            return "\U0001f5fa Ликвидации рядом: н/д (нет диапазона входа)"
+        lo, hi = (entry3, entry1) if is_long else (entry1, entry3)
+        if lo > hi:
+            lo, hi = hi, lo
+        zone = {"lo": lo, "hi": hi}
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, level_watch.format_liquidation_cluster_line, symbol, zone, get_liq_data)
+    except Exception as e:
+        return f"\U0001f5fa Ликвидации рядом: н/д (ошибка: {e})"
+
+
 def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
-                       mode: str = "long", section: str = "") -> str:
+                       mode: str = "long", section: str = "", liq_line: str = None) -> str:
     is_long = mode in ("long", "spot")
     price   = a["price"]
     price_fresh = a.get("price_fresh", "")
@@ -10640,6 +10674,20 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
         "  C  = 1–2 фактора — осторожно",
         "",
         _journal_footer_line(mode),
+    ]
+
+    # П-LiqCluster (владелец, ночное задание 14->15.07, Пакет 1 -- "да" на
+    # §5 утреннего брифа): строка кластеров ликвидаций рядом с зоной входа.
+    # Раньше level_watch.format_liquidation_cluster_line() вызывалась ТОЛЬКО
+    # для watchlist zone-touch алертов, не для AUTO/точки-карточек (см.
+    # NEXT_PACKAGE.md "Пункт 1"). Сеть здесь НЕ дёргается -- `liq_line`
+    # передаётся ГОТОВОЙ строкой вызывающей стороной (см. _fetch_auto_liq_line
+    # ниже, через run_in_executor) -- эта функция синхронная и не должна
+    # блокировать event loop сетевым вызовом.
+    if liq_line:
+        lines += ["", liq_line]
+
+    lines += [
         "",
         # === Блок 8: разделитель + хэштег (кнопки — отдельно, через send_coin/_signal_kb) ===
         SEP,
@@ -11544,7 +11592,12 @@ async def cmd_top_long(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             slug = coin.get("slug", sym.lower())
             try:
                 stats = get_binance_24h(sym)
-                text  = _build_signal_post(sym, a, stats, mode="long")
+                try:
+                    liq_line = await _fetch_auto_liq_line(sym, a, mode="long")
+                except Exception as e:
+                    log.error(f"top_long liq-cluster line (не блокирует карточку) {sym}: {e}")
+                    liq_line = None
+                text  = _build_signal_post(sym, a, stats, mode="long", liq_line=liq_line)
                 await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
                 TOP_LONG_SIGNALS[sym] = {
                     "time":  datetime.now(TZ), "entry": a["price"],
@@ -11823,7 +11876,12 @@ async def cmd_top_short(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             slug = coin.get("slug", sym.lower())
             try:
                 stats = get_binance_24h(sym)
-                text  = _build_signal_post(sym, a, stats, mode="short")
+                try:
+                    liq_line = await _fetch_auto_liq_line(sym, a, mode="short")
+                except Exception as e:
+                    log.error(f"top_short liq-cluster line (не блокирует карточку) {sym}: {e}")
+                    liq_line = None
+                text  = _build_signal_post(sym, a, stats, mode="short", liq_line=liq_line)
                 await send_coin(ctx.bot, update.effective_chat.id, sym, slug, a, text)
                 TOP_SHORT_SIGNALS[sym] = {
                     "time":  datetime.now(TZ), "entry": a["price"],
