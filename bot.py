@@ -7098,6 +7098,11 @@ async def check_watchlist(bot, chat_ids, coins):
                 f"#{sym}USDT"
             )
         else:
+            # Пакет 20, Этап 3 (быстрая победа, находка TEXT_AUDIT.md A.7):
+            # al["note"] по умолчанию "" (bot.py:2520) -- без guard строка
+            # рендерилась как голое "📝 " без содержания, нарушая правило
+            # чек-листа "нет пустых значений — только н/д".
+            note_line = f"📝 {al['note']}\n" if al.get("note") else "📝 н/д\n"
             text = (
                 f"🎯 *Цена вошла в зону!*\n"
                 f"🕐 {now_utc3()}\n\n"
@@ -7106,7 +7111,7 @@ async def check_watchlist(bot, chat_ids, coins):
                 f"📍 Зона: `{fp(al['lo'])} – {fp(al['hi'])}`\n"
                 f"{liq_line}\n\n"
                 f"{rug_block}"
-                f"📝 {al['note']}\n"
+                f"{note_line}"
                 f"🗂 Источник: {al['source']}\n\n"
                 f"⚠️ Толерантность: 2% | SL обязателен\n\n"
                 f"#{sym}USDT"
