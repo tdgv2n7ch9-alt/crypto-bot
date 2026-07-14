@@ -10427,7 +10427,14 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
     elif r >= 41: score_e = "\u26a0\ufe0f"; score_word = "УМЕРЕННЫЙ"
     else:         score_e = "\u274c";     score_word = "СЛАБЫЙ"
 
-    SEP = "\u2796\u2796\u2796\u2796\u2796\u2796\u2796\u2796\u2796\u2796"
+    # Пакет 20, Этап 3 (владелец, "быстрая победа" из docs/SIGNAL_VISUAL_STANDARD.md
+    # находка #1): разделитель унифицирован на канонический символ (card_v2.SEP,
+    # уже используется в whale/pump-detector/event-radar) -- раньше здесь был
+    # другой символ, единственная РАЗНИЦА в глифе, содержание карточки не
+    # меняется. Честно: та же находка есть ЕЩЁ в 6 других местах bot.py
+    # (market_overview/institutional/whale_status/x100/pump-radar) -- НЕ
+    # тронуты в этом коммите, отдельная более широкая находка, см. TEXT_AUDIT.md.
+    SEP = "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"
 
     # ch30d
     ch30d_v = a.get("ch30d", 0) or 0
