@@ -68,6 +68,15 @@ for i in 1 2 3 4 5; do
         _notify_owner "deploy.sh: FATAL rebase conflict, нужен ручной разбор"
         exit 1
     fi
+    # ДЕФЕКТ (владелец, найдено живьём 2026-07-14): раньше диапазон для
+    # watchPatterns-проверки считался ПОСЛЕ push как HEAD~1..HEAD --
+    # терял файлы из более ранних коммитов при многокоммитном пуше
+    # (7-коммитный пуш дал ложный "watchPatterns hit: no"). Схватываем
+    # origin/main ЗДЕСЬ -- сразу после fetch+rebase, ДО push -- это
+    # состояние ровно перед пушем ЭТОЙ попытки. После успешного push
+    # origin/main == HEAD, диапазон схлопнулся бы в пустой -- поэтому
+    # обязательно ДО, не после.
+    PRE_PUSH_BASE=$(git rev-parse origin/main)
     PUSH_OUT=$(git push origin main 2>&1)
     if echo "$PUSH_OUT" | grep -q "main -> main"; then
         PUSH_OK=1
@@ -88,15 +97,14 @@ PUSHED_SHORT=$(git rev-parse --short HEAD)
 _log "pushed commit: $PUSHED_COMMIT"
 
 # ── шаг 2: определить, затронуты ли watchPatterns ──
-# Читаем ТОЛЬКО что реально запушено в этом вызове -- diff от предыдущего
-# HEAD (до rebase петли коммит не менялся, base = HEAD~1 локально, если
-# был один коммит; берём diff от merge-base с origin ДО этого пуша через
-# reflog не нужен -- проще: сравниваем с родителем HEAD, это ровно то,
-# что этот коммит принёс).
-CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-_log "changed files in pushed commit: $CHANGED_FILES"
+# ВЕСЬ диапазон пуша ($PRE_PUSH_BASE, схваченный ДО push на шаге 1 ..
+# HEAD) -- не только последний коммит (см. дефект выше). Сам диапазон
+# считает deploy_watch_check.py (тестируемо, git diff внутри Python, не
+# полагается на bash-парсинг многострочного вывода).
+CHANGED_FILES=$(git diff --name-only "$PRE_PUSH_BASE" HEAD 2>/dev/null || echo "")
+_log "changed files in pushed range ($PRE_PUSH_BASE..$PUSHED_COMMIT): $CHANGED_FILES"
 
-WATCH_HIT=$(CHANGED_FILES_ENV="$CHANGED_FILES" python3 tools/deploy_watch_check.py)
+WATCH_HIT=$(DEPLOY_WATCH_BASE_REF="$PRE_PUSH_BASE" python3 tools/deploy_watch_check.py)
 _log "watchPatterns hit: $WATCH_HIT"
 
 # ── шаг 3: пауза 3 минуты ──

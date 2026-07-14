@@ -11,6 +11,7 @@ tools/deploy_watch_check.py -- ПАКЕТ deploy-resilience (владелец, 2
 import fnmatch
 import json
 import os
+import subprocess
 import sys
 
 
@@ -48,6 +49,36 @@ def matches_pattern(path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(path, pattern)
 
 
+def changed_files_in_range(base_ref: str, head_ref: str = "HEAD", cwd: str = None) -> list:
+    """ДЕФЕКТ (владелец, найдено живьём 2026-07-14): `tools/deploy.sh` раньше
+    диффал ТОЛЬКО `HEAD~1..HEAD` -- последний коммит, а не весь диапазон,
+    реально запушенный этим вызовом скрипта. При многокоммитном пуше (когда
+    несколько `git commit` накопились локально ДО вызова deploy.sh --
+    штатный сценарий при батч-пуше нескольких пакетов) это теряло файлы из
+    более ранних коммитов: 7-коммитный пуш 2026-07-14 дал ложный
+    `watchPatterns hit: no`, хотя 3 из 7 коммитов трогали `bot.py`.
+
+    `git diff --name-only <base_ref>..<head_ref>` -- ВЕСЬ диапазон.
+    `base_ref` ДОЛЖЕН быть состоянием `origin/main` СХВАЧЕННЫМ ДО `git push`
+    (вызывающая сторона обязана закэшировать `git rev-parse origin/main`
+    сразу после последнего успешного `git fetch`+`rebase`, ДО самого push)
+    -- ПОСЛЕ push `origin/main` == `head_ref`, диапазон стал бы пустым, а
+    "весь диапазон пуша" схлопнулся бы обратно в тот же баг, только по
+    другой причине.
+
+    Пустой список при любой ошибке git (невалидный ref, не git-репозиторий,
+    таймаут) -- честно, не выдумывает список файлов на сбое."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{base_ref}..{head_ref}"],
+            cwd=cwd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return []
+        return [line for line in result.stdout.strip().split("\n") if line]
+    except Exception:
+        return []
+
+
 def touches_watch_path(changed_files: list, patterns: list = None) -> bool:
     """True, если хотя бы один изменённый файл попадает хотя бы под один
     watchPattern -- т.е. Railway ДОЛЖЕН был задеплоить этот коммит."""
@@ -57,7 +88,19 @@ def touches_watch_path(changed_files: list, patterns: list = None) -> bool:
 
 
 if __name__ == "__main__":
-    # tools/deploy.sh вызывает: CHANGED_FILES_ENV=... python3 tools/deploy_watch_check.py
-    changed = os.environ.get("CHANGED_FILES_ENV", "").strip().split("\n")
-    changed = [f for f in changed if f]
+    # tools/deploy.sh вызывает ОДНИМ из двух способов:
+    #   DEPLOY_WATCH_BASE_REF=<pre-push origin/main SHA> python3 tools/deploy_watch_check.py
+    #     -- ПРЕДПОЧТИТЕЛЬНЫЙ путь (владелец, дефект 2026-07-14): диапазон
+    #     считается ЗДЕСЬ, самим модулем (git diff base_ref..HEAD), не
+    #     доверяет bash-подсчёту -- покрывает ВЕСЬ диапазон реально
+    #     запушенных коммитов, не только последний.
+    #   CHANGED_FILES_ENV=<file1>\n<file2>... python3 tools/deploy_watch_check.py
+    #     -- обратная совместимость/тесты, вызывающая сторона уже даёт
+    #     готовый список файлов.
+    base_ref = os.environ.get("DEPLOY_WATCH_BASE_REF", "").strip()
+    if base_ref:
+        changed = changed_files_in_range(base_ref)
+    else:
+        changed = os.environ.get("CHANGED_FILES_ENV", "").strip().split("\n")
+        changed = [f for f in changed if f]
     print("yes" if touches_watch_path(changed) else "no")
