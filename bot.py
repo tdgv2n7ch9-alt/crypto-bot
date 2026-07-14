@@ -13382,4 +13382,4 @@ def get_institutional_summary():
     elif sc<=30: ov='BEARISH'
     elif sc<=45: ov='MODERATE BEARISH'
     else: ov='NEUTRAL'
-    return {'ok':True,'score':sc,'overall':ov,'signals':sig,'warnings':wrn,'macro':macro,'options':opts,'liquidations':liqs}
+    return {'ok':True,'score':sc,'overall':ov,'signals':sig,'warnings':wrn,'macro':macro,'options':opts,'liquidations':liqs}# deploy trigger: 2026-07-14T18:19:05+0300 (owner-authorized recovery -- build 2a68170b stuck BUILDING >14min, 'failed to fetch snapshot' loop across Metal builders)
