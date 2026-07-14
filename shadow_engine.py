@@ -83,6 +83,25 @@ log = logging.getLogger(__name__)
 
 SHADOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "shadow_signals.json")
 GITHUB_SHADOW_PATH = "journal/shadow_signals.json"
+
+# ── П-Ротация (владелец, решение §3 утреннего брифа 2026-07-14): активный
+# файл выше НЕ капается (см. докстринг модуля -- "каждая запись ценна"), но
+# КАЖДАЯ запись/чтение файла целиком (_write_local читает-дописывает-
+# перезаписывает ВЕСЬ файл на каждую новую shadow-запись) становится дороже
+# линейно с ростом файла без ограничения -- живьём файл вырос до 12.5МБ за
+# 3 суток. Ротация переносит записи старше ROTATION_KEEP_DAYS суток из
+# активного файла в journal/archive/shadow_signals_<от>_<до>.json, БЕЗ
+# потери данных -- get_local_records() по умолчанию читает активный файл
+# ПЛЮС все архивы (полная история для readiness-порогов/integrity_report/
+# анализа исходов), только _write_local()/_sync_to_github_sync() держат
+# "горячий" путь на одном (маленьком после ротации) активном файле.
+ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "archive")
+GITHUB_ARCHIVE_DIR = "journal/archive"
+ARCHIVE_MANIFEST = os.path.join(ARCHIVE_DIR, ".pushed.json")
+ROTATION_SIZE_BYTES = 5 * 1024 * 1024  # триггер ротации -- активный файл больше 5МБ
+ROTATION_KEEP_DAYS = 3  # окно, которое ВСЕГДА остаётся в активном файле после ротации --
+# с запасом покрывает самое широкое окно прямого (не через get_local_records()) чтения
+# активного файла в живом коде: daily_metrics.shadow_vs_live_today() (окно 24ч).
 SR_MIN_RR_TP1_SHADOW = 2.0  # патч 02 -- см. patches/02-rr-gate/README.md, НЕ live-константа
 DEAD_ZONE_SHADOW_SCORE_PENALTY = 10  # находка владельца 2026-07-11 (карточка EVAA):
 # METHODOLOGY_CORE.md §8 -- сессия влияет на качество, но killzone quality=="D" (Dead
@@ -139,11 +158,44 @@ def _load_local() -> list:
         return []
 
 
-def get_local_records() -> list:
+def _load_archives() -> list:
+    """Все journal/archive/shadow_signals_*.json, объединённые в один список --
+    П-Ротация. Ошибка чтения ОДНОГО архивного файла не должна ронять остальные --
+    собираем то, что получилось прочитать, ошибку по каждому файлу логируем
+    отдельно (та же защитная логика, что и во всех остальных local-читателях
+    этого модуля)."""
+    records = []
+    if not os.path.isdir(ARCHIVE_DIR):
+        return records
+    for name in sorted(os.listdir(ARCHIVE_DIR)):
+        if not (name.startswith("shadow_signals_") and name.endswith(".json")):
+            continue  # .pushed.json манифест и любые посторонние файлы -- пропуск
+        path = os.path.join(ARCHIVE_DIR, name)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            records.extend(data.get("records", []) if isinstance(data, dict) else [])
+        except Exception as e:
+            log.error(f"shadow_engine: не удалось прочитать архив {path}: {e}")
+    return records
+
+
+def get_local_records(include_archive: bool = True) -> list:
     """Публичная обёртка над _load_local() -- Пакет 11, для внешних вызывающих
     (bot._startup_integrity_check и т.п.), чтобы не тянуть private-функцию через
-    границу модуля."""
-    return _load_local()
+    границу модуля.
+
+    П-Ротация (2026-07-14): по умолчанию включает архивные записи
+    (journal/archive/shadow_signals_*.json) -- ротация переносит старые записи
+    из активного файла в архив, но НЕ удаляет их, так что вызывающие, которым
+    нужна полная история с начала контура (readiness-пороги, integrity_report,
+    /startup-проверка), продолжают видеть ВСЕ записи, не только последнее окно
+    активного файла. `include_archive=False` -- только активный (свежий) файл,
+    для случаев, где нужен исключительно последний срез."""
+    records = _load_local()
+    if include_archive:
+        records = _load_archives() + records
+    return records
 
 
 # НОЧЬ#3, Н4/Н8 (владелец): компактная таблица готовности по контурам --
@@ -236,7 +288,15 @@ def _github_get_shadow_sync():
     на Git Blobs API (лимит 100MB, тот же `sha`, который Contents API уже отдаёт) для
     случая `encoding == "none"`, вместо капа/потери исторических данных.
     Синхронно -- вызывать только через run_in_executor из async-кода (см.
-    signal_journal._github_get_file_sync, тот же паттерн)."""
+    signal_journal._github_get_file_sync, тот же паттерн).
+
+    П-Ротация (владелец, 2026-07-14) НЕ противоречит этому решению -- активный
+    файл по-прежнему не капается и не теряет данные, старые записи просто
+    переносятся в journal/archive/shadow_signals_<от>_<до>.json (см.
+    ROTATION_SIZE_BYTES выше), остаются полностью читаемыми через
+    get_local_records(). Ротация решает другую проблему -- стоимость
+    ЗАПИСИ (read-all+append+rewrite-all на каждую shadow-запись), а не
+    стоимость чтения через Contents API, которую чинит блок выше."""
     if not signal_journal._github_configured():
         return None, None
     token_issue = signal_journal._validate_github_token()
@@ -577,10 +637,129 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
     }
 
 
+def _unique_archive_path(from_date: str, to_date: str) -> str:
+    """Имя архивного файла по факт. диапазону дат архивируемых записей -- при
+    коллизии (тот же диапазон дат в рамках одних суток из-за нескольких
+    ротаций подряд, маловероятно, но не исключено при частых записях) не
+    перезаписывает существующий файл, а берёт следующий свободный суффикс."""
+    base = f"shadow_signals_{from_date}_{to_date}"
+    path = os.path.join(ARCHIVE_DIR, f"{base}.json")
+    n = 2
+    while os.path.exists(path):
+        path = os.path.join(ARCHIVE_DIR, f"{base}_{n}.json")
+        n += 1
+    return path
+
+
+def _rotate_if_needed(now_ts: float = None) -> str:
+    """П-Ротация (владелец, 2026-07-14) -- см. докстринг у ROTATION_SIZE_BYTES
+    выше. Активный файл проверяется на размер (дешёвый os.path.getsize, без
+    чтения) на каждую запись; полный read+split+перезапись -- только когда
+    файл реально пересёк порог, что происходит редко относительно частоты
+    записи. Возвращает путь нового архивного файла при успешной ротации,
+    иначе "" (файл маленький / нечего архивировать в пределах keep-окна /
+    ошибка -- залогирована, ротация НЕ блокирует уже выполненную запись,
+    просто откладывается до следующего вызова)."""
+    try:
+        if not os.path.exists(SHADOW_FILE):
+            return ""
+        if os.path.getsize(SHADOW_FILE) < ROTATION_SIZE_BYTES:
+            return ""
+        now_ts = now_ts if now_ts is not None else time.time()
+        cutoff = now_ts - ROTATION_KEEP_DAYS * 86400
+        records = _load_local()
+        to_archive = [r for r in records if (r.get("ts") or 0) < cutoff]
+        to_keep = [r for r in records if (r.get("ts") or 0) >= cutoff]
+        if not to_archive:
+            return ""  # большой файл, но всё в пределах keep-окна -- архивировать нечего
+        ts_values = [r["ts"] for r in to_archive if r.get("ts") is not None]
+        from_date = datetime.utcfromtimestamp(min(ts_values)).strftime("%Y%m%d")
+        to_date = datetime.utcfromtimestamp(max(ts_values)).strftime("%Y%m%d")
+        os.makedirs(ARCHIVE_DIR, exist_ok=True)
+        archive_path = _unique_archive_path(from_date, to_date)
+        if not _atomic_write_json(archive_path, {"schema_version": 1, "records": to_archive}):
+            log.error(f"shadow_engine: ротация -- запись архива {archive_path} не удалась, отменяю")
+            return ""
+        if not _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": to_keep}):
+            log.error("shadow_engine: ротация -- запись активного файла после архивации не "
+                      f"удалась (архив {archive_path} уже создан, данные не потеряны)")
+            return ""
+        log.info(f"shadow_engine: ротация -- {len(to_archive)} записей -> {archive_path}, "
+                 f"{len(to_keep)} осталось в активном файле")
+        return archive_path
+    except Exception as e:
+        log.error(f"shadow_engine: ротация упала ({e}) -- активный файл не тронут")
+        return ""
+
+
+def _load_pushed_archive_names() -> set:
+    try:
+        with open(ARCHIVE_MANIFEST) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def _mark_archive_pushed(name: str):
+    names = _load_pushed_archive_names()
+    names.add(name)
+    _atomic_write_json(ARCHIVE_MANIFEST, sorted(names))
+
+
+def _push_pending_archives_sync() -> dict:
+    """Best-effort: PUT'ит в GitHub (journal/archive/<имя>) любой локальный
+    архивный файл, ещё не подтверждённый как отправленный (манифест
+    ARCHIVE_MANIFEST). Create-only, как и signal_journal._github_put_backup_sync
+    (422 -- уже есть, не ошибка) -- архивные файлы иммутабельны после создания,
+    GET+sha+merge не нужен.
+
+    НАМЕРЕННО НЕ вызывается из _write_local()/_sync_to_github_sync() (горячий
+    путь shadow-записи) -- П-Ротация (2026-07-14): архивация происходит редко
+    (раз в несколько тысяч записей), синка раз в рестарт процесса достаточно
+    для "без потери данных" (см. bot._startup_integrity_check, где эта
+    функция вызывается через run_in_executor). Отдельно это ещё и не даёт
+    существующим тестам shadow_engine (много которых монкипатчат
+    `_sync_to_github_sync` целиком заглушкой, но не знают об этой функции)
+    случайно попасть на реальный `journal/archive/` этого репозитория и
+    настоящий сетевой вызов -- держать пуш архива вне горячего пути делает
+    эту границу явной, а не полагается на то, что тесты её не заденут.
+
+    Возвращает {"attempted": int, "succeeded": int} -- для startup-отчёта."""
+    result = {"attempted": 0, "succeeded": 0}
+    if not os.path.isdir(ARCHIVE_DIR):
+        return result
+    if not signal_journal._github_configured():
+        return result
+    pushed = _load_pushed_archive_names()
+    for name in sorted(os.listdir(ARCHIVE_DIR)):
+        if not (name.startswith("shadow_signals_") and name.endswith(".json")):
+            continue
+        if name in pushed:
+            continue
+        path = os.path.join(ARCHIVE_DIR, name)
+        try:
+            with open(path) as f:
+                payload = json.load(f)
+        except Exception as e:
+            log.error(f"shadow_engine: не удалось прочитать архив для пуша {path}: {e}")
+            continue
+        result["attempted"] += 1
+        ok = signal_journal._github_put_backup_sync(f"{GITHUB_ARCHIVE_DIR}/{name}", payload)
+        if ok:
+            _mark_archive_pushed(name)
+            result["succeeded"] += 1
+        else:
+            log.error(f"shadow_engine: пуш архива {name} в GitHub не удался, повтор на следующем синке")
+    return result
+
+
 def _write_local(record: dict) -> bool:
     records = _load_local()
     records.append(record)
-    return _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
+    ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
+    if ok:
+        _rotate_if_needed()  # локально, без сети -- см. докстринг _rotate_if_needed
+    return ok
 
 
 def integrity_report(records: list) -> dict:

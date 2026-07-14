@@ -12827,6 +12827,21 @@ async def _startup_integrity_check(bot: Bot, owner_id: int):
         lines.append(f"🔴 Shadow-журнал: проверка упала ({str(e)[:150]})")
 
     try:
+        # П-Ротация (владелец, 2026-07-14): раз в рестарт процесса -- добить в
+        # GitHub любые локальные архивные файлы shadow-журнала (journal/archive/),
+        # ещё не подтверждённые как отправленные. Намеренно НЕ в горячем пути
+        # каждой shadow-записи (см. shadow_engine._push_pending_archives_sync
+        # докстринг) -- best-effort, раз в старт вполне достаточно.
+        loop = asyncio.get_event_loop()
+        archive_push = await loop.run_in_executor(None, shadow_engine._push_pending_archives_sync)
+        if archive_push["attempted"]:
+            emoji = "🟢" if archive_push["succeeded"] == archive_push["attempted"] else "🔴"
+            lines.append(f"{emoji} Shadow-архив: {archive_push['succeeded']}/{archive_push['attempted']} "
+                          f"файлов синкнуто в GitHub")
+    except Exception as e:
+        lines.append(f"🔴 Shadow-архив: синк упал ({str(e)[:150]})")
+
+    try:
         await bot.send_message(owner_id, "\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         print(f"_startup_integrity_check: не удалось отправить сообщение владельцу: {e}")
