@@ -2880,7 +2880,7 @@ def welcome_text_v2(bot_module) -> str:
     )
 
 
-def attach_home_row(markup):
+def attach_home_row(markup, back_to: str = None, back_label: str = "← Назад"):
     """Пакет 18, п.2 (владелец): "нижний ряд [🏠 Меню] во всех сообщениях
     бота -- один хелпер, подключить везде". Grep по reply_markup= (см. отчёт
     пакета) нашёл реальные пробелы: часть алертов подписчикам (zone/ST/
@@ -2891,7 +2891,18 @@ def attach_home_row(markup):
     добавляет (не дублирует ряд на билдерах, которые уже сами его ставят).
     show_menu стейтлес (см. callback_handler: рендерит active_main_kb()/
     main_kb() с нуля из модульного флага MENU_V2_ENABLED, без ctx.user_data)
-    -- работает из старых постов и после рестарта бота."""
+    -- работает из старых постов и после рестарта бота.
+
+    ПАКЕТ UX-НАВИГАЦИЯ, п.1 (владелец, живая приёмка 14.07): "[← Назад]
+    [🏠 Меню] на каждом экране, Назад -- на родительский экран по
+    иерархии". `back_to` -- callback_data родителя (Menu v2 стейтлес, тот
+    же принцип, что show_menu -- родитель у экрана статический по
+    иерархии, не зависит от пути, которым пользователь сюда попал; для
+    экранов с несколькими логическими родителями вызывающая сторона
+    передаёт свой конкретный `back_to`, функция сама не выбирает).
+    `back_to=None` (по умолчанию) -- поведение НЕ меняется, только
+    "🏠 Меню" (обратная совместимость всех текущих ~18 вызовов).
+    Идемпотентно так же, как и home-ряд."""
     if markup is None:
         rows = []
     elif isinstance(markup, InlineKeyboardMarkup):
@@ -2902,8 +2913,18 @@ def attach_home_row(markup):
         any(getattr(btn, "callback_data", None) == "show_menu" for btn in row)
         for row in rows
     )
+    bottom_row = []
+    if back_to:
+        has_back = any(
+            any(getattr(btn, "callback_data", None) == back_to for btn in row)
+            for row in rows
+        )
+        if not has_back:
+            bottom_row.append(InlineKeyboardButton(back_label, callback_data=back_to))
     if not has_home:
-        rows.append([InlineKeyboardButton("🏠 Меню", callback_data="show_menu")])
+        bottom_row.append(InlineKeyboardButton("🏠 Меню", callback_data="show_menu"))
+    if bottom_row:
+        rows.append(bottom_row)
     return InlineKeyboardMarkup(rows)
 
 
@@ -3947,10 +3968,13 @@ def _mv2_fake_update(q):
     return _FakeUpdate()
 
 
-def _mv2_back_kb(extra_rows=None):
+def _mv2_back_kb(extra_rows=None, back_to: str = None):
+    """`back_to` -- ПАКЕТ UX-НАВИГАЦИЯ п.1: переиспользует attach_home_row()
+    для единого стиля "[← Назад] [🏠 Меню]" (тот же хелпер, что и везде --
+    не второй параллельный). `extra_rows` -- содержимое экрана (кнопки
+    разделов и т.п.), не трогается."""
     rows = list(extra_rows or [])
-    rows.append([InlineKeyboardButton("🏠 Меню", callback_data="show_menu")])
-    return InlineKeyboardMarkup(rows)
+    return attach_home_row(rows, back_to=back_to)
 
 
 # ── ⭐ ЛИМИТКИ (Пакет 18, п.13, владелец, финальное название) ───────────────
@@ -3985,16 +4009,23 @@ def _limitki_collect_zones() -> list:
     return items
 
 
-def _limitki_zone_status(side: str, lo: float, hi: float, price: float):
-    """Статус 1 из 3 (владелец): ЖДЁМ ЦЕНУ / ЦЕНА В ЗОНЕ / ОТРАБОТАНА --
-    стейтлес, вычисляется только из текущей цены и границ зоны (без
-    персистентного "уже коснулась" флага -- переживает рестарт без потери
-    состояния). ОТРАБОТАНА = цена уже прошла зону НАСКВОЗЬ и ушла в сторону
-    тейка (для LONG -- выше hi, для SHORT -- ниже lo); честно означает
-    "возможность мимо" (был там или нет трейдер -- бот не знает и не
-    утверждает), не заявление об исполненной сделке. Возвращает
-    (label, distance_pct) -- distance_pct = 0 внутри зоны, иначе % от
-    текущей цены до ближней границы."""
+def _limitki_zone_status(side: str, lo: float, hi: float, price: float, cancelled: bool = False):
+    """Статус 1 из 4 (владелец, ПАКЕТ UX-НАВИГАЦИЯ п.3 -- добавлен 4й статус
+    ОТМЕНЕНА поверх исходных 3): ЖДЁМ ЦЕНУ / ЦЕНА В ЗОНЕ / ОТРАБОТАНА /
+    ОТМЕНЕНА -- стейтлес, вычисляется только из текущей цены и границ зоны
+    (без персистентного "уже коснулась" флага -- переживает рестарт без
+    потери состояния). ОТРАБОТАНА = цена уже прошла зону НАСКВОЗЬ и ушла в
+    сторону тейка (для LONG -- выше hi, для SHORT -- ниже lo); честно
+    означает "возможность мимо" (был там или нет трейдер -- бот не знает и
+    не утверждает), не заявление об исполненной сделке. ОТМЕНЕНА -- зона
+    явно помечена `cancelled: true` в watch_zones.json (автор отменил
+    разметку крестом), остаётся в файле для истории, но не участвует в
+    статусном расчёте от цены -- единственная ветка, не зависящая от price.
+    Возвращает (label, distance_pct) -- distance_pct = None для ОТМЕНЕНА
+    (дистанция не имеет смысла), 0 внутри зоны, иначе % от текущей цены до
+    ближней границы."""
+    if cancelled:
+        return "ОТМЕНЕНА", None
     lo, hi = min(lo, hi), max(lo, hi)
     if lo <= price <= hi:
         return "ЦЕНА В ЗОНЕ", 0.0
@@ -4032,7 +4063,11 @@ async def _limitki_row_text(item: dict) -> str:
         price, price_fresh = cg_price, ""
     price = price or 0
 
-    if price:
+    cancelled = bool(zone.get("cancelled"))
+    if cancelled:
+        status, dist = _limitki_zone_status(side, lo, hi, price, cancelled=True)
+        status_txt = f"🚫 {status}"
+    elif price:
         status, dist = _limitki_zone_status(side, lo, hi, price)
         status_icon = {"ЦЕНА В ЗОНЕ": "🟢", "ЖДЁМ ЦЕНУ": "🟡", "ОТРАБОТАНА": "⚪"}[status]
         status_txt = f"{status_icon} {status} ({dist:.1f}%)"
@@ -4601,14 +4636,24 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
                       "Сводный экран \"последние 24ч\" -- в очереди следующим пакетом.",
         }
         await q.edit_message_text(notes.get(which, "н/д"), parse_mode="Markdown",
-                                   reply_markup=_mv2_back_kb([[InlineKeyboardButton(
-                                       "📡 РАДАРЫ", callback_data="mv2_radary")]]))
+                                   reply_markup=_mv2_back_kb(back_to="mv2_radary"))
 
-    elif data == "mv2_radar_zones" or data == "mv2_moi_zones":
-        await cmd_zones(_mv2_fake_update(q), ctx)
+    elif data == "mv2_radar_zones":
+        await cmd_zones(_mv2_fake_update(q), ctx, back_to="mv2_radary")
+
+    elif data == "mv2_moi_zones":
+        await cmd_zones(_mv2_fake_update(q), ctx, back_to="mv2_moi")
+
+    elif data.startswith("mv2_zones_more|"):
+        try:
+            _, back, offset_s = data.split("|")
+            await cmd_zones(_mv2_fake_update(q), ctx,
+                             back_to=(None if back == "-" else back), offset=int(offset_s))
+        except (ValueError, IndexError):
+            await q.answer("Не удалось разобрать запрос.")
 
     elif data == "mv2_radar_patterns":
-        await cmd_patterns(_mv2_fake_update(q), ctx)
+        await cmd_patterns(_mv2_fake_update(q), ctx, back_to="mv2_radary")
 
     elif data == "mv2_moi":
         await _mv2_render_moi(q)
@@ -4617,10 +4662,10 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
         await _mv2_render_sistema(q)
 
     elif data == "mv2_sistema_health":
-        await cmd_health(_mv2_fake_update(q), ctx)
+        await cmd_health(_mv2_fake_update(q), ctx, back_to="mv2_sistema")
 
     elif data == "mv2_sistema_terminology":
-        await cmd_terminology(_mv2_fake_update(q), ctx)
+        await cmd_terminology(_mv2_fake_update(q), ctx, back_to="mv2_sistema")
 
     elif data == "mv2_sistema_sources":
         try:
@@ -4633,8 +4678,7 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
         except Exception as e:
             lines = ["📡 *Статус источников*", "", f"н/д ({e})"]
         await q.edit_message_text("\n".join(lines), parse_mode="Markdown",
-                                   reply_markup=_mv2_back_kb([[InlineKeyboardButton(
-                                       "⚙️ СИСТЕМА", callback_data="mv2_sistema")]]))
+                                   reply_markup=_mv2_back_kb(back_to="mv2_sistema"))
 
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -5758,13 +5802,17 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "_Авто-мониторинг каждые 15 мин_",
             ]
 
-            nav_w = InlineKeyboardMarkup([
-                [InlineKeyboardButton("\U0001f504 Обновить", callback_data="whale_status"),
-                 InlineKeyboardButton("\U0001f3e0 Меню",    callback_data="show_menu")],
-            ])
+            # ПАКЕТ UX-НАВИГАЦИЯ, п.1/п.2 (владелец, живая приёмка 14.07):
+            # back_to=mv2_radary ("Назад" -- в РАДАРЫ, не в корень) +
+            # [❓ Словарь] на карточке с Funding/OI/L/S без расшифровки.
+            nav_w = attach_home_row(
+                [[InlineKeyboardButton("\U0001f504 Обновить", callback_data="whale_status"),
+                  InlineKeyboardButton("❓ Словарь", callback_data="glossary_whale")]],
+                back_to="mv2_radary")
             await q.edit_message_text("\n".join(lines_w), parse_mode="Markdown", reply_markup=nav_w)
         except Exception as e:
-            await q.edit_message_text(f"\u274c Ошибка Whale Radar: {e}", reply_markup=back_kb())
+            await q.edit_message_text(f"\u274c Ошибка Whale Radar: {e}",
+                                       reply_markup=attach_home_row(None, back_to="mv2_radary"))
 
     elif data == "pump_radar":
         try:
@@ -5850,13 +5898,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"Добавлено: {hd['promoted']}  ·  Истекло: {hd['expired']}",
                 "", SEP,
             ]
-            nav_pr = InlineKeyboardMarkup([
-                [InlineKeyboardButton("\U0001f504 Обновить", callback_data="pump_radar"),
-                 InlineKeyboardButton("\U0001f3e0 Меню", callback_data="show_menu")],
-            ])
+            # ПАКЕТ UX-НАВИГАЦИЯ, п.1/п.2 (владелец, живая приёмка 14.07):
+            # back_to=mv2_radary + [❓ Словарь].
+            nav_pr = attach_home_row(
+                [[InlineKeyboardButton("\U0001f504 Обновить", callback_data="pump_radar"),
+                  InlineKeyboardButton("❓ Словарь", callback_data="glossary_pump")]],
+                back_to="mv2_radary")
             await q.edit_message_text("\n".join(lines_pr), parse_mode="Markdown", reply_markup=nav_pr)
         except Exception as e:
-            await q.edit_message_text("Ошибка Памп-радара: "+str(e), reply_markup=back_kb())
+            await q.edit_message_text("Ошибка Памп-радара: "+str(e),
+                                       reply_markup=attach_home_row(None, back_to="mv2_radary"))
 
     elif data.startswith("pump_sub_"):
         sym = data[len("pump_sub_"):]
@@ -12191,7 +12242,7 @@ _patterns_digest_busy = False   # отдельный, лёгкий guard -- НЕ
 PATTERNS_DIGEST_TOP_N = 30       # топ-N по cmc_rank для дайджеста "Паттерны дня"
 
 
-async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None):
     """Owner-only: /patterns <symbol> -- классические чарт-паттерны Булковского
     (chart_patterns.py, Пакет 8 М3: "отдельная строка в карточке ТА
     (информационно). Бой не трогать") на 4h-свечах символа. Только показ данных --
@@ -12201,13 +12252,13 @@ async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     Пакет 9 М5 ("Паттерны дня"): БЕЗ аргумента -- дайджест по топ-N монет вместо
     подсказки по использованию, тот же источник паттернов, без доп. боевого
-    эффекта."""
+    эффекта. `back_to` -- ПАКЕТ UX-НАВИГАЦИЯ п.1, пробрасывается в дайджест."""
     import os
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     if update.effective_user.id != owner_id:
         return
     if not ctx.args:
-        await _cmd_patterns_digest(update, ctx)
+        await _cmd_patterns_digest(update, ctx, back_to=back_to)
         return
     symbol = ctx.args[0].upper().replace("USDT", "") + "USDT"
     candles_4h = get_binance_ohlc(symbol, "4h", 200)
@@ -12223,11 +12274,12 @@ async def cmd_patterns(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown")
 
 
-async def _cmd_patterns_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def _cmd_patterns_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None):
     """"Паттерны дня" -- дайджест классических паттернов (флаги/голова-плечи/
     треугольники) по топ-N монет (PATTERNS_DIGEST_TOP_N, по cmc_rank), 4h-свечи.
     Только показ -- та же chart_patterns.py, что и /patterns SYMBOL и
-    shadow_engine патч 08, никакого нового боевого эффекта."""
+    shadow_engine патч 08, никакого нового боевого эффекта. `back_to` --
+    ПАКЕТ UX-НАВИГАЦИЯ п.1 (владелец)."""
     global _patterns_digest_busy
     if _patterns_digest_busy:
         await update.message.reply_text("⏳ Дайджест паттернов уже считается, подожди ~15 сек.")
@@ -12272,42 +12324,135 @@ async def _cmd_patterns_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"\n_Источник: Bulkowski, «Энциклопедия графических моделей» (Trading/). "
                       f"Только информация — не влияет ни на какой боевой сигнал/гейт._")
         text = "\n".join(lines)
+        kb = attach_home_row(None, back_to=back_to)
         if msg:
-            await msg.edit_text(text, parse_mode="Markdown")
+            await msg.edit_text(text, parse_mode="Markdown", reply_markup=kb)
         else:
-            await update.message.reply_text(text, parse_mode="Markdown")
+            await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
     finally:
         _patterns_digest_busy = False
 
 
-async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+ZONES_PAGE_SIZE = 10
+
+
+def _zones_collect_all() -> list:
+    """Все зоны LONG/SHORT из watch_zones.json (ЛЮБОЙ tier -- в отличие от
+    _limitki_collect_zones(), это сырой информационный вотчер всей
+    разметки, не только "галочки автора"). INFO-зоны (маркеры уровня, нет
+    стороны для сделки) пропускаются -- тот же принцип, что и в
+    _limitki_collect_zones()."""
+    try:
+        config = level_watch.load_watch_zones()
+    except Exception as e:
+        log.info(f"[ZONES] watch_zones read: {e}")
+        return []
+    items = []
+    for pair_symbol, zones in config.items():
+        if pair_symbol in ("updated", "source") or not isinstance(zones, list):
+            continue
+        for zone in zones:
+            if zone.get("side") not in ("LONG", "SHORT"):
+                continue
+            items.append({"symbol": pair_symbol.upper().replace("USDT", ""), "zone": zone})
+    items.sort(key=lambda it: (it["symbol"], it["zone"].get("prio", 99)))
+    return items
+
+
+async def _zones_screen_text(offset: int = 0) -> tuple:
+    """ПАКЕТ UX-НАВИГАЦИЯ п.3 (владелец, живая приёмка 14.07): расширенный
+    экран Зоны -- было "только зона+prio+заметка", стало живая цена/
+    расстояние/статус на символ (`_limitki_zone_status()` -- ОДИН источник
+    истины со статусами в ЛИМИТКАХ, не второй параллельный расчёт) +
+    сводная строка "Всего зон: N · В зоне: X · Ждут: Y". Формат по
+    стандарту П3 (SIGNAL_VISUAL_STANDARD.md): шапка, `card_v2.SEP`-
+    разделитель, ≤`ZONES_PAGE_SIZE` строк + пагинация. Возвращает
+    (text, has_more)."""
+    from live_prices import resolve_price
+    config = level_watch.load_watch_zones()
+    updated = config.get("updated") or "нет данных"
+    source = config.get("source") or "нет данных"
+    items = _zones_collect_all()
+
+    try:
+        coins = get_top500()
+    except Exception:
+        coins = []
+    price_by_symbol = {}
+    for it in items:
+        sym = it["symbol"]
+        if sym in price_by_symbol:
+            continue
+        try:
+            coin = next((c for c in coins if c["symbol"] == sym), None)
+            cg_price = (coin.get("quote", {}).get("USDT", {}).get("price", 0) if coin else 0) or 0
+        except Exception:
+            cg_price = 0.0
+        try:
+            price, _ = resolve_price(sym, cg_price)
+        except Exception:
+            price = cg_price
+        price_by_symbol[sym] = price or 0
+
+    counts = {"ЖДЁМ ЦЕНУ": 0, "ЦЕНА В ЗОНЕ": 0, "ОТРАБОТАНА": 0, "ОТМЕНЕНА": 0, "н/д": 0}
+    rows = []
+    for it in items:
+        sym = it["symbol"]
+        zone = it["zone"]
+        side = zone["side"]
+        lo, hi = zone["lo"], zone["hi"]
+        price = price_by_symbol.get(sym, 0)
+        cancelled = bool(zone.get("cancelled"))
+        if cancelled:
+            status, _dist = _limitki_zone_status(side, lo, hi, price, cancelled=True)
+            icon, dist_txt = "🚫", ""
+        elif price:
+            status, dist = _limitki_zone_status(side, lo, hi, price)
+            icon = {"ЦЕНА В ЗОНЕ": "🟢", "ЖДЁМ ЦЕНУ": "🟡", "ОТРАБОТАНА": "⚪"}[status]
+            dist_txt = f" ({dist:.1f}%)"
+        else:
+            status, icon, dist_txt = "н/д", "❔", ""
+        counts[status] = counts.get(status, 0) + 1
+        prio = zone.get("prio")
+        prio_txt = f" p{prio}" if prio is not None else ""
+        rows.append(f"{icon} *{sym}* {side} {fp(lo)}–{fp(hi)}{prio_txt} — {status}{dist_txt}")
+
+    total = len(items)
+    summary = (f"Всего зон: {total} · В зоне: {counts['ЦЕНА В ЗОНЕ']} "
+               f"· Ждут: {counts['ЖДЁМ ЦЕНУ']}")
+    header = [f"🗺 *Зоны* — {source}, разметка от {updated}", card_v2.SEP, "", summary, ""]
+
+    page = rows[offset:offset + ZONES_PAGE_SIZE]
+    has_more = offset + ZONES_PAGE_SIZE < len(rows)
+    if not page:
+        page = ["Зон нет." if total == 0 else "Больше зон нет."]
+    lines = header + page + ["", "_Только чтение, не сигнал/гейт — информационный вотчер._"]
+    return "\n".join(lines), has_more
+
+
+async def cmd_zones(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None, offset: int = 0):
     """Owner-only: /zones -- активные зоны дневной разметки (level_watch.py,
     journal/watch_zones.json) + дата/источник разметки. Только показ данных -- не
-    влияет ни на какой боевой сигнал/гейт."""
+    влияет ни на какой боевой сигнал/гейт.
+
+    ПАКЕТ UX-НАВИГАЦИЯ (владелец, живая приёмка 14.07): п.3 -- расширен
+    контент (см. _zones_screen_text()); п.1 -- `back_to` пробрасывается из
+    вызывающей стороны (`mv2_radary`/`mv2_moi` -- у экрана два логических
+    родителя в зависимости от входа, функция сама не выбирает, см.
+    callback_handler). `back_to=None` (прямой /zones) -- поведение то же,
+    что раньше, только "🏠 Меню"."""
     import os
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     if update.effective_user.id != owner_id:
         return
-    config = level_watch.load_watch_zones()
-    updated = config.get("updated") or "нет данных"
-    source = config.get("source") or "нет данных"
-    lines = [f"📋 *Активные зоны* — {source}, разметка от {updated}", ""]
-    any_zones = False
-    for symbol, zones in config.items():
-        if symbol in ("updated", "source") or not isinstance(zones, list):
-            continue
-        if not zones:
-            continue
-        any_zones = True
-        lines.append(f"*{symbol}*")
-        for z in sorted(zones, key=lambda z: (z["side"] != "LONG", z.get("prio", 99))):
-            note = f" — {z['note']}" if z.get("note") else ""
-            lines.append(f"  {z['side']} `{z['lo']}–{z['hi']}` (prio {z.get('prio', '?')}){note}")
-        lines.append("")
-    if not any_zones:
-        lines.append("Зон нет.")
-    lines.append("_Только чтение, не сигнал/гейт — информационный вотчер._")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    text, has_more = await _zones_screen_text(offset)
+    kb_rows = []
+    if has_more:
+        kb_rows.append([InlineKeyboardButton(
+            "🔽 Показать ещё",
+            callback_data=f"mv2_zones_more|{back_to or '-'}|{offset + ZONES_PAGE_SIZE}")])
+    await update.message.reply_text(text, parse_mode="Markdown",
+                                     reply_markup=attach_home_row(kb_rows, back_to=back_to))
 
 
 def _zones_set_usage_hint() -> str:
@@ -12371,13 +12516,15 @@ async def cmd_zones_set(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{github_note}")
 
 
-async def cmd_terminology(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_terminology(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None):
     """Карточка v2 (Пакет 13) -- статический справочник терминов, см. glossary.py.
-    Публичная команда (не owner-only) -- это просто справка, не боевые данные."""
-    await update.message.reply_text(glossary.format_glossary_text(), parse_mode="Markdown")
+    Публичная команда (не owner-only) -- это просто справка, не боевые данные.
+    `back_to` -- ПАКЕТ UX-НАВИГАЦИЯ п.1 (владелец)."""
+    await update.message.reply_text(glossary.format_glossary_text(), parse_mode="Markdown",
+                                     reply_markup=attach_home_row(None, back_to=back_to))
 
 
-async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None):
     """Owner-only общий health-check процесса (в отличие от /radar_status -- тот покрывает
     только памп-радар). Аптайм + heartbeat всех фоновых задач + источники данных +
     подписчики/журнал. Честно показывает "ещё не тикала" вместо придуманного статуса."""
@@ -12433,7 +12580,8 @@ async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines.append(f"Journal: {journal_active} активных, {journal_closed} закрытых")
     lines.append("\nПодробности памп-радара: /radar_status")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown",
+                                     reply_markup=attach_home_row(None, back_to=back_to))
 
 
 async def cmd_journal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
