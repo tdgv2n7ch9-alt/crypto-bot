@@ -4489,7 +4489,8 @@ async def _mv2_show_razbor(bot, chat_id, kind, direction, symbol):
     text = card_v2.assemble_card_v2(traffic, symbol, direction, strength_lines,
                                      what_to_do["all_lines"], pros_cons_lines,
                                      context_lines, capital_lines, timing_lines)
-    await bot.send_message(chat_id, text, parse_mode="Markdown")
+    await bot.send_message(chat_id, text, parse_mode="Markdown",
+                            reply_markup=attach_home_row(None, back_to="mv2_tochki"))
 
 
 async def _mv2_render_rynok(q):
@@ -4595,7 +4596,7 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
         await q.answer("Строю карточку исполнения...")
         text = await _limitki_execution_card_text(symbol, side, lo, hi)
         await bot.send_message(chat_id, text, parse_mode="Markdown",
-                                reply_markup=attach_home_row(None))
+                                reply_markup=attach_home_row(None, back_to="mv2_limitki"))
 
     elif data in ("mv2_tochki", "mv2_tochki_all", "mv2_tochki_spot", "mv2_tochki_fut") \
             or data.startswith("mv2_tochki_more_"):
@@ -4725,7 +4726,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             class effective_chat:
                 id = q.message.chat_id
             message = q.message
-        await cmd_top_spot(FakeUpdate(), ctx)
+        await cmd_top_spot(FakeUpdate(), ctx, back_to="mv2_moi")
 
     elif data == "top_long":
         try: await q.message.delete()
@@ -4783,10 +4784,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data in ("game", "top_trades"):
-        nav = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить",     callback_data="top_trades"),
-             InlineKeyboardButton("🏠 Меню", callback_data="show_menu")],
-        ])
+        nav = attach_home_row(
+            [[InlineKeyboardButton("🔄 Обновить", callback_data="top_trades")]],
+            back_to="mv2_moi")
 
         lines = [f"💼 *BEST TRADE — МОНЕТЫ В РАБОТЕ*", f"🕐 {now_utc3()}", ""]
         has_signals = False
@@ -5118,10 +5118,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             coins = get_all_coins()
 
             if not coins:
-                nav_degraded = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\U0001f504 Повторить", callback_data="trend_analysis"),
-                     InlineKeyboardButton("\U0001f3e0 Меню",      callback_data="show_menu")],
-                ])
+                nav_degraded = attach_home_row(
+                    [[InlineKeyboardButton("\U0001f504 Повторить", callback_data="trend_analysis")]],
+                    back_to="mv2_rynok")
                 st_cg = _DATA_SOURCE_STATUS.get("coingecko_markets", {})
                 await q.edit_message_text(
                     "⚠️ *Данные временно недоступны*\n\n"
@@ -5437,13 +5436,13 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             phase_lines.append(f'🌊 *ЭЛЛИОТТ (1D):* {wave_line}')
             lines_out += ['', SEP, ''] + phase_lines
 
-            nav_trend = InlineKeyboardMarkup([
-                [InlineKeyboardButton("\U0001f504 Обновить", callback_data="trend_analysis"),
-                 InlineKeyboardButton("\U0001f3e0 Меню",    callback_data="show_menu")],
-            ])
+            nav_trend = attach_home_row(
+                [[InlineKeyboardButton("\U0001f504 Обновить", callback_data="trend_analysis")]],
+                back_to="mv2_rynok")
             await q.edit_message_text("\n".join(lines_out), parse_mode="Markdown", reply_markup=nav_trend)
         except Exception as e:
-            await q.edit_message_text(f"\u274c Ошибка: {e}", reply_markup=back_kb())
+            await q.edit_message_text(f"\u274c Ошибка: {e}",
+                                       reply_markup=attach_home_row(None, back_to="mv2_rynok"))
 
     elif data == "x100_scan":
         await q.edit_message_text("🚀 x100 сканер...",parse_mode="Markdown")
@@ -5734,17 +5733,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             out+=["  "+s for s in signals]
             out+=[SEP]
 
-            nav=InlineKeyboardMarkup([[
+            nav=attach_home_row([[
                 InlineKeyboardButton("🔄 Обновить",callback_data="institutional"),
-                InlineKeyboardButton("🏠 Меню",callback_data="show_menu")
             ],[
                 InlineKeyboardButton("📊 Обзор",callback_data="market_overview"),
                 InlineKeyboardButton("📈 Тренд",callback_data="trend_analysis")
-            ]])
+            ]], back_to="mv2_rynok")
             await q.edit_message_text("\n".join(out),parse_mode="Markdown",reply_markup=nav,disable_web_page_preview=True)
         except Exception as e:
             log.error(f"institutional: {e}")
-            await q.edit_message_text(f"❌ {e}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩️ Меню",callback_data="show_menu")]]))
+            await q.edit_message_text(f"❌ {e}",reply_markup=attach_home_row(None, back_to="mv2_rynok"))
 
 
     elif data == "whale_status":
@@ -10984,19 +10982,19 @@ async def _cmd_x100_scanner_body(update, ctx):
         try: await msg.reply_text(f"❌ Ошибка: {e}")
         except: pass
 
-async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_top_spot(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None):
     """/spot   :     """
     if _scan_busy["top_spot"]:
         await update.message.reply_text("⏳ Скан уже выполняется, подожди")
         return
     _scan_busy["top_spot"] = True
     try:
-        await _cmd_top_spot_body(update, ctx)
+        await _cmd_top_spot_body(update, ctx, back_to=back_to)
     finally:
         _scan_busy["top_spot"] = False
 
 
-async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE, back_to: str = None):
     msg = await update.message.reply_text(
         "⏳ Ищу спот-кандидатов для восстановления...\n"
         "📊 Топ-500 монет через CMC + CoinGecko"
@@ -11088,12 +11086,11 @@ async def _cmd_top_spot_body(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     candidates.sort(key=lambda x: x[1], reverse=True)
     top_spot = candidates[:10]
 
-    nav = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Обновить",  callback_data="top_spot"),
-         InlineKeyboardButton("🏠 Меню",      callback_data="show_menu")],
+    nav = attach_home_row([
+        [InlineKeyboardButton("🔄 Обновить",  callback_data="top_spot")],
         [InlineKeyboardButton("🟢 ТОП ЛОНГ",  callback_data="top_long"),
          InlineKeyboardButton("🔴 ТОП ШОРТ",  callback_data="top_short")],
-    ])
+    ], back_to=back_to)
 
     if not top_spot:
         lines = [
