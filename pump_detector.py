@@ -33,6 +33,7 @@ import asyncio
 import html
 import io
 import json
+import logging
 import statistics
 import time
 from collections import deque
@@ -40,6 +41,8 @@ from collections import deque
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+log = logging.getLogger(__name__)
 import matplotlib.patches as patches
 import requests
 import websockets
@@ -315,7 +318,7 @@ async def _discover_top_symbols() -> list:
         syms = [x["symbol"].lower() for x in rows[:TOP_N_SYMBOLS]]
         return syms or ["btcusdt", "ethusdt", "solusdt"]
     except Exception as e:
-        print(f"Pump Radar: symbol discovery failed ({e}), falling back to BTC/ETH/SOL")
+        log.error(f"Pump Radar: symbol discovery failed ({e}), falling back to BTC/ETH/SOL")
         return ["btcusdt", "ethusdt", "solusdt"]
 
 
@@ -625,7 +628,7 @@ async def _notify_owner(ctx: PumpContext, text: str):
     try:
         await ctx.bot.send_message(ctx.owner_chat_id, text)
     except Exception as e:
-        print(f"Pump Radar: не удалось отправить owner-уведомление: {e}")
+        log.error(f"Pump Radar: не удалось отправить owner-уведомление: {e}")
 
 
 def _mark_start():
@@ -732,7 +735,7 @@ async def run_miniticker_stream(ctx: PumpContext):
                     if result:
                         await _start_watch(ctx, sym, *result)
         except Exception as e:
-            print(f"Pump Radar (coarse): соединение разорвано ({e}), переподключение через 5 сек")
+            log.error(f"Pump Radar (coarse): соединение разорвано ({e}), переподключение через 5 сек")
             _coarse_connected = False
             if _coarse_reconnect_fail_start is None:
                 _coarse_reconnect_fail_start = time.time()
@@ -1171,7 +1174,7 @@ async def _send_alert(ctx: PumpContext, symbol: str, text: str, watch: dict, sub
     try:
         chart = _build_chart(symbol, watch)
     except Exception as e:
-        print(f"Pump Radar: chart build failed for {symbol}: {e}")
+        log.error(f"Pump Radar: chart build failed for {symbol}: {e}")
 
     try:
         if chart:
@@ -1181,7 +1184,7 @@ async def _send_alert(ctx: PumpContext, symbol: str, text: str, watch: dict, sub
             await ctx.bot.send_message(ctx.owner_chat_id, text, parse_mode="HTML",
                                         reply_markup=kb, disable_web_page_preview=True)
     except Exception as e:
-        print(f"Pump Radar: send failed: {e}")
+        log.error(f"Pump Radar: send failed: {e}")
 
     sym = symbol.upper().replace("USDT", "")
     subs = _subscriptions.get(sym, set())
@@ -1251,10 +1254,10 @@ async def _try_promote_pump(ctx: PumpContext, symbol: str, watch: dict):
         try:
             await shadow_engine.log_ema_stack_shadow_async(sym, pa.get("ema_stack_shadow"), promoted_live, rr)
         except Exception as e:
-            print(f"Pump Radar: ema_stack_shadow log {symbol} не удалось (не влияет на боевой алерт): {e}")
+            log.error(f"Pump Radar: ema_stack_shadow log {symbol} не удалось (не влияет на боевой алерт): {e}")
         return pa
     except Exception as e:
-        print(f"Pump Radar: promote check {symbol}: {e}")
+        log.error(f"Pump Radar: promote check {symbol}: {e}")
         return None
 
 
@@ -1284,7 +1287,7 @@ async def _send_promotion_chart(ctx: PumpContext, sym: str, direction: str,
                 chart_v4.build_trade_chart_v4, sym, candles_2h, direction,
                 entry_levels=[entry], sl=sl, tp1=tp1, tp2=tp2))
         except Exception as e:
-            print(f"Pump Radar: promotion chart_v4 {sym}: {e}, falling back to chart_v3")
+            log.error(f"Pump Radar: promotion chart_v4 {sym}: {e}, falling back to chart_v3")
         if chart is None:
             chart = await loop.run_in_executor(
                 None, chart_v3.build_trade_chart, sym, candles_2h, direction,
@@ -1294,7 +1297,7 @@ async def _send_promotion_chart(ctx: PumpContext, sym: str, direction: str,
             await ctx.bot.send_photo(ctx.owner_chat_id, photo=chart,
                                      caption=f"📊 {sym} — {side_ru} (промоушен из Памп-радара)")
     except Exception as e:
-        print(f"Pump Radar: promotion chart_v3 {sym}: {e}")
+        log.error(f"Pump Radar: promotion chart_v3 {sym}: {e}")
 
 
 async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
@@ -1316,7 +1319,7 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
         candles_1h = await loop.run_in_executor(None, ctx.get_ohlc, sym, "1h", 100)
         candles_4h = await loop.run_in_executor(None, ctx.get_ohlc, sym, "4h", 100)
     except Exception as e:
-        print(f"Pump Radar: analysis block OHLC fetch {symbol}: {e}")
+        log.error(f"Pump Radar: analysis block OHLC fetch {symbol}: {e}")
         return ""
     if not candles_1h and not candles_4h:
         return ""
@@ -1333,7 +1336,7 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
             pos50 = "выше" if price > tf4h["ema"][50] else "ниже"
             lines.append(f"Цена {pos20} EMA20 (4h), {pos50} EMA50 (4h)")
     except Exception as e:
-        print(f"Pump Radar: analysis block EMA {symbol}: {e}")
+        log.error(f"Pump Radar: analysis block EMA {symbol}: {e}")
 
     try:
         closes_4h = [c["close"] for c in candles_4h] if candles_4h else []
@@ -1347,7 +1350,7 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
                 else:
                     lines.append(f"BB(4h): цена внутри полос ({_fmt_price(bb_dn[-1])}-{_fmt_price(bb_up[-1])})")
     except Exception as e:
-        print(f"Pump Radar: analysis block BB {symbol}: {e}")
+        log.error(f"Pump Radar: analysis block BB {symbol}: {e}")
 
     try:
         sweep_1h = ta_extra.detect_sweep(candles_1h) if candles_1h else None
@@ -1356,7 +1359,7 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
         if sweep_line:
             lines.append(sweep_line)
     except Exception as e:
-        print(f"Pump Radar: analysis block sweep {symbol}: {e}")
+        log.error(f"Pump Radar: analysis block sweep {symbol}: {e}")
 
     try:
         if market_snapshot:
@@ -1369,14 +1372,14 @@ async def _build_analysis_block(ctx: PumpContext, symbol: str, watch: dict,
             oi_chg = ctx.get_oi_change(sym)
         lines.append(f"Funding: {funding:+.4f}%  ·  OI: ${oi_now/1e6:.1f}M ({oi_chg:+.1f}% за 5 мин)")
     except Exception as e:
-        print(f"Pump Radar: analysis block OI/funding {symbol}: {e}")
+        log.error(f"Pump Radar: analysis block OI/funding {symbol}: {e}")
 
     try:
         kz = market_snapshot.get("kz") if market_snapshot else ctx.get_killzone_status()
         if kz:
             lines.append(f"Killzone: {kz['active']['name']}")
     except Exception as e:
-        print(f"Pump Radar: analysis block killzone {symbol}: {e}")
+        log.error(f"Pump Radar: analysis block killzone {symbol}: {e}")
 
     if not lines:
         return ""
@@ -1451,7 +1454,7 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
             market_snapshot["oi_chg"], promoted_live, kz_quality=kz_quality,
             pro_score=pro_score)
     except Exception as e:
-        print(f"Pump Radar: shadow-логирование reversal не удалось (не влияет на боевой алерт): {e}")
+        log.error(f"Pump Radar: shadow-логирование reversal не удалось (не влияет на боевой алерт): {e}")
 
 
 async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
@@ -1625,7 +1628,7 @@ async def run_pump_detector(ctx: PumpContext):
                     kept_dynamic = [s for s in _current_symbols if s in _dynamically_added_symbols]
                     _current_symbols = new_syms + [s for s in kept_dynamic if s not in new_syms]
             except Exception as e:
-                print(f"Pump Radar: symbol refresh failed: {e}")
+                log.error(f"Pump Radar: symbol refresh failed: {e}")
             _symbols_ts = time.time()
 
         if _merge_dynamic_symbols():
@@ -1669,7 +1672,7 @@ async def run_pump_detector(ctx: PumpContext):
                     if _has_new_dynamic_symbols():
                         break
         except Exception as e:
-            print(f"Pump Radar: kline-соединение разорвано ({e}), переподключение через 5 сек")
+            log.error(f"Pump Radar: kline-соединение разорвано ({e}), переподключение через 5 сек")
             _kline_connected = False
             await asyncio.sleep(5)
         finally:
