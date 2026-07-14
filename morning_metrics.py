@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 import daily_metrics
 import event_radar
 import shadow_engine
+import shadow_outcome_analysis
 import signal_journal
 
 MORNING_HOUR_UTC3 = 8
@@ -146,6 +147,25 @@ def contour_readiness_lines() -> list:
         f"нет, {ema['elapsed_hours']:.1f}/{ema['window_hours']:.0f}ч окна"
     lines.append(f"  EMA-стек: n={ema['n']} -- {ema_status}")
     return lines
+
+
+def closed_outcomes_lines() -> list:
+    """П-Отчёт исходов (владелец, ночное задание 14->15.07, Пакет 2) -- таблица
+    закрытых исходов по контурам (tz13/П05/П09 + live): закрыто/WR%/PF/до
+    гейта min_outcomes=20. Переиспользует
+    shadow_outcome_analysis.closed_outcomes_report()/format_closed_outcomes_lines()
+    -- та же функция, что tools/morning_brief.py зовёт для отдельного MD-файла
+    ("правило одно"). `journal_records=signal_journal._journal` явно -- этот
+    модуль всегда работает ВНУТРИ живого процесса бота (APScheduler-job, см.
+    bot.py), in-memory журнал здесь свежее диска (GitHub-синк не мгновенный);
+    для standalone-скрипта (tools/morning_brief.py) верно обратное -- см. его
+    докстринг."""
+    try:
+        report = shadow_outcome_analysis.closed_outcomes_report(
+            journal_records=signal_journal._journal)
+        return shadow_outcome_analysis.format_closed_outcomes_lines(report)
+    except Exception as e:
+        return [f"  н/д (ошибка: {e})"]
 
 
 def author_zones_lines(bot_module) -> list:
@@ -277,6 +297,9 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
 
     lines += ["", "🔮 *Shadow-контуры, готовность к решению:*"]
     lines += contour_readiness_lines()
+
+    lines += ["", "📊 *Закрытые исходы по контурам (tz13/П05/П09/live):*"]
+    lines += closed_outcomes_lines()
 
     lines += ["", "📋 *Пакет 18, статус по пунктам:*"]
     for item, status in PACKET18_STATUS_TABLE:

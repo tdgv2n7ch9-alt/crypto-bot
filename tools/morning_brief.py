@@ -32,6 +32,7 @@ import daily_metrics
 import onchain_metrics
 import rug_radar
 import shadow_engine
+import shadow_outcome_analysis
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(REPO_ROOT, "output")
@@ -105,6 +106,22 @@ def shadow_table_section() -> list:
     ema_ready_txt = "да (окно закрыто)" if ema["ready"] else \
         f"нет, {ema['elapsed_hours']:.1f}/{ema['window_hours']:.0f}ч окна"
     lines.append(f"| EMA-стек | {ema['n']} | окно {ema['window_hours']:.0f}ч | {ema_ready_txt} |")
+    return lines
+
+
+def closed_outcomes_section() -> list:
+    """2б) П-Отчёт исходов (владелец, ночное задание 14->15.07, Пакет 2) --
+    закрытые исходы по контурам (tz13/П05/П09 + live): закрыто/WR%/PF/до
+    гейта min_outcomes=20. shadow_outcome_analysis.closed_outcomes_report()
+    сама грузит journal/shadow_signals.json + journal/signals.json с диска
+    (безопасно для этого standalone-скрипта, см. модуля докстринг про
+    persist-источники, не in-memory состояние живого бота)."""
+    lines = ["", "## 2б) Закрытые исходы по контурам", ""]
+    try:
+        report = shadow_outcome_analysis.closed_outcomes_report()
+        lines += shadow_outcome_analysis.format_closed_outcomes_lines(report)
+    except Exception as e:
+        lines.append(f"н/д (ошибка: {e})")
     return lines
 
 
@@ -231,6 +248,7 @@ def build_morning_brief(now_ts: float = None) -> str:
     lines = [f"# MORNING BRIEF -- {date_str}", ""]
     lines += market_section(now)
     lines += shadow_table_section()
+    lines += closed_outcomes_section()
     lines += top_findings_section()
     lines += open_questions_section()
     return "\n".join(lines) + "\n"

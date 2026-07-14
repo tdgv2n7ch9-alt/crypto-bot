@@ -158,3 +158,164 @@ def test_format_report_ready_zero_shadow_subset_honest():
     }
     text = soa.format_comparison_report(comparison, now_ts=1_700_000_000.0)
     assert "0 сделок" in text
+
+
+# ── П-Отчёт исходов (Пакет 2, ночное задание 14->15.07) ──────────────────────
+
+def _closed_shadow_rec(symbol, direction, ts, outcome, jid, entry_lo=95.0, entry_hi=105.0,
+                        sl=90.0, tp1=110.0, tp2=115.0, tp3=120.0, tz13_score=None,
+                        bpr_zone_count=None, oi_funding_ls_shadow=None):
+    """Shadow-запись + сразу journal-запись с тем же исходом (direct_id match) --
+    удобная фикстура для closed_outcomes_by_contour(), которая, в отличие от
+    build_live_vs_shadow_comparison(), также использует entry/sl/tpN для R-мультипла."""
+    shadow = {"symbol": symbol, "direction": direction, "ts": ts, "promoted_live": True,
+              "live_journal_id": jid, "entry_lo": entry_lo, "entry_hi": entry_hi, "sl": sl,
+              "tp1": tp1, "tp2": tp2, "tp3": tp3, "tz13_score": tz13_score,
+              "bpr_zone_count": bpr_zone_count, "oi_funding_ls_shadow": oi_funding_ls_shadow}
+    journal = {jid: {"id": jid, "symbol": symbol, "direction": direction, "ts": ts, "outcome": outcome}}
+    return shadow, journal
+
+
+# ── _trade_r_multiple ──
+
+def test_trade_r_multiple_sl_hit_is_minus_one():
+    rec = {"direction": "long", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 90.0}
+    assert soa._trade_r_multiple(rec, "SL_HIT") == -1.0
+
+
+def test_trade_r_multiple_tp1_long():
+    # entry=(95+105)/2=100, risk=100-90=10, tp1=110 -> reward=10 -> R=1.0
+    rec = {"direction": "long", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 90.0, "tp1": 110.0}
+    assert soa._trade_r_multiple(rec, "TP1_HIT") == 1.0
+
+
+def test_trade_r_multiple_short_direction_mirrors():
+    # SHORT: entry=100, risk=|100-110|=10, tp1=90 -> reward=(100-90)=10 -> R=1.0
+    rec = {"direction": "short", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 110.0, "tp1": 90.0}
+    assert soa._trade_r_multiple(rec, "TP1_HIT") == 1.0
+
+
+def test_trade_r_multiple_missing_data_returns_none():
+    assert soa._trade_r_multiple({"direction": "long"}, "TP1_HIT") is None
+    assert soa._trade_r_multiple({"direction": "long", "entry_lo": 1, "entry_hi": 2, "sl": None},
+                                  "TP1_HIT") is None
+
+
+def test_trade_r_multiple_unknown_direction_returns_none():
+    rec = {"direction": "sideways", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 90.0}
+    assert soa._trade_r_multiple(rec, "SL_HIT") is None
+
+
+# ── _profit_factor ──
+
+def test_profit_factor_mixed_wins_and_losses():
+    matches = [
+        {"shadow": {"direction": "long", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 90.0, "tp1": 110.0},
+         "match": {"outcome": "TP1_HIT"}},   # R=+1.0
+        {"shadow": {"direction": "long", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 90.0},
+         "match": {"outcome": "SL_HIT"}},    # R=-1.0
+    ]
+    result = soa._profit_factor(matches)
+    assert result["n_r"] == 2
+    assert result["pf"] == 1.0  # gross_profit=1.0 / gross_loss=1.0
+
+
+def test_profit_factor_no_losses_is_infinite_not_zero():
+    matches = [
+        {"shadow": {"direction": "long", "entry_lo": 95.0, "entry_hi": 105.0, "sl": 90.0, "tp1": 110.0},
+         "match": {"outcome": "TP1_HIT"}},
+    ]
+    result = soa._profit_factor(matches)
+    assert result["pf"] is None
+    assert "∞" in result["pf_label"]
+
+
+def test_profit_factor_empty_is_na():
+    result = soa._profit_factor([])
+    assert result["pf"] is None
+    assert result["pf_label"] == "н/д"
+
+
+# ── closed_outcomes_by_contour ──
+
+def test_closed_outcomes_by_contour_live_counts_all_matched():
+    s1, j1 = _closed_shadow_rec("BTC", "long", 1000.0, "TP1_HIT", 1)
+    s2, j2 = _closed_shadow_rec("ETH", "long", 1001.0, "SL_HIT", 2)
+    journal = {**j1, **j2}
+    report = soa.closed_outcomes_by_contour([s1, s2], journal, min_outcomes=20)
+    assert report["live"]["closed"] == 2
+    assert report["live"]["win_rate_pct"] == 50.0
+    assert report["live"]["ready"] is False
+    assert report["live"]["remaining"] == 18
+
+
+def test_closed_outcomes_by_contour_ready_when_threshold_met():
+    shadows, journal = [], {}
+    for i in range(20):
+        s, j = _closed_shadow_rec(f"SYM{i}", "long", 1000.0 + i, "TP1_HIT", i)
+        shadows.append(s)
+        journal.update(j)
+    report = soa.closed_outcomes_by_contour(shadows, journal, min_outcomes=20)
+    assert report["live"]["closed"] == 20
+    assert report["live"]["ready"] is True
+    assert report["live"]["remaining"] == 0
+
+
+def test_closed_outcomes_by_contour_filters_by_contour_presence():
+    s1, j1 = _closed_shadow_rec("BTC", "long", 1000.0, "TP1_HIT", 1, tz13_score=75)
+    s2, j2 = _closed_shadow_rec("ETH", "long", 1001.0, "SL_HIT", 2, tz13_score=None)
+    journal = {**j1, **j2}
+    report = soa.closed_outcomes_by_contour([s1, s2], journal, min_outcomes=20)
+    assert report["live"]["closed"] == 2
+    assert report["tz13"]["closed"] == 1  # только запись с tz13_score
+    assert report["patch05_bpr"]["closed"] == 0
+
+
+def test_closed_outcomes_by_contour_non_promoted_excluded():
+    s, j = _closed_shadow_rec("BTC", "long", 1000.0, "TP1_HIT", 1)
+    s["promoted_live"] = False
+    report = soa.closed_outcomes_by_contour([s], j, min_outcomes=20)
+    assert report["live"]["closed"] == 0
+
+
+def test_closed_outcomes_by_contour_oi_shadow_error_excluded():
+    s, j = _closed_shadow_rec("BTC", "long", 1000.0, "TP1_HIT", 1,
+                               oi_funding_ls_shadow={"error": "network fail"})
+    report = soa.closed_outcomes_by_contour([s], j, min_outcomes=20)
+    assert report["patch09_oi"]["closed"] == 0  # error-запись не считается присутствием
+
+
+# ── format_closed_outcomes_lines ──
+
+def test_format_closed_outcomes_lines_has_all_four_rows():
+    report = soa.closed_outcomes_by_contour([], {}, min_outcomes=20)
+    lines = soa.format_closed_outcomes_lines(report)
+    text = "\n".join(lines)
+    assert "Live (все сделки)" in text
+    assert "tz13" in text
+    assert "Патч 05 (BPR)" in text
+    assert "Патч 09 (OI/funding/L-S)" in text
+    assert "н/д" in text  # WR% при 0 закрытых
+
+
+# ── load_journal_records_from_disk ──
+
+def test_load_journal_records_from_disk_missing_file_returns_empty(tmp_path):
+    result = soa.load_journal_records_from_disk(str(tmp_path / "nope.json"))
+    assert result == {}
+
+
+def test_load_journal_records_from_disk_reads_records(tmp_path):
+    import json
+    path = tmp_path / "signals.json"
+    path.write_text(json.dumps({"schema_version": 1, "next_id": 3,
+                                 "records": {"1": {"symbol": "BTC"}, "2": {"symbol": "ETH"}}}))
+    result = soa.load_journal_records_from_disk(str(path))
+    assert result == {1: {"symbol": "BTC"}, 2: {"symbol": "ETH"}}
+
+
+def test_load_journal_records_from_disk_corrupt_file_returns_empty(tmp_path):
+    path = tmp_path / "signals.json"
+    path.write_text("{not valid json")
+    result = soa.load_journal_records_from_disk(str(path))
+    assert result == {}
