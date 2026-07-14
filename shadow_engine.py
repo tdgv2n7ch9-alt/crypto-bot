@@ -1083,6 +1083,92 @@ async def log_ema_stack_shadow_async(symbol: str, ema_stack_shadow: dict,
     return True
 
 
+# ── П-EMA re-logging: AUTO-скан старая-vs-новая EMA-методология (владелец, ──
+# ночное задание 14->15.07, Пакет 3 -- ПОДГОТОВКА, БЕЗ активации в бою) ──
+#
+# Контекст (см. PROGRESS.md, запись "П-EMA: разведка ДО кода"): в отличие от
+# log_ema_stack_shadow_async() выше (сравнение живёт внутри pump-radar пути,
+# bot.pro_analysis()), у ОСНОВНОГО AUTO-скана (bot.real_full_analysis()) нет
+# "старой" версии для сравнения -- НОВАЯ методология (ta_extra.ema_context()/
+# ema_stack_score_delta()) уже используется как БОЕВАЯ. Из трёх вариантов,
+# предложенных в PROGRESS.md, владелец рекомендовал (ночное задание): "перевес
+# shadow-логирования EMA-стека на AUTO-скан" -- отдельная, более дешёвая
+# методология сравнения СПЕЦИАЛЬНО для real_full_analysis() (вариант "б").
+#
+# EMA_AUTO_SHADOW_ENABLED = False -- владелец включает ОДНИМ словом "да"
+# (флаг -> True), НИЧЕГО больше менять не требуется: вызов из bot.py уже
+# подключён (см. send_scheduled()), но log_auto_ema_stack_shadow_async()
+# при False -- гарантированный no-op ДО любого I/O (ни локальной записи,
+# ни сети) -- флаг проверяется первой же строкой функции, не полагается на
+# то, что вызывающая сторона решит не звать её.
+EMA_AUTO_SHADOW_ENABLED = False
+
+
+def _build_auto_ema_stack_shadow_record(symbol: str, a: dict, promoted_live: bool) -> dict:
+    """Сравнивает НОВУЮ методологию (`a["ema_ctx"]`, уже посчитана боевым
+    real_full_analysis() -- никакого пересчёта здесь) со СТАРОЙ (2-EMA-на-ТФ,
+    `ta_extra.old_style_ema_trend()` -- контролируемый дубликат формулы
+    `bot.pro_analysis().tf_trend()`, см. её докстринг про железные границы)
+    на ТЕХ ЖЕ candles_1h/candles_4h, что real_full_analysis() уже получил (без
+    новых сетевых вызовов). Направление -- `a["is_long"]`, уже боевое решение,
+    эта запись его не меняет."""
+    direction = "long" if a.get("is_long") else "short"
+    ema_ctx = a.get("ema_ctx") or {}
+
+    def _map_stack(label):
+        return {"бычий": "bullish", "медвежий": "bearish"}.get(label, "neutral")
+
+    tf1h_new = _map_stack((ema_ctx.get("tf_1h") or {}).get("stack"))
+    tf4h_new = _map_stack((ema_ctx.get("tf_4h") or {}).get("stack"))
+    tf1h_old = ta_extra.old_style_ema_trend(a.get("candles_1h") or [], 20, 50)
+    tf4h_old = ta_extra.old_style_ema_trend(a.get("candles_4h") or [], 20, 50)
+
+    def _score_delta(tf1h, tf4h):
+        # Тот же вес, что ema_stack_score_delta() отдаёт боевому rocket --
+        # 4h -- основной ТФ, 1h -- только для информационного сравнения.
+        if tf4h == "bullish":
+            return 8 if direction == "long" else -8
+        if tf4h == "bearish":
+            return 8 if direction == "short" else -8
+        return 0
+
+    delta_new = _score_delta(tf1h_new, tf4h_new)
+    delta_old = _score_delta(tf1h_old, tf4h_old)
+    return {
+        "ts": time.time(),
+        "type": "auto_ema_stack_shadow",
+        "symbol": symbol,
+        "direction": direction,
+        "promoted_live": promoted_live,
+        "tf_1h_new": tf1h_new, "tf_4h_new": tf4h_new,
+        "tf_1h_old": tf1h_old, "tf_4h_old": tf4h_old,
+        "score_delta_new": delta_new, "score_delta_old": delta_old,
+        "diverges": delta_new != delta_old,
+    }
+
+
+async def log_auto_ema_stack_shadow_async(symbol: str, a: dict, promoted_live: bool) -> bool:
+    """Вызывается из bot.send_scheduled() ПОСЛЕ того, как боевое решение уже
+    принято -- см. EMA_AUTO_SHADOW_ENABLED докстринг выше. При выключенном
+    флаге -- гарантированный no-op (флаг первой строкой, ДО любого I/O)."""
+    if not EMA_AUTO_SHADOW_ENABLED:
+        return False
+    try:
+        record = _build_auto_ema_stack_shadow_record(symbol, a, promoted_live)
+    except Exception as e:
+        log.error(f"shadow_engine.log_auto_ema_stack_shadow_async: build failed for {symbol}: {e}")
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        log.error(f"shadow_engine: GitHub sync failed for auto_ema_stack_shadow ({symbol}): {e}")
+    return True
+
+
 # ── ПАКЕТ 19, П4 (владелец): L/S ratio -- shadow A/B "за тренд vs контр" ──
 #
 # Живьём (Whale Radar, bot._analyze_whale_signal(), bot.py:5985-5992): L/S

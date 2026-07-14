@@ -256,6 +256,32 @@ def detect_sweep(candles: list):
     return sh or sl
 
 
+def old_style_ema_trend(closes: list, ema_fast: int = 20, ema_slow: int = 50) -> str:
+    """П-EMA (владелец, ночное задание 14->15.07, Пакет 3 -- подготовка, БЕЗ
+    активации в бою) -- КОНТРОЛИРУЕМЫЙ дубликат `tf_trend()`, вложенной
+    закрытой функции внутри `bot.pro_analysis()` (bot.py:9222): "цена выше
+    быстрой EMA выше медленной EMA" = bullish, зеркально bearish, иначе
+    neutral. НАМЕРЕННО не рефакторинг pro_analysis() на переиспользование
+    этой функции -- pro_analysis() боевая (памп-радар), железные границы
+    CLAUDE.md запрещают трогать боевую сигнальную логику без явного
+    одобрения владельца, даже поведение-сохраняющим рефакторингом. Эта
+    функция -- read-only копия ФОРМУЛЫ для shadow-сравнения со СТАРОЙ
+    методологией multi-TF confluence в AUTO-пути (`real_full_analysis()`,
+    который использует НОВУЮ методологию `ema_context()`/
+    `ema_stack_score_delta()` как боевую -- см. shadow_engine.py
+    EMA_AUTO_SHADOW_ENABLED)."""
+    if len(closes) < ema_slow:
+        return "neutral"
+    ef = ema_last(closes, ema_fast) or closes[-1]
+    es = ema_last(closes, ema_slow) or closes[-1]
+    p = closes[-1]
+    if p > ef > es:
+        return "bullish"
+    if p < ef < es:
+        return "bearish"
+    return "neutral"
+
+
 def ema_stack_score_delta(ema_ctx: dict, direction: str) -> int:
     """+8 если 4h-стек по направлению сигнала, -8 если против, 0 если смешанный/н\\д.
     4h выбран как основной ТФ для скоринга (старший ТФ = контекст в SMC/ICT методологии

@@ -6516,6 +6516,16 @@ async def send_scheduled(bot: Bot):
             except Exception as e:
                 log.error(f"[AUTO] shadow_engine (не влияет на боевой сигнал) {sym}: {e}")
 
+            # П-EMA re-logging (владелец, ночное задание 14->15.07, Пакет 3 --
+            # ПОДГОТОВКА, БЕЗ активации): no-op, пока
+            # shadow_engine.EMA_AUTO_SHADOW_ENABLED=False (флаг проверяется
+            # внутри функции первой строкой, до любого I/O) -- см. её докстринг.
+            try:
+                await shadow_engine.log_auto_ema_stack_shadow_async(
+                    sym, a, promoted_live=promoted)
+            except Exception as e:
+                log.error(f"[AUTO] shadow_engine auto_ema_stack (не влияет на боевой сигнал) {sym}: {e}")
+
             if not promoted:
                 continue
 
