@@ -18,6 +18,8 @@ import signal_journal as sj
 
 class _FakeBotModule:
     _deploy_check_boot_sha = {"sha": "aaa1111", "date": None}
+    SOURCE_DISPLAY_LABELS = {"coingecko_markets": "CoinGecko markets",
+                              "yahoo_finance": "Yahoo (DXY/S&P/Gold/VIX)"}
 
     @staticmethod
     def get_data_source_status():
@@ -34,6 +36,29 @@ def test_deploy_status_up_to_date():
     text = morning_metrics.deploy_status_summary(_FakeBotModule())
     assert "актуален" in text
     assert "aaa1111" in text
+
+
+# ── находка 2026-07-14: живой сбой send_morning_digest (400 Bad Request,
+# "Can't parse entities" -- Telegram Markdown ломается на нечётном числе "_").
+# Тот же класс дефекта, что ПАКЕТ 19 П0 (test_markdown_safety.py), но в
+# "Здоровье источников" секции build_morning_digest(), которая не была
+# покрыта тем фиксом. ──
+
+def test_build_morning_digest_down_source_uses_display_label_not_raw_key(monkeypatch, tmp_path):
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "yahoo_finance" not in text
+    assert "Yahoo (DXY/S&P/Gold/VIX): down" in text
+
+
+def test_build_morning_digest_health_section_has_even_underscore_count(monkeypatch, tmp_path):
+    """Прямая проверка условия живого сбоя: нечётное число "_" в тексте с
+    parse_mode="Markdown" -- telegram.error.BadRequest. Считаем по всему
+    итоговому тексту, не только по секции источников -- регрессия могла бы
+    прийти из любого места, тест ловит её честно на уровне контракта."""
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert text.count("_") % 2 == 0, "нечётное число '_' -- сломает parse_mode=\"Markdown\" в Telegram"
 
 
 def test_deploy_status_stale_main_ahead():

@@ -234,6 +234,9 @@ def test_shadow_vs_live_top_discrepancy_honest_detail_when_no_discrepancy_text(t
 # ── build_daily_digest() (интеграционно, всё замокано) ──
 
 class _FakeBotModule:
+    SOURCE_DISPLAY_LABELS = {"coingecko_markets": "CoinGecko markets",
+                              "yahoo_finance": "Yahoo (DXY/S&P/Gold/VIX)"}
+
     @staticmethod
     def get_data_source_status():
         return {"coingecko_markets": {"ok": True}, "yahoo_finance": {"ok": False}}
@@ -282,7 +285,12 @@ def test_build_daily_digest_shows_down_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
     monkeypatch.setattr(daily_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
     text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=1_000_000.0)
-    assert "yahoo_finance: down" in text
+    # Находка 2026-07-14: раньше был сырой ключ "yahoo_finance: down" -- "_"
+    # ломает parse_mode="Markdown" (см. ПАКЕТ 19 П0). Теперь -- человекочитаемая
+    # метка без "_", как в welcome_text_v2().
+    assert "Yahoo (DXY/S&P/Gold/VIX): down" in text
+    assert "yahoo_finance" not in text
+    assert text.count("_") % 2 == 0, "нечётное число '_' -- сломает parse_mode=\"Markdown\" в Telegram"
 
 
 def test_build_daily_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path):

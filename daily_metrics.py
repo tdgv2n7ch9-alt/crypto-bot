@@ -242,7 +242,13 @@ def build_daily_digest(bot_module, now_ts: float = None) -> str:
         lines.append(f"  Символы: {', '.join(seen_syms)}")
 
     lines += ["", "🩺 *Здоровье источников:*"]
-    bad = [f"{name}: {status}" for name, status in health.items() if status == "down"]
+    # Находка 2026-07-14 (живой сбой send_morning_digest, тот же класс, что
+    # ПАКЕТ 19 П0): сырые ключи _DATA_SOURCE_STATUS ("coingecko_markets" и
+    # т.п.) содержат "_" -- нечётное число подчёркиваний в тексте с
+    # parse_mode="Markdown" ломает telegram.error.BadRequest "Can't parse
+    # entities". Тот же безопасный маппинг, что уже применён в welcome_text_v2().
+    bad = [f"{bot_module.SOURCE_DISPLAY_LABELS.get(name, name.replace('_', ' '))}: {status}"
+           for name, status in health.items() if status == "down"]
     if bad:
         lines.append("  " + " · ".join(bad))
     else:
