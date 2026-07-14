@@ -125,6 +125,7 @@ import chart_patterns
 import rug_radar
 import etherscan_whale
 import derivatives_extra
+import miniapp_api
 import event_radar
 import new_coin_scan
 import inbox
@@ -12963,6 +12964,15 @@ async def _start_pump_detector(app):
     asyncio.create_task(run_miniticker_stream(ctx))
     asyncio.create_task(_whale_radar_task(app.bot, owner_id))
     asyncio.create_task(_level_watch_task(app.bot, owner_id))
+
+    # П-MiniApp Этап 1 (владелец, docs/TZ_P-MiniApp_v1.md): read-only JSON API
+    # внутри этого же worker-процесса, тот же паттерн -- фоновая задача в уже
+    # работающем event loop. Best-effort: сбой старта сервера НЕ должен ронять
+    # бот -- сама Telegram-часть первична, API -- дополнение (ТЗ раздел 0, п.3).
+    try:
+        asyncio.create_task(miniapp_api.start_miniapp_api_server(sys.modules[__name__]))
+    except Exception as e:
+        log.error(f"[MINIAPP-API] старт не удался: {e}")
 
     signal_journal.init(app.bot, owner_id)
     await signal_journal.startup_sync()
