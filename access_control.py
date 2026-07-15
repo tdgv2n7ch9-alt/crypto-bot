@@ -125,9 +125,14 @@ async def _maybe_alert_owner_flood(context) -> None:
         return
     _last_flood_alert_ts = now
     try:
-        await context.bot.send_message(
-            _owner_id(),
-            f"🚨 *Flood-guard*: >{GLOBAL_FLOOD_THRESHOLD_PER_MIN} команд/мин суммарно "
+        # П-Каналы (владелец, 2026-07-15): security-алерт -- не торговый сигнал,
+        # через send_system() (единый роутинг/префикс). Ленивый импорт -- bot.py
+        # импортирует access_control на уровне модуля, обратный импорт здесь
+        # на уровне модуля создал бы циклическую зависимость.
+        import bot as _bot_module
+        await _bot_module.send_system(
+            context.bot,
+            f"*Flood-guard*: >{GLOBAL_FLOOD_THRESHOLD_PER_MIN} команд/мин суммарно "
             f"по всем не-OWNER чатам -- возможна скоординированная атака.",
             parse_mode="Markdown")
     except Exception as e:

@@ -138,6 +138,80 @@ TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
 BOT_VERSION = "v130"         # обновлять при каждом коммите с изменением bot.py
 
+# ── П-Каналы (владелец, 2026-07-15): единая точка отправки СИСТЕМНЫХ/
+# инфраструктурных сообщений (деплой-алерты, реконнекты, health, watchdog,
+# security) -- отдельно от торговых сигналов (AUTO-карточки, /top_long и
+# т.п., которые эту функцию НЕ используют и остаются в основном чате как
+# раньше, владелец п.2). Этап подготовки (владелец, до получения chat_id
+# новой группы "BEST TRADE — Система"): SYSTEM_CHANNEL_CHAT_ID не задан ->
+# send_system() шлёт ТОЛЬКО в основной чат владельца, с префиксом --
+# поведение идентично сегодняшнему, кроме префикса. Как только владелец
+# пришлёт chat_id (переменная окружения Railway) -- роутинг переключится
+# сам, без дальнейших правок кода (владелец п.1).
+SYSTEM_MESSAGE_PREFIX = "🛠 [SYS] "
+
+
+def _system_channel_chat_id():
+    """None, пока владелец не прислал chat_id новой группы (этап подготовки).
+    Невалидное значение переменной окружения -- честно None, не роняем
+    процесс на опечатке в env."""
+    raw = os.getenv("SYSTEM_CHANNEL_CHAT_ID", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        log.error(f"send_system: SYSTEM_CHANNEL_CHAT_ID='{raw}' -- не целое число, игнорирую")
+        return None
+
+
+async def send_system(bot: Bot, text: str, critical: bool = False, **kwargs) -> None:
+    """Единая точка отправки системных/инфраструктурных сообщений (владелец,
+    П-Каналы). Добавляет `SYSTEM_MESSAGE_PREFIX` автоматически -- вызывающая
+    сторона НЕ должна дублировать префикс в своём тексте.
+
+    Роутинг (владелец пп.1/3):
+      - system-канал НЕ настроен (этап подготовки) -> только основной чат.
+      - system-канал настроен, `critical=False` -> только системный канал
+        (основной чат разгружен от инфраструктурного шума -- вся суть
+        задачи).
+      - `critical=True` (владелец: "бот молчит, потеря данных") -> В ОБА
+        чата всегда, даже если системный канал уже настроен -- критическое
+        не должно потеряться, если владелец сейчас смотрит только основной
+        чат.
+
+    Сбой отправки в ОДИН из чатов не должен ронять отправку в другой --
+    каждый bot.send_message() в своём try/except (тот же принцип
+    отказоустойчивости, что везде в проекте, ошибки -- через log.error())."""
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    system_id = _system_channel_chat_id()
+    prefixed_text = f"{SYSTEM_MESSAGE_PREFIX}{text}"
+
+    targets = []
+    if system_id is not None:
+        targets.append(system_id)
+    if system_id is None or critical:
+        targets.append(owner_id)
+
+    for chat_id in dict.fromkeys(targets):  # дедуп с сохранением порядка (system_id==owner_id edge case)
+        try:
+            await bot.send_message(chat_id, prefixed_text, **kwargs)
+        except Exception as e:
+            log.error(f"send_system: не удалось отправить в {chat_id}: {e}")
+
+
+async def _log_new_group_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Диагностика (владелец, П-Каналы 2026-07-15): логирует chat_id/title любого
+    группового сообщения в railway logs -- получить chat_id новой группы через
+    getUpdates не вышло (живой run_polling() уже потребляет апдейты первым,
+    второй ручной запрос видит пустую очередь). Постоянная малошумная утилита --
+    пригодится при добавлении бота в любую будущую группу клуба, не только
+    "BEST TRADE — Система". group=99 (см. регистрацию ниже) -- выполняется
+    ПОСЛЕ всех остальных обработчиков, ничего не перехватывает и не отвечает."""
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        log.info(f"[CHAT-DIAG] group message: chat_id={chat.id} title={chat.title!r} type={chat.type}")
+
 # === Concurrency guard для тяжёлых сканов (ТОП ЛОНГ/ШОРТ/СПОТ, x100) ===
 # Блокирующие HTTP-вызовы внутри сканов уводятся в run_in_executor, чтобы не морозить
 # event loop (иначе /start и клики по кнопкам зависают на минуты за сканом). Guard не
@@ -684,8 +758,6 @@ async def run_watchdog(bot: Bot):
     задач. Если задача не отмечалась дольше 2x своего ожидаемого интервала -- шлёт
     владельцу ОДИН алерт на инцидент (не спамит), сбрасывается автоматически при
     следующем успешном heartbeat (см. _mark_heartbeat)."""
-    import os
-    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     now = time.time()
     for name, expected in _job_expected_interval_sec.items():
         if not expected:
@@ -695,11 +767,14 @@ async def run_watchdog(bot: Bot):
         if age > expected * 2 and name not in _job_alerted_stale:
             _job_alerted_stale.add(name)
             try:
-                await bot.send_message(
-                    owner_id,
-                    f"⚠️ Watchdog: фоновая задача «{name}» не отмечалась {age/60:.0f} мин "
+                # П-Каналы (владелец): "бот молчит" -- фоновая задача не тикает --
+                # критично, дублируем в оба чата.
+                await send_system(
+                    bot,
+                    f"Watchdog: фоновая задача «{name}» не отмечалась {age/60:.0f} мин "
                     f"(ожидается раз в {expected/60:.0f} мин). Похоже, зависла или падает "
                     f"молча -- проверь /health.",
+                    critical=True,
                 )
             except Exception:
                 pass
@@ -719,12 +794,15 @@ async def run_watchdog(bot: Bot):
         if shadow_age > SHADOW_WRITE_ALERT_THRESHOLD_SEC and not _shadow_write_alerted:
             _shadow_write_alerted = True
             try:
-                await bot.send_message(
-                    owner_id,
-                    f"⚠️ Watchdog: shadow-поток (send_scheduled) не писал записей "
+                # П-Каналы (владелец): "потеря данных" -- shadow-поток тихо не
+                # пишет записи -- критично, дублируем в оба чата.
+                await send_system(
+                    bot,
+                    f"Watchdog: shadow-поток (send_scheduled) не писал записей "
                     f"{shadow_age/3600:.1f}ч (порог {SHADOW_WRITE_ALERT_THRESHOLD_SEC/3600:.0f}ч), "
                     f"хотя сам AUTO-цикл живой. Похоже, тихо падает внутри -- "
                     f"проверь /stats и `railway logs` на 'log_send_scheduled_shadow_async'.",
+                    critical=True,
                 )
             except Exception:
                 pass
@@ -742,9 +820,11 @@ async def run_watchdog(bot: Bot):
         if status.get("consecutive_failures", 0) >= _SOURCE_ALERT_THRESHOLD and name not in _source_alerted:
             _source_alerted.add(name)
             try:
-                await bot.send_message(
-                    owner_id,
-                    f"⚠️ Watchdog: источник данных «{name}» — {status['consecutive_failures']} отказов "
+                # П-Каналы (владелец): деградация, не полная потеря -- бот
+                # продолжает работать на других источниках, НЕ критично.
+                await send_system(
+                    bot,
+                    f"Watchdog: источник данных «{name}» — {status['consecutive_failures']} отказов "
                     f"подряд. Последняя ошибка: {status.get('last_error') or '—'}. Проверь ключ/квоту "
                     f"(/health).",
                 )
@@ -864,12 +944,11 @@ async def check_deploy_freshness(bot: Bot):
         return
     if age_sec < DEPLOY_STALE_THRESHOLD_SEC:
         return
-    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     mins = int(age_sec / 60)
     try:
-        await bot.send_message(
-            owner_id,
-            f"⚠️ Пуш в main {mins} мин назад ещё не задеплоился -- этот процесс всё ещё "
+        await send_system(
+            bot,
+            f"Пуш в main {mins} мин назад ещё не задеплоился -- этот процесс всё ещё "
             f"на коммите `{_deploy_check_boot_sha['sha'][:7]}`, main на `{sha[:7]}`, и в "
             f"диапазоне есть файлы, реально попадающие под railway.json watchPatterns "
             f"(иначе этот алерт не сработал бы). Похоже на Railway SKIPPED-деплой (см. "
@@ -889,8 +968,6 @@ async def run_daily_backup(bot: Bot):
     которые last-write-wins перезаписываются (ROADMAP П1.4 -- у рабочих файлов нет
     истории снапшотов, эта задача её создаёт). Не бросает исключений наружу и не трогает
     рабочие файлы -- только читает текущее состояние и пишет по новому датированному пути."""
-    import os
-    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     date_str = datetime.now(TZ).strftime("%Y-%m-%d")
     sub_ok = False
     journal_ok = False
@@ -904,10 +981,12 @@ async def run_daily_backup(bot: Bot):
         print(f"run_daily_backup: journal snapshot failed: {e}")
     if not (sub_ok and journal_ok):
         try:
-            await bot.send_message(
-                owner_id,
-                f"⚠️ Дневной бэкап {date_str}: подписчики {'ок' if sub_ok else 'ОШИБКА'}, "
+            # П-Каналы (владелец): бэкап-сбой = риск "потери данных" -- критично.
+            await send_system(
+                bot,
+                f"Дневной бэкап {date_str}: подписчики {'ок' if sub_ok else 'ОШИБКА'}, "
                 f"журнал {'ок' if journal_ok else 'ОШИБКА'} -- проверь GITHUB_TOKEN/доступность.",
+                critical=True,
             )
         except Exception:
             pass
@@ -12940,7 +13019,8 @@ async def _startup_integrity_check(bot: Bot, owner_id: int):
         lines.append(f"🔴 Shadow-архив: синк упал ({str(e)[:150]})")
 
     try:
-        await bot.send_message(owner_id, "\n".join(lines), parse_mode="Markdown")
+        # П-Каналы (владелец): рутинный стартовый отчёт, не критично.
+        await send_system(bot, "\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         print(f"_startup_integrity_check: не удалось отправить сообщение владельцу: {e}")
 
@@ -13229,6 +13309,10 @@ def main():
     app.add_handler(CommandHandler("trace",     cmd_trace))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
+    # П-Каналы (владелец, 2026-07-15): диагностика chat_id новых групп -- group=99
+    # (отдельная группа обработчиков PTB, выполняется НЕЗАВИСИМО от остальных,
+    # не перехватывает и не мешает ни одному хендлеру выше).
+    app.add_handler(MessageHandler(filters.ALL, _log_new_group_contact), group=99)
     # Deny-by-default auth (group=-1, обрабатывается ДО всех хендлеров выше) --
     # регистрируется ПОСЛЕДНИМ в коде, но реально исполняется ПЕРВЫМ (группа -1 < 0).
     access_control.install(app)

@@ -6,6 +6,7 @@ ApplicationHandlerStop нужен реально -- он импортирует�
 import asyncio
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("OWNER_CHAT_ID", "7009350191")
@@ -419,3 +420,48 @@ def test_enforce_allows_vip_when_not_locked_down(monkeypatch, tmp_path):
     _set_role(555444, sub.ROLE_VIP, monkeypatch)
     update = _FakeUpdate(chat_id=555444, text="/market")
     assert asyncio.run(_run_enforce(update)) == "ALLOWED"
+
+
+# --- П-Каналы (владелец, 2026-07-15): flood-guard алерт через bot.send_system ---
+
+def test_maybe_alert_owner_flood_uses_send_system(monkeypatch):
+    """_maybe_alert_owner_flood() лениво импортирует bot.py (bot.py импортирует
+    access_control на уровне модуля -- обратный импорт на уровне модуля здесь
+    создал бы циклическую зависимость) и зовёт bot.send_system(). Патчим
+    bot.send_system напрямую -- лениво импортированный bot -- тот же кэшированный
+    модуль из sys.modules, что уже загружен другими тестовыми файлами."""
+    import bot as _bot_module
+
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append({"text": text, "critical": critical, "kw": kw})
+
+    monkeypatch.setattr(_bot_module, "send_system", _fake_send_system)
+    monkeypatch.setattr(ac, "_last_flood_alert_ts", 0.0)
+
+    class _FakeContext:
+        bot = object()
+
+    asyncio.run(ac._maybe_alert_owner_flood(_FakeContext()))
+    assert len(calls) == 1
+    assert "Flood-guard" in calls[0]["text"]
+    assert calls[0]["kw"].get("parse_mode") == "Markdown"
+
+
+def test_maybe_alert_owner_flood_respects_cooldown(monkeypatch):
+    import bot as _bot_module
+
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append(1)
+
+    monkeypatch.setattr(_bot_module, "send_system", _fake_send_system)
+    monkeypatch.setattr(ac, "_last_flood_alert_ts", time.time())  # только что алертили
+
+    class _FakeContext:
+        bot = object()
+
+    asyncio.run(ac._maybe_alert_owner_flood(_FakeContext()))
+    assert len(calls) == 0  # в пределах кулдауна -- не алертит повторно

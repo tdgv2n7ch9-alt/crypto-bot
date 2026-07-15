@@ -624,9 +624,17 @@ def _scenario_lines(kind: str, oi_change_pct: float, rug_warn: bool) -> list:
             "⏳ Наблюдаю за откатом до 30 минут..."]
 
 
-async def _notify_owner(ctx: PumpContext, text: str):
+async def _notify_owner(ctx: PumpContext, text: str, critical: bool = False):
+    """П-Каналы (владелец, 2026-07-15): системные уведомления Pump Radar
+    (реконнект/старт/потеря данных) идут через bot.send_system() -- тот же
+    единый роутинг/префикс 🛠 [SYS], что все остальные системные сообщения.
+    Ленивый импорт bot.py -- pump_detector.py не импортируется на уровне
+    модуля bot.py (только внутри _start_pump_detector()), обратный импорт
+    здесь безопасен по времени вызова (оба модуля уже полностью загружены
+    к первому реальному вызову этой функции)."""
     try:
-        await ctx.bot.send_message(ctx.owner_chat_id, text)
+        import bot as _bot_module
+        await _bot_module.send_system(ctx.bot, text, critical=critical)
     except Exception as e:
         log.error(f"Pump Radar: не удалось отправить owner-уведомление: {e}")
 
@@ -747,7 +755,8 @@ async def run_miniticker_stream(ctx: PumpContext):
                 and not _coarse_watchdog_notified_no_data
                 and time.time() - _coarse_reconnect_fail_start > COARSE_NO_DATA_ALERT_SEC):
             _coarse_watchdog_notified_no_data = True
-            await _notify_owner(ctx, "Радар без данных")
+            # П-Каналы (владелец): затяжная потеря данных радара -- критично.
+            await _notify_owner(ctx, "Радар без данных", critical=True)
 
         await asyncio.sleep(5)
 
