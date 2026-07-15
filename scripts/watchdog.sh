@@ -29,6 +29,27 @@
 #      exit; INT/TERM вызывают cleanup явно и exit'ятся сами, EXIT просто
 #      выполняет cleanup и даёт скрипту завершиться естественным кодом.
 #   6. Никогда не убивает чужие процессы -- только читает `pgrep`/`ps`.
+#   7. IDLE-ДЕТЕКТ (владелец, 2026-07-15, вставлено во время пакета
+#      П-Обучение): "живой процесс claude, но idle после API-обрыва" --
+#      claude не упал (п.3 его не ловит, процесс жив), но сессия не
+#      прогрессирует (сеть оборвалась в момент, когда ответ модели уже не
+#      вернётся). Сигнал прогресса -- mtime самого свежего транскрипта
+#      этого репозитория (~/.claude/projects/<...>/*.jsonl): он обновляется
+#      на КАЖДОЙ реплике (и пользователя, и ассистента, и любом
+#      инструменте), т.е. это более тонкий сигнал, чем git-коммиты (между
+#      коммитами законно проходят долгие минуты разведки/чтения без
+#      единого коммита -- коммиты НЕ используются как гейт, только
+#      транскрипт). Порог по умолчанию 1800с (30 мин, `WATCHDOG_IDLE_
+#      TIMEOUT_SEC` для переопределения) -- сознательно консервативный
+#      запас против ложных срабатываний на легитимно долгий ОДИН
+#      инструмент-вызов (например серия sleep-опросов деплоя внутри
+#      одного Bash-вызова, до ~10 минут по лимиту инструмента) -- см.
+#      обвязку `_idle_monitor()`. При срабатывании -- НЕ пытается ввести
+#      текст в повисшую интерактивную сессию (ненадёжно, TTY может быть в
+#      непредсказуемом состоянии), а посылает `SIGTERM` самому процессу
+#      claude -- тот же, уже проверенный (п.3) путь рестарта с `--resume`
+#      и промптом "Продолжай..." подхватывает управление сам, без
+#      дублирования логики.
 #
 # Запуск (см. также однострочную инструкцию в конце файла):
 #   ~/crypto-bot/scripts/watchdog.sh
@@ -159,6 +180,43 @@ _discover_current_session_id() {
     basename "$newest" .jsonl
 }
 
+# ── п.7: idle-детект -- см. докстринг в шапке файла. Отдельная функция,
+# запускается в фоне ПАРАЛЛЕЛЬНО каждому запуску claude (не вызывается
+# напрямую отсюда -- см. основной цикл ниже).
+IDLE_TIMEOUT_SEC="${WATCHDOG_IDLE_TIMEOUT_SEC:-1800}"
+IDLE_CHECK_INTERVAL_SEC="${WATCHDOG_IDLE_CHECK_INTERVAL_SEC:-60}"
+
+_file_mtime_epoch() {
+    stat -f%m "$1" 2>/dev/null || stat -c%Y "$1" 2>/dev/null
+}
+
+_idle_monitor() {
+    local claude_pid="$1"
+    local dir transcript_file mtime now idle_for
+    dir="$(_project_transcript_dir)"
+    while kill -0 "$claude_pid" 2>/dev/null; do
+        sleep "$IDLE_CHECK_INTERVAL_SEC"
+        # claude_pid мог уже завершиться ПОКА мы спали -- перепроверяем
+        # сразу после sleep, до любого действия ниже.
+        kill -0 "$claude_pid" 2>/dev/null || break
+        # Самый свежий транскрипт вычисляется КАЖДЫЙ раз заново (не
+        # захватывается один раз при старте монитора) -- на первом запуске
+        # без --resume session-id ещё не существовал в момент старта
+        # claude, транскрипт появляется только после первой реплики.
+        transcript_file="$(ls -t "$dir"/*.jsonl 2>/dev/null | head -1 || true)"
+        [ -n "$transcript_file" ] || continue
+        mtime="$(_file_mtime_epoch "$transcript_file")"
+        [ -n "$mtime" ] || continue
+        now="$(date +%s)"
+        idle_for=$(( now - mtime ))
+        if [ "$idle_for" -ge "$IDLE_TIMEOUT_SEC" ]; then
+            log "IDLE-ДЕТЕКТ: $(basename "$transcript_file") не менялся ${idle_for}с (порог ${IDLE_TIMEOUT_SEC}с) -- claude PID $claude_pid жив, но сессия не прогрессирует (вероятный обрыв API). Отправляю SIGTERM -- основной цикл перезапустит с --resume."
+            kill -TERM "$claude_pid" 2>/dev/null
+            return 0
+        fi
+    done
+}
+
 SESSION_ID="$(_discover_current_session_id)"
 if [ -n "$SESSION_ID" ]; then
     log "текущая сессия для резюме: $SESSION_ID"
@@ -170,12 +228,24 @@ while true; do
     rotate_log_if_needed
     if [ -n "$SESSION_ID" ]; then
         log "запуск: $CLAUDE_BIN --dangerously-skip-permissions --resume $SESSION_ID + стартовое сообщение"
-        "$CLAUDE_BIN" --dangerously-skip-permissions --resume "$SESSION_ID" "$RESUME_PROMPT"
+        "$CLAUDE_BIN" --dangerously-skip-permissions --resume "$SESSION_ID" "$RESUME_PROMPT" &
     else
         log "запуск: $CLAUDE_BIN --dangerously-skip-permissions (новая сессия, id ещё не известен)"
-        "$CLAUDE_BIN" --dangerously-skip-permissions
+        "$CLAUDE_BIN" --dangerously-skip-permissions &
     fi
+    CLAUDE_PID=$!
+    # п.7: idle-монитор в фоне, привязан к ЭТОМУ конкретному PID claude --
+    # не переживает следующую итерацию цикла (убивается ниже сразу после
+    # выхода claude, до того как PID мог бы переиспользоваться ОС).
+    _idle_monitor "$CLAUDE_PID" &
+    IDLE_MONITOR_PID=$!
+
+    wait "$CLAUDE_PID"
     exit_code=$?
+
+    kill "$IDLE_MONITOR_PID" 2>/dev/null
+    wait "$IDLE_MONITOR_PID" 2>/dev/null
+
     rotate_log_if_needed
     log "claude завершился, exit_code=${exit_code}"
 
