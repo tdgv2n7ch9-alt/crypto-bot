@@ -131,6 +131,7 @@ import new_coin_scan
 import inbox
 import glossary
 import course_content
+import methodology_content
 import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
@@ -4725,7 +4726,8 @@ def _obuchenie_paginate_text(text: str, limit: int = _OBUCHENIE_LESSON_PAGE_LIMI
 def _obuchenie_module_list_kb(offset: int = 0):
     modules = course_content.MODULES
     page = modules[offset:offset + OBUCHENIE_MODULE_PAGE_SIZE]
-    kb_rows = [[InlineKeyboardButton(course_content.CHEATSHEET["title"], callback_data="mv2_obuchenie_cheat_0")]]
+    kb_rows = [[InlineKeyboardButton(course_content.CHEATSHEET["title"], callback_data="mv2_obuchenie_cheat_0")],
+               [InlineKeyboardButton("🎓 МЕТОДОЛОГИЯ", callback_data="mv2_obuchenie_metod")]]
     for m in page:
         kb_rows.append([InlineKeyboardButton(f"{m['id']}. {m['title']}",
                                               callback_data=f"mv2_obuchenie_mod_{m['id']}")])
@@ -4825,6 +4827,70 @@ async def _mv2_render_obuchenie_static(bot, chat_id, message_id, kind: str, page
         kb_rows.append(nav_row)
     await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
                                  parse_mode="Markdown", reply_markup=_mv2_back_kb(kb_rows, back_to="mv2_obuchenie"))
+
+
+# ── 🎓 МЕТОДОЛОГИЯ (Пакет П-Библиотека, Этап 1, владелец, 2026-07-15) ──────
+# Источник -- methodology_content.py (парсер knowledge/METHODOLOGY_CORE.md
+# по темам `## N. Title`, см. его докстринг). Контент НЕ пересказывается --
+# существующие темы файла как есть, только безопасно сконвертированы под
+# Telegram legacy Markdown (methodology_content.to_telegram_markdown()).
+
+METOD_TOPIC_PAGE_SIZE = 8
+
+
+def _metod_topic_list_kb(offset: int = 0):
+    sections = methodology_content.load_methodology_sections()
+    page = sections[offset:offset + METOD_TOPIC_PAGE_SIZE]
+    kb_rows = []
+    for s in page:
+        label = s["title"] if s["id"] in ("intro",) or not s["id"][0].isdigit() else f"{s['id']}. {s['title']}"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        kb_rows.append([InlineKeyboardButton(label, callback_data=f"mv2_obuchenie_metod_topic_{s['id']}_0")])
+    if offset + METOD_TOPIC_PAGE_SIZE < len(sections):
+        kb_rows.append([InlineKeyboardButton(
+            "Показать ещё", callback_data=f"mv2_obuchenie_metod_more_{offset + METOD_TOPIC_PAGE_SIZE}")])
+    return kb_rows
+
+
+async def _mv2_render_metod(q, offset: int = 0):
+    sections = methodology_content.load_methodology_sections()
+    text = (f"🎓 *МЕТОДОЛОГИЯ*\n\nСвод правил методики (SMC/ICT) -- "
+            f"{len(sections)} тем, из `knowledge/METHODOLOGY_CORE.md`.")
+    kb = _metod_topic_list_kb(offset)
+    await q.edit_message_text(text, parse_mode="Markdown", reply_markup=_mv2_back_kb(kb, back_to="mv2_obuchenie"))
+
+
+async def _mv2_render_metod_topic(bot, chat_id, message_id, topic_id: str, page: int):
+    section = methodology_content.find_section(topic_id)
+    if not section:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                     text=f"⚠️ Тема «{topic_id}» не найдена.",
+                                     reply_markup=_mv2_back_kb(back_to="mv2_obuchenie_metod"))
+        return
+    body_safe = methodology_content.to_telegram_markdown(section["body"])
+    pages = _obuchenie_paginate_text(body_safe)
+    page = max(0, min(page, len(pages) - 1))
+    title = section["title"] if section["id"] == "intro" or not section["id"][0].isdigit() \
+        else f"{section['id']}. {section['title']}"
+    header = f"🎓 *{title}*"
+    if len(pages) > 1:
+        header += f" _(стр. {page + 1}/{len(pages)})_"
+    text = "\n\n".join([header, pages[page]])
+    if len(text) > 4096:
+        text = text[:4050] + "\n\n_(обрезано -- см. полный текст в knowledge/METHODOLOGY_CORE.md)_"
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(
+            "« Пред. страница", callback_data=f"mv2_obuchenie_metod_topic_{topic_id}_{page - 1}"))
+    if page < len(pages) - 1:
+        nav_row.append(InlineKeyboardButton(
+            "След. страница »", callback_data=f"mv2_obuchenie_metod_topic_{topic_id}_{page + 1}"))
+    kb_rows = [nav_row] if nav_row else []
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                 parse_mode="Markdown",
+                                 reply_markup=_mv2_back_kb(kb_rows, back_to="mv2_obuchenie_metod"))
 
 
 async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str):
@@ -4953,6 +5019,27 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
             await q.answer("Не удалось разобрать запрос.")
             return
         await _mv2_render_obuchenie_static(bot, chat_id, q.message.message_id, "appendix", page)
+
+    elif data == "mv2_obuchenie_metod":
+        await _mv2_render_metod(q)
+
+    elif data.startswith("mv2_obuchenie_metod_more_"):
+        try:
+            offset = int(data[len("mv2_obuchenie_metod_more_"):])
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_metod(q, offset=offset)
+
+    elif data.startswith("mv2_obuchenie_metod_topic_"):
+        rest = data[len("mv2_obuchenie_metod_topic_"):]
+        try:
+            topic_id, page_s = rest.rsplit("_", 1)
+            page = int(page_s)
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_metod_topic(bot, chat_id, q.message.message_id, topic_id, page)
 
     elif data == "mv2_moi":
         await _mv2_render_moi(q)
