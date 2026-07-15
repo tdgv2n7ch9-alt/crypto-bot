@@ -1327,7 +1327,15 @@ def _build_auto_options_shadow_record(symbol: str, a: dict, promoted_live: bool,
     карточка Институционал показывает словами (bot.py:13298, PCR>1.3 bearish,
     <0.7 bullish). Max Pain distance -- % от текущей цены сигнала до BTC max
     pain страйка (честно None, если max_pain не посчитан -- см. compute_max_pain()
-    докстринг про недостаток данных)."""
+    докстринг про недостаток данных).
+
+    Инкремент 3 (владелец, "Наряд на день" 2026-07-15, п.1 -- "максимально
+    закрыть карту Фазы B по данным, доступным бесплатно"): добавлены
+    `iv_1m`/`total_oi_calls`/`total_oi_puts`/`skew` -- ВСЕ уже присутствовали
+    в `options_data` с инкремента 1 (тот же единственный Deribit-фетч,
+    `bot.get_options_data()`, `derivatives_extra.compute_options_skew()`),
+    просто не были прокинуты в запись раньше -- честно, не новый сетевой
+    вызов, чистый passthrough уже имеющихся полей."""
     direction = "long" if a.get("is_long") else "short"
     price = a.get("price") or 0
     pcr = options_data.get("put_call_ratio")
@@ -1355,6 +1363,10 @@ def _build_auto_options_shadow_record(symbol: str, a: dict, promoted_live: bool,
         "aligned": aligned,
         "opposed": opposed,
         "options_data_ok": bool(options_data.get("ok")),
+        "iv_1m": options_data.get("iv_1m"),
+        "total_oi_calls": options_data.get("total_oi_calls"),
+        "total_oi_puts": options_data.get("total_oi_puts"),
+        "skew": options_data.get("skew"),
     }
 
 

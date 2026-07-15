@@ -26,9 +26,12 @@ def _analysis(is_long=True, price=60000.0):
 
 
 class _FakeBotModule:
-    def __init__(self, ok=True, pcr=1.0, signal="neutral", max_pain=None):
+    def __init__(self, ok=True, pcr=1.0, signal="neutral", max_pain=None,
+                 iv_1m=0, total_oi_calls=0, total_oi_puts=0, skew=None):
         self._options_data = {"ok": ok, "put_call_ratio": pcr,
-                               "options_signal": signal, "max_pain": max_pain}
+                               "options_signal": signal, "max_pain": max_pain,
+                               "iv_1m": iv_1m, "total_oi_calls": total_oi_calls,
+                               "total_oi_puts": total_oi_puts, "skew": skew}
         self.options_calls = 0
 
     def get_options_data(self):
@@ -119,6 +122,48 @@ def test_build_record_zero_price_no_crash_no_distance():
         "BTC", _analysis(price=0), promoted_live=True,
         bot_module=bot_mod, options_data=bot_mod._options_data)
     assert rec["max_pain_distance_pct"] is None
+
+
+# ── инкремент 3 (владелец, "Наряд на день" 2026-07-15): Deribit extras ──────
+
+def test_build_record_includes_iv_1m_passthrough():
+    bot_mod = _FakeBotModule(iv_1m=62.4)
+    rec = se._build_auto_options_shadow_record(
+        "BTC", _analysis(), promoted_live=True,
+        bot_module=bot_mod, options_data=bot_mod._options_data)
+    assert rec["iv_1m"] == 62.4
+
+
+def test_build_record_includes_oi_calls_puts_passthrough():
+    bot_mod = _FakeBotModule(total_oi_calls=356995, total_oi_puts=181123)
+    rec = se._build_auto_options_shadow_record(
+        "BTC", _analysis(), promoted_live=True,
+        bot_module=bot_mod, options_data=bot_mod._options_data)
+    assert rec["total_oi_calls"] == 356995
+    assert rec["total_oi_puts"] == 181123
+
+
+def test_build_record_includes_skew_dict_passthrough():
+    skew_dict = {"ok": True, "skew": -3.2, "expiry": "27DEC26", "put_iv_avg": 65.0,
+                 "call_iv_avg": 61.8, "put_count": 12, "call_count": 14, "note": ""}
+    bot_mod = _FakeBotModule(skew=skew_dict)
+    rec = se._build_auto_options_shadow_record(
+        "BTC", _analysis(), promoted_live=True,
+        bot_module=bot_mod, options_data=bot_mod._options_data)
+    assert rec["skew"] == skew_dict
+
+
+def test_build_record_extras_default_to_falsy_when_absent():
+    """Честный дефолт get_options_data() (bot.py) -- iv_1m=0/oi=0/skew=None,
+    не выдумываем данные, если Deribit-фетч не удался."""
+    bot_mod = _FakeBotModule()
+    rec = se._build_auto_options_shadow_record(
+        "BTC", _analysis(), promoted_live=True,
+        bot_module=bot_mod, options_data=bot_mod._options_data)
+    assert rec["iv_1m"] == 0
+    assert rec["total_oi_calls"] == 0
+    assert rec["total_oi_puts"] == 0
+    assert rec["skew"] is None
 
 
 # ── shadow_engine.log_auto_options_shadow_async() -- флаг-гейт ──────────────
