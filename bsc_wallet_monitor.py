@@ -47,6 +47,14 @@ RPC_PROVIDERS = [
 RPC_ETH_CALL = "https://bsc-dataseed.binance.org"  # eth_call работает, eth_getLogs -- нет
 
 POLL_INTERVAL_SEC = 60
+REQUEST_TIMEOUT_SEC = 10  # владелец, находка 2026-07-15: жёсткий потолок на КАЖДЫЙ
+# сетевой вызов -- см. критический регресс ниже (было до 15с без единого таймаут-бюджета)
+MAX_BLOCKS_PER_TICK = 500  # владелец: не пытаться нагнать весь бэклог за один тик --
+# при 27+ последовательных отказах 1rpc.io в одном тике (см. живая находка) блокирующий
+# цикл без этого предела мог растянуться на минуты. Остаток докатывается следующими
+# тиками (last_scanned_block продвигается только до обработанной границы, не до latest)
+SOURCE_DOWN_NOTIFY_INTERVAL_SEC = 15 * 60  # владелец: "skip тика ... с [SYS]-
+# уведомлением раз в 15 мин (не молчать и не копить)"
 
 _JOURNAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal")
 STATE_FILE = os.path.join(_JOURNAL_DIR, "bsc_wallet_monitor_state.json")
@@ -104,9 +112,21 @@ def _append_event(event: dict) -> None:
     _atomic_write_json(EVENTS_FILE, events)
 
 
-def _rpc_call(url: str, method: str, params: list, timeout: int = 15) -> dict:
+def _rpc_call(url: str, method: str, params: list, timeout: int = REQUEST_TIMEOUT_SEC) -> dict:
     r = requests.post(url, json={"jsonrpc": "2.0", "method": method, "params": params, "id": 1}, timeout=timeout)
     return r.json()
+
+
+def _is_rate_limit_error(d: dict) -> bool:
+    """Классы ошибок, для которых имеет смысл сразу считать провайдер "мёртвым до
+    конца текущего тика" вместо повторной попытки на КАЖДОМ следующем чанке --
+    владелец, критический регресс 2026-07-15: 1rpc.io code -32001 "usage limit"
+    повторялся 27+ раз подряд в одном тике, потому что get_transfer_logs() перед
+    каждым новым чанком заново пробовал уже известный мёртвый провайдер первым."""
+    err = d.get("error") or {}
+    code = err.get("code")
+    msg = str(err.get("message") or "").lower()
+    return code in (-32001, -32005) or "usage limit" in msg or "limit exceeded" in msg or "rate limit" in msg
 
 
 def get_latest_block():
@@ -130,17 +150,37 @@ def _wallet_topics() -> list:
     return [TRANSFER_TOPIC, ["0x" + w[2:].rjust(64, "0").lower() for w in AKE_WATCHED_WALLETS]]
 
 
-def get_transfer_logs(from_block: int, to_block: int) -> list:
+def get_transfer_logs(from_block: int, to_block: int) -> tuple:
     """Transfer-логи AKE от отслеживаемых кошельков в диапазоне блоков, с
     fallback между провайдерами и авто-чанкингом под лимит диапазона каждого.
     Если ВСЕ провайдеры отказали для чанка -- честно пропускает его с
-    log.error(), не падает и не выдумывает данные за пропущенный диапазон."""
+    log.error(), не падает и не выдумывает данные за пропущенный диапазон.
+
+    Владелец, критический регресс 2026-07-15 (bsc_wallet_monitor не отмечался
+    5+ мин, "Радар без данных" одновременно): 1rpc.io поймал usage-лимит (-32001)
+    и КАЖДЫЙ следующий чанк всё равно пробовал его первым -- 27+ идентичных
+    отказов подряд в одном тике, блокирующих event loop (см. check_ake_wallets).
+    Фикс: провайдер, отказавший с rate-limit-классом ошибки, помечается мёртвым
+    ДО КОНЦА ЭТОГО ВЫЗОВА (`dead_providers`) -- остальные чанки сразу идут к
+    следующему провайдеру в списке, не тратя время/лимит на повтор.
+
+    Возвращает (logs, incomplete: bool, last_processed_block: int) -- incomplete=True,
+    если обработка остановилась ДО to_block из-за того, что все провайдеры
+    отказали (для честного [SYS]-уведомления вызывающей стороной);
+    last_processed_block -- ПОСЛЕДНИЙ блок, реально покрытый успешным запросом
+    (< from_block-1, если не покрыт вообще ни один) -- вызывающий код продвигает
+    state ровно до этой границы, чтобы partial-success не приводил к повторной
+    обработке и дублированным алертам на следующем тике."""
     topics = _wallet_topics()
     all_logs = []
+    dead_providers = set()
+    last_processed_block = from_block - 1
     b = from_block
     while b <= to_block:
         got = False
         for prov in RPC_PROVIDERS:
+            if prov["url"] in dead_providers:
+                continue
             end = min(b + prov["max_range"] - 1, to_block)
             try:
                 d = _rpc_call(prov["url"], "eth_getLogs", [{
@@ -150,16 +190,25 @@ def get_transfer_logs(from_block: int, to_block: int) -> list:
                 if "result" in d:
                     all_logs.extend(d["result"])
                     b = end + 1
+                    last_processed_block = end
                     got = True
                     break
                 log.info(f"bsc_wallet_monitor: {prov['url']} getLogs {b}-{end}: {d.get('error')}")
+                if _is_rate_limit_error(d):
+                    dead_providers.add(prov["url"])
+                    log.info(f"bsc_wallet_monitor: {prov['url']} помечен мёртвым до конца этого тика")
             except Exception as e:
                 log.info(f"bsc_wallet_monitor: {prov['url']} getLogs {b}-{end} exception: {e}")
+        if len(dead_providers) >= len(RPC_PROVIDERS):
+            log.error(f"bsc_wallet_monitor: ВСЕ провайдеры мертвы на блоке {b}, прерываю обработку тика")
+            break
         if not got:
             skip_end = min(b + RPC_PROVIDERS[0]["max_range"] - 1, to_block)
             log.error(f"bsc_wallet_monitor: все провайдеры отказали для блоков {b}-{skip_end}, пропускаю")
+            last_processed_block = skip_end
             b = skip_end + 1
-    return all_logs
+    incomplete = b <= to_block
+    return all_logs, incomplete, last_processed_block
 
 
 def decode_transfer_log(lg: dict) -> dict:
@@ -202,19 +251,33 @@ def format_alert_text(event: dict) -> str:
     )
 
 
-async def check_ake_wallets(bot, send_system_fn=None) -> int:
+async def check_ake_wallets(bot, send_system_fn=None, run_in_executor_fn=None) -> int:
     """Джоб (scheduler.add_job, interval POLL_INTERVAL_SEC): сканирует новые
-    блоки с последнего прогона, ищет Transfer от отслеживаемых кошельков,
+    блоки с последнего прогона (ограничено MAX_BLOCKS_PER_TICK за раз -- остаток
+    докатывается следующими тиками), ищет Transfer от отслеживаемых кошельков,
     ВСЕ совпадения пишет в shadow-журнал (EVENTS_FILE), критический алерт
     (send_system critical=True -- оба канала по П-Каналы) при сумме перевода
-    >= ALERT_THRESHOLD_USD. `send_system_fn` внедряется для тестов, в проде
-    берётся из bot.py (локальный импорт -- без цикла на уровне модуля).
-    Возвращает число новых событий (для тестов/логов)."""
+    >= ALERT_THRESHOLD_USD. `send_system_fn`/`run_in_executor_fn` внедряются для
+    тестов, в проде берутся из bot.py/asyncio (локальный импорт -- без цикла на
+    уровне модуля). Возвращает число новых событий (для тестов/логов).
+
+    Владелец, критический регресс 2026-07-15: ВСЕ блокирующие сетевые вызовы
+    (get_latest_block/get_transfer_logs/get_ake_price_usd -- синхронные
+    requests.post/get) теперь идут через run_in_executor -- раньше они
+    выполнялись СИНХРОННО прямо внутри этой async-корутины, и шторм 1rpc.io
+    rate-limit ошибок (десятки последовательных попыток без разрыва) блокировал
+    ВЕСЬ event loop бота на секунды-минуты -- то же самое время, когда сломался
+    "[SYS] Радар без данных" (тот же класс: другой job не мог получить
+    управление, пока этот синхронно жрал event loop)."""
     if send_system_fn is None:
         import bot as bot_module
         send_system_fn = bot_module.send_system
+    if run_in_executor_fn is None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        run_in_executor_fn = lambda fn, *a: loop.run_in_executor(None, fn, *a)
 
-    latest, prov = get_latest_block()
+    latest, prov = await run_in_executor_fn(get_latest_block)
     if latest is None:
         log.error("bsc_wallet_monitor: ни один RPC-провайдер не ответил на eth_blockNumber")
         return 0
@@ -232,9 +295,10 @@ async def check_ake_wallets(bot, send_system_fn=None) -> int:
     from_block = last_scanned + 1
     if from_block > latest:
         return 0
+    to_block = min(latest, from_block + MAX_BLOCKS_PER_TICK - 1)
 
-    logs = get_transfer_logs(from_block, latest)
-    price = get_ake_price_usd()
+    logs, incomplete, last_processed_block = await run_in_executor_fn(get_transfer_logs, from_block, to_block)
+    price = await run_in_executor_fn(get_ake_price_usd)
     new_count = 0
 
     for lg in logs:
@@ -251,7 +315,26 @@ async def check_ake_wallets(bot, send_system_fn=None) -> int:
             except Exception as e:
                 log.error(f"bsc_wallet_monitor: send_system failed: {e}")
 
-    state["last_scanned_block"] = latest
+    # Продвигаем указатель до РЕАЛЬНО обработанной границы (даже при incomplete --
+    # partial success не должен приводить к повторной обработке уже покрытых
+    # блоков и дублированным алертам на следующем тике).
+    if last_processed_block >= from_block - 1:
+        state["last_scanned_block"] = max(last_scanned, last_processed_block)
+
+    if incomplete:
+        # Владелец: "честный skip тика с log.error и [SYS]-уведомлением раз в
+        # 15 мин (не молчать и не копить)".
+        log.error(f"bsc_wallet_monitor: тик неполный (обработано до блока "
+                  f"{last_processed_block} из {from_block}-{latest}), все RPC-провайдеры отказали")
+        last_notify = state.get("last_source_down_notify_ts", 0)
+        if time.time() - last_notify >= SOURCE_DOWN_NOTIFY_INTERVAL_SEC:
+            try:
+                await send_system_fn(bot, "⚠️ AKE-поллер: все RPC-провайдеры (1rpc.io/blastapi) "
+                                           "отказали -- ончейн-мониторинг кошельков временно "
+                                           "недоступен, повторные попытки продолжаются", critical=True)
+            except Exception as e:
+                log.error(f"bsc_wallet_monitor: не удалось отправить honest down-notify: {e}")
+            state["last_source_down_notify_ts"] = time.time()
     state["last_run_ts"] = time.time()
     _save_state(state)
     return new_count

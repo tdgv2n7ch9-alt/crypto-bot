@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -89,8 +90,9 @@ def test_get_transfer_logs_falls_back_on_primary_error(monkeypatch):
         return {"result": [_transfer_log(bwm.AKE_WATCHED_WALLETS[0], "0xdead", 5, block=100)]}
 
     monkeypatch.setattr(bwm, "_rpc_call", fake_rpc)
-    logs = bwm.get_transfer_logs(100, 100)
+    logs, incomplete, last_block = bwm.get_transfer_logs(100, 100)
     assert len(logs) == 1
+    assert incomplete is False
 
 
 def test_get_transfer_logs_skips_range_honestly_when_all_providers_fail(monkeypatch, caplog):
@@ -100,8 +102,30 @@ def test_get_transfer_logs_skips_range_honestly_when_all_providers_fail(monkeypa
         return {"error": {"code": -32005, "message": "limit exceeded"}}
 
     monkeypatch.setattr(bwm, "_rpc_call", fake_rpc)
-    logs = bwm.get_transfer_logs(100, 100)
+    logs, incomplete, last_block = bwm.get_transfer_logs(100, 100)
     assert logs == []  # честный пустой результат, не выдуманные данные
+    assert incomplete is True  # оба провайдера мертвы -- диапазон не покрыт
+
+
+def test_get_transfer_logs_marks_provider_dead_after_rate_limit_not_retried_every_chunk(monkeypatch):
+    """Регресс-замок на критический баг 2026-07-15: провайдер, отказавший с
+    rate-limit-классом ошибки, НЕ должен пробоваться заново на каждом
+    следующем чанке -- иначе 27+ идентичных отказов подряд блокируют event loop."""
+    call_log = []
+
+    def fake_rpc(url, method, params, timeout=15):
+        if method != "eth_getLogs":
+            return {"result": "0x0"}
+        call_log.append(url)
+        if url == bwm.RPC_PROVIDERS[0]["url"]:
+            return {"error": {"code": -32001, "message": "usage limit"}}
+        return {"result": []}
+
+    monkeypatch.setattr(bwm, "_rpc_call", fake_rpc)
+    # диапазон на несколько чанков провайдера 0 (max_range=50)
+    bwm.get_transfer_logs(100, 249)
+    primary_calls = [c for c in call_log if c == bwm.RPC_PROVIDERS[0]["url"]]
+    assert len(primary_calls) == 1  # мёртвый провайдер пробуется РОВНО один раз за вызов
 
 
 def test_get_transfer_logs_chunks_wide_range(monkeypatch):
@@ -170,7 +194,7 @@ def test_below_threshold_logs_shadow_but_no_alert(monkeypatch, tmp_path):
     bwm._save_state({"last_scanned_block": 999})
     monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
     monkeypatch.setattr(bwm, "get_transfer_logs",
-                         lambda a, b: [_transfer_log(bwm.AKE_WATCHED_WALLETS[0], "0xdead", 100, block=1000)])
+                         lambda a, b: ([_transfer_log(bwm.AKE_WATCHED_WALLETS[0], "0xdead", 100, block=1000)], False, b))
     monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 100 * 0.001 = $0.1, ниже порога
 
     sent = []
@@ -197,7 +221,7 @@ def test_synthetic_run_known_transfer_above_200k_triggers_critical_alert(monkeyp
 
     wallet = bwm.AKE_WATCHED_WALLETS[0]
     known_log = _transfer_log(wallet, "0x00000000000000000000000000000000000000ee", 300_000_000, block=1000, tx="0xknown200k")
-    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: [known_log])
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: ([known_log], False, b))
     monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 300M * 0.001 = $300K
 
     sent = []
@@ -260,3 +284,98 @@ def test_format_alert_text_includes_key_fields():
     assert "555" in text
     assert "0xtxhash" in text
     assert "250,000" in text
+
+
+# --- Критический регресс 2026-07-15: run_in_executor, bounded catch-up, honest notify ---
+
+def test_check_ake_wallets_uses_run_in_executor_for_blocking_calls(monkeypatch, tmp_path):
+    """Владелец: блокирующие сетевые вызовы обязаны идти через run_in_executor,
+    не выполняться синхронно внутри корутины (это и было причиной регресса --
+    шторм 1rpc.io ошибок блокировал весь event loop)."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    executor_calls = []
+
+    def _mk(name, real):
+        real.__name__ = name
+        return real
+
+    async def fake_run_in_executor(fn, *args):
+        executor_calls.append(fn.__name__)
+        return fn(*args)
+
+    monkeypatch.setattr(bwm, "get_latest_block",
+                         _mk("get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0])))
+    monkeypatch.setattr(bwm, "get_transfer_logs",
+                         _mk("get_transfer_logs", lambda a, b: ([], False, b)))
+    monkeypatch.setattr(bwm, "get_ake_price_usd",
+                         _mk("get_ake_price_usd", lambda: 0.001))
+
+    _run(bwm.check_ake_wallets(bot=None, send_system_fn=lambda *a, **k: None,
+                                run_in_executor_fn=fake_run_in_executor))
+    assert "get_latest_block" in executor_calls
+    assert "get_transfer_logs" in executor_calls
+    assert "get_ake_price_usd" in executor_calls
+
+
+def test_check_ake_wallets_bounds_catchup_to_max_blocks_per_tick(monkeypatch, tmp_path):
+    """Владелец: "не пытаться нагнать весь бэклог за один тик" -- ловит диапазон,
+    реально запрошенный у get_transfer_logs, и убеждается, что он <= MAX_BLOCKS_PER_TICK,
+    даже если backlog (latest - last_scanned) намного больше."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    huge_backlog_last_scanned = 1000
+    bwm._save_state({"last_scanned_block": huge_backlog_last_scanned})
+    latest = huge_backlog_last_scanned + bwm.MAX_BLOCKS_PER_TICK * 10  # backlog в 10x больше лимита
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (latest, bwm.RPC_PROVIDERS[0]))
+
+    captured_range = {}
+    def fake_transfer_logs(a, b):
+        captured_range["from"] = a
+        captured_range["to"] = b
+        return [], False, b
+    monkeypatch.setattr(bwm, "get_transfer_logs", fake_transfer_logs)
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)
+
+    _run(bwm.check_ake_wallets(bot=None, send_system_fn=lambda *a, **k: None))
+    requested_range = captured_range["to"] - captured_range["from"] + 1
+    assert requested_range <= bwm.MAX_BLOCKS_PER_TICK
+    state = bwm._load_state()
+    assert state["last_scanned_block"] < latest  # НЕ прыгнули сразу к latest
+
+
+def test_check_ake_wallets_incomplete_advances_state_only_to_processed_boundary(monkeypatch, tmp_path):
+    """partial success (несколько чанков прошли, потом все провайдеры легли) --
+    state продвигается ровно до реально обработанной границы, не теряя и не
+    задваивая диапазон на следующем тике."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1200, bwm.RPC_PROVIDERS[0]))
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: ([], True, 1050))  # incomplete=True, дошли до 1050
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send))
+    state = bwm._load_state()
+    assert state["last_scanned_block"] == 1050  # не 1200 (latest) и не 999 (без прогресса)
+    assert any("недоступен" in t or "отказали" in t for t, c in sent)
+    assert all(c is True for t, c in sent)  # честный down-notify тоже критический
+
+
+def test_check_ake_wallets_down_notify_not_spammed_every_tick(monkeypatch, tmp_path):
+    """Владелец: "уведомлением раз в 15 мин (не молчать и не копить)" -- НЕ на
+    каждый минутный тик."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999, "last_source_down_notify_ts": time.time()})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1200, bwm.RPC_PROVIDERS[0]))
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: ([], True, 999))
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send))
+    assert sent == []  # только что уведомляли -- в пределах интервала молчим
