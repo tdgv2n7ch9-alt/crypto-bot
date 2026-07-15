@@ -1248,6 +1248,94 @@ async def log_auto_derivatives_shadow_async(symbol: str, a: dict, promoted_live:
     return True
 
 
+# ── Фаза B Derivatives, shadow-continuation инкремент 2 (владелец, приоритет 1
+# наряда после инкремента 1: "следующие метрики shadow-first, флаги OFF") --
+# Put/Call Ratio + Max Pain (Deribit, `bot.get_options_data()`) для КАЖДОГО
+# AUTO-кандидата. Тот же безопасный паттерн: флаг первой строкой, гарантированный
+# no-op до любого I/O при OPTIONS_AUTO_SHADOW_ENABLED=False.
+#
+# Честная оговорка про стоимость (в отличие от Perp/Spot премии инкремента 1,
+# ЭТА метрика ДЕШЕВЛЕ по конструкции): `get_options_data()` -- BTC-широкий
+# рыночный показатель (ОДИН Deribit-фетч на ВЕСЬ рынок, не на символ), с
+# СОБСТВЕННЫМ внутренним TTL-кэшем 600с (`bot.py:13288`, `_opts_cache`/
+# `_opts_ts`). Вызов этой функции для каждого AUTO-кандидата НЕ даёт линейный
+# рост сетевых запросов -- Deribit реально дёргается максимум раз в 10 минут
+# независимо от числа кандидатов за это окно, кэш общий на весь процесс.
+#
+# Честная оговорка про смысл метрики: PCR/Max Pain -- рыночно-широкий сигнал
+# (весь BTC-опционный рынок), НЕ специфичный для символа сигнала (ETH/altcoin
+# сигнал сравнивается с BTC-опционным настроением, не со своим собственным
+# опционным рынком -- Deribit ликвиден только по BTC/ETH, у альтов опционов на
+# Deribit почти нет). Это ОСОЗНАННЫЙ компромисс той же природы, что и решение
+# владельца по свипу -- копим корреляцию "рыночное опционное настроение vs
+# исход СИГНАЛА (любого актива)", не "опционное настроение САМОГО актива".
+OPTIONS_AUTO_SHADOW_ENABLED = False
+
+
+def _build_auto_options_shadow_record(symbol: str, a: dict, promoted_live: bool,
+                                       bot_module, options_data: dict) -> dict:
+    """`options_data` -- уже посчитан вызывающей стороной (log_auto_options_
+    shadow_async ниже, через run_in_executor -- сама эта функция сеть не трогает).
+    `options_signal` ('bullish'/'bearish'/'neutral') -- та же классификация, что
+    карточка Институционал показывает словами (bot.py:13298, PCR>1.3 bearish,
+    <0.7 bullish). Max Pain distance -- % от текущей цены сигнала до BTC max
+    pain страйка (честно None, если max_pain не посчитан -- см. compute_max_pain()
+    докстринг про недостаток данных)."""
+    direction = "long" if a.get("is_long") else "short"
+    price = a.get("price") or 0
+    pcr = options_data.get("put_call_ratio")
+    options_signal = options_data.get("options_signal", "neutral")
+    max_pain = options_data.get("max_pain")
+    max_pain_distance_pct = None
+    if max_pain and price:
+        max_pain_distance_pct = round((price - max_pain) / price * 100, 3)
+
+    aligned = (options_signal == "bullish" and direction == "long") or \
+              (options_signal == "bearish" and direction == "short")
+    opposed = (options_signal == "bullish" and direction == "short") or \
+              (options_signal == "bearish" and direction == "long")
+
+    return {
+        "ts": time.time(),
+        "type": "auto_options_shadow",
+        "symbol": symbol,
+        "direction": direction,
+        "promoted_live": promoted_live,
+        "put_call_ratio": pcr,
+        "options_signal": options_signal,
+        "max_pain": max_pain,
+        "max_pain_distance_pct": max_pain_distance_pct,
+        "aligned": aligned,
+        "opposed": opposed,
+        "options_data_ok": bool(options_data.get("ok")),
+    }
+
+
+async def log_auto_options_shadow_async(symbol: str, a: dict, promoted_live: bool,
+                                         bot_module) -> bool:
+    """Вызывается из bot.send_scheduled() ПОСЛЕ боевого решения -- см.
+    OPTIONS_AUTO_SHADOW_ENABLED докстринг выше. При выключенном флаге --
+    гарантированный no-op (флаг первой строкой, ДО любого I/O, включая
+    get_options_data() -- сам по себе может дать сетевой запрос при холодном кэше)."""
+    if not OPTIONS_AUTO_SHADOW_ENABLED:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        options_data = await loop.run_in_executor(None, bot_module.get_options_data)
+        record = _build_auto_options_shadow_record(symbol, a, promoted_live, bot_module, options_data)
+    except Exception as e:
+        log.error(f"shadow_engine.log_auto_options_shadow_async: build failed for {symbol}: {e}")
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        log.error(f"shadow_engine: GitHub sync failed for auto_options_shadow ({symbol}): {e}")
+    return True
+
+
 # ── ПАКЕТ 19, П4 (владелец): L/S ratio -- shadow A/B "за тренд vs контр" ──
 #
 # Живьём (Whale Radar, bot._analyze_whale_signal(), bot.py:5985-5992): L/S

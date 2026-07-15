@@ -6537,6 +6537,16 @@ async def send_scheduled(bot: Bot):
             except Exception as e:
                 log.error(f"[AUTO] shadow_engine auto_derivatives (не влияет на боевой сигнал) {sym}: {e}")
 
+            # Фаза B Derivatives shadow-continuation, инкремент 2 (владелец,
+            # приоритет 1 наряда после инкремента 1): no-op, пока
+            # shadow_engine.OPTIONS_AUTO_SHADOW_ENABLED=False (флаг проверяется
+            # внутри функции первой строкой, до любого I/O).
+            try:
+                await shadow_engine.log_auto_options_shadow_async(
+                    sym, a, promoted_live=promoted, bot_module=sys.modules[__name__])
+            except Exception as e:
+                log.error(f"[AUTO] shadow_engine auto_options (не влияет на боевой сигнал) {sym}: {e}")
+
             if not promoted:
                 continue
 
