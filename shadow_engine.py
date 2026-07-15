@@ -358,7 +358,29 @@ def _github_put_shadow_sync(records: list, sha):
         return None
 
 
-def _sync_to_github_sync(new_record: dict = None) -> bool:
+# Батчинг shadow-sync коммитов (владелец, ДА, 2026-07-15, окно 60-120с) --
+# найдено живьём при инкременте 1 Фазы B Derivatives: каждый log_*_shadow_
+# async() зовёт эту функцию ПОСЛЕ КАЖДОЙ локальной записи (см. вызовы
+# run_in_executor(None, _sync_to_github_sync, record) по всему файлу) --
+# на живом AUTO-трафике это давало ~1 GitHub-коммит ĸаждые 9-10с (подтверждено
+# `railway deployment list`, 20 подряд коммитов "shadow: N записей" за 3.5
+# минуты). Такая частота реально гонялась с ручными git push в тот же main
+# (см. PROGRESS.md "ИНЦИДЕНТ: deploy.sh push исчез с origin/main" -- push
+# репортил успех, но контент пропадал из-за гонки с этим потоком коммитов).
+#
+# Сама catchup-логика НИЖЕ уже группирует НЕСКОЛЬКО накопленных локальных
+# записей в ОДИН PUT (см. её докстринг про "локальный хвост") -- проблема
+# была не в размере пачки, а в ЧАСТОТЕ, с которой эта пачка вообще
+# собиралась и пушилась (почти на каждую отдельную запись). Батчинг ниже
+# просто снижает частоту РЕАЛЬНОГО GET+PUT раунд-трипа до раза в
+# GITHUB_SYNC_MIN_INTERVAL_SEC -- локальная дюрабельность НЕ зависит от
+# этого: _write_local() (вызывается ДО этой функции всеми log_*_shadow_
+# async()) пишет на диск немедленно и безусловно, при любом состоянии гейта.
+GITHUB_SYNC_MIN_INTERVAL_SEC = 90  # середина диапазона владельца 60-120с
+_last_github_sync_attempt_ts = 0.0
+
+
+def _sync_to_github_sync(new_record: dict = None, now: float = None) -> bool:
     """GET текущего состояния из GitHub, добавляет ВСЕ локальные записи, которых там ещё
     нет (не только new_record -- параметр оставлен для обратной совместимости вызовов и
     логов, сама функция берёт полный список из _load_local()), PUT. Один повтор при
@@ -374,7 +396,17 @@ def _sync_to_github_sync(new_record: dict = None) -> bool:
 
     Также больше НЕ трактует ошибку GET как пустой файл (см. _github_get_shadow_sync) --
     транзиентный сбой прерывает синк без попытки PUT, чтобы не рисковать перезаписью
-    существующих записей меньшим (локальным) списком."""
+    существующих записей меньшим (локальным) списком.
+
+    Батчинг (см. блок констант выше, докстринг там подробный): если с прошлой
+    РЕАЛЬНОЙ попытки синка прошло меньше GITHUB_SYNC_MIN_INTERVAL_SEC -- функция
+    сразу возвращает True БЕЗ сетевого вызова (локальная запись уже надёжна,
+    догонит на следующем окне). `now` -- для тестируемости, None -> реальное время."""
+    global _last_github_sync_attempt_ts
+    now = now if now is not None else time.time()
+    if now - _last_github_sync_attempt_ts < GITHUB_SYNC_MIN_INTERVAL_SEC:
+        return True
+    _last_github_sync_attempt_ts = now
     for attempt in range(2):
         remote, sha = _github_get_shadow_sync()
         if remote is False:
