@@ -133,6 +133,8 @@ import glossary
 import course_content
 import methodology_content
 import bsc_wallet_monitor
+import bank_setup_monitor
+import ake_setup_monitor
 import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
@@ -13603,6 +13605,8 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["signal_loop"] = signal_loop.STAGE1_INTERVAL_MIN * 60
     _job_expected_interval_sec["exit_tracker"] = signal_loop.EXIT_TRACKER_INTERVAL_MIN * 60
     _job_expected_interval_sec["bsc_wallet_monitor"] = bsc_wallet_monitor.POLL_INTERVAL_SEC
+    _job_expected_interval_sec["bank_setup_monitor"] = bank_setup_monitor.POLL_INTERVAL_SEC
+    _job_expected_interval_sec["ake_setup_monitor"] = ake_setup_monitor.POLL_INTERVAL_SEC
 
     scheduler.add_job(
         _heartbeat_wrapper("send_scheduled", send_scheduled),
@@ -13731,6 +13735,22 @@ async def _start_pump_detector(app):
         _heartbeat_wrapper("bsc_wallet_monitor", bsc_wallet_monitor.check_ake_wallets),
         "interval",
         seconds=bsc_wallet_monitor.POLL_INTERVAL_SEC,
+        args=[app.bot],
+    )
+    # СРОЧНЫЙ наряд владельца, 2026-07-15 -- условный SHORT-сетап BANKUSDT
+    # (CHoCH -> ретест -> инвалидация). См. bank_setup_monitor.py докстринг.
+    scheduler.add_job(
+        _heartbeat_wrapper("bank_setup_monitor", bank_setup_monitor.check_bank_setup),
+        "interval",
+        seconds=bank_setup_monitor.POLL_INTERVAL_SEC,
+        args=[app.bot],
+    )
+    # СРОЧНЫЙ наряд владельца, 2026-07-15 -- владелец В ПОЗИЦИИ шорт AKE, единый
+    # алерт-пакет (5 триггеров). См. ake_setup_monitor.py докстринг.
+    scheduler.add_job(
+        _heartbeat_wrapper("ake_setup_monitor", ake_setup_monitor.check_ake_setup),
+        "interval",
+        seconds=ake_setup_monitor.POLL_INTERVAL_SEC,
         args=[app.bot],
     )
     scheduler.start()
