@@ -132,6 +132,7 @@ import inbox
 import glossary
 import course_content
 import methodology_content
+import bsc_wallet_monitor
 import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
@@ -13576,6 +13577,7 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["event_radar_monitor"] = 15 * 60
     _job_expected_interval_sec["signal_loop"] = signal_loop.STAGE1_INTERVAL_MIN * 60
     _job_expected_interval_sec["exit_tracker"] = signal_loop.EXIT_TRACKER_INTERVAL_MIN * 60
+    _job_expected_interval_sec["bsc_wallet_monitor"] = bsc_wallet_monitor.POLL_INTERVAL_SEC
 
     scheduler.add_job(
         _heartbeat_wrapper("send_scheduled", send_scheduled),
@@ -13696,6 +13698,15 @@ async def _start_pump_detector(app):
         "interval",
         minutes=30,
         args=[app.bot, owner_id],
+    )
+    # AKE разгрузка -- мониторинг топ-кошельков через публичный BSC RPC (владелец,
+    # 2026-07-15, задача #226). См. bsc_wallet_monitor.py докстринг для полного
+    # контекста (Etherscan free-план не покрывает BSC, платный не покупаем).
+    scheduler.add_job(
+        _heartbeat_wrapper("bsc_wallet_monitor", bsc_wallet_monitor.check_ake_wallets),
+        "interval",
+        seconds=bsc_wallet_monitor.POLL_INTERVAL_SEC,
+        args=[app.bot],
     )
     scheduler.start()
 
