@@ -49,6 +49,7 @@ INIT_DATA_MAX_AGE_SEC = 3600
 CACHE_TTL_TRACK_RECORD = 20
 CACHE_TTL_ZONES = 10
 CACHE_TTL_GLOSSARY = 300  # словарь меняется редко (правки в glossary.py, не рантайм)
+CACHE_TTL_SIGNALS = 15
 
 # Раздел 5 ТЗ п.4: "Rate-limit на API (token bucket per chat_id)". СОЗНАТЕЛЬНО
 # независимое состояние от access_control._command_history/_cooldown_until --
@@ -247,6 +248,82 @@ def _make_zones_handler(bot_module, cache: _TTLCache):
     return _handle
 
 
+def _make_signals_handler(bot_module, cache: _TTLCache):
+    """`/api/v1/signals` -- источник: TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS (те же
+    живые модульные глобалы, что читает текстовый экран "Монеты в работе",
+    bot.py:4800/4844) + top_trades_long_status()/top_trades_short_status() (те
+    же чистые функции статуса, вынесенные из cmd_top_trades ради тестируемости
+    -- см. их докстринги) + get_binance_24h() (тот же источник живой цены, что
+    текстовый экран). Ничего не пересчитывает заново.
+
+    Честно НЕ покрыто в этой версии (см. PROGRESS.md "П-MiniApp /api/signals"):
+    Rocket Score разложение, чек-лист Kira|ICT, POI/сессия/тип сетапа,
+    строка ликвидаций, МЕМКОИН-бейдж -- эти поля существуют только в РЕНДЕРЕ
+    текстового сообщения на момент отправки сигнала (_build_signal_post()),
+    не персистентны в TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS структурированно для
+    уже отправленных сигналов. Дать их честно можно только из journal/
+    signals.json (там есть rocket_score/ema_stack/sweep/grade) -- отдельное
+    расширение, не в этом инкременте."""
+    async def _handle(request: web.Request) -> web.Response:
+        cached = cache.get()
+        if cached is not None:
+            return _json_response(cached)
+        try:
+            signals = []
+            for sym, v in bot_module.TOP_LONG_SIGNALS.items():
+                if v.get("status") == "done":
+                    continue
+                entry = v["entry"]
+                tp1 = v.get("tp1", entry * 1.02)
+                tp2 = v.get("tp2", entry * 1.04)
+                tp3 = v.get("tp3", entry * 1.08)
+                sl = v.get("sl", entry * 0.85)
+                try:
+                    stats = bot_module.get_binance_24h(sym)
+                    cur = stats.get("last", entry) if stats else entry
+                except Exception:
+                    cur = entry
+                cur = cur or entry
+                status, terminal_result = bot_module.top_trades_long_status(entry, cur, tp1, tp2, tp3, sl)
+                signals.append({
+                    "symbol": sym, "direction": "long", "entry": entry,
+                    "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl, "rr": v.get("rr"),
+                    "current_price": cur,
+                    "move_pct": round((cur - entry) / entry * 100, 3) if entry else None,
+                    "status_text": status, "terminal_result": terminal_result,
+                    "time": v["time"].isoformat() if v.get("time") else None,
+                })
+            for sym, v in bot_module.TOP_SHORT_SIGNALS.items():
+                if v.get("status") == "done":
+                    continue
+                entry = v["entry"]
+                tp1 = v.get("tp1", entry * 0.98)
+                tp2 = v.get("tp2", entry * 0.96)
+                sl = v.get("sl", entry * 1.15)
+                try:
+                    stats = bot_module.get_binance_24h(sym)
+                    cur = stats.get("last", entry) if stats else entry
+                except Exception:
+                    cur = entry
+                cur = cur or entry
+                status, terminal_result = bot_module.top_trades_short_status(entry, cur, tp1, tp2, sl)
+                signals.append({
+                    "symbol": sym, "direction": "short", "entry": entry,
+                    "tp1": tp1, "tp2": tp2, "tp3": None, "sl": sl, "rr": v.get("rr"),
+                    "current_price": cur,
+                    "move_pct": round((entry - cur) / entry * 100, 3) if entry else None,
+                    "status_text": status, "terminal_result": terminal_result,
+                    "time": v["time"].isoformat() if v.get("time") else None,
+                })
+        except Exception as e:
+            log.error(f"[MINIAPP-API] signals build failed: {e}")
+            return _json_response({"ok": False, "error": "internal error"}, status=500)
+        payload = {"ok": True, "data": signals}
+        cache.set(payload)
+        return _json_response(payload)
+    return _handle
+
+
 def _make_glossary_handler(cache: _TTLCache):
     async def _handle(request: web.Request) -> web.Response:
         cached = cache.get()
@@ -267,10 +344,12 @@ def build_app(bot_module) -> web.Application:
     app["track_record_cache"] = _TTLCache(CACHE_TTL_TRACK_RECORD)
     app["zones_cache"] = _TTLCache(CACHE_TTL_ZONES)
     app["glossary_cache"] = _TTLCache(CACHE_TTL_GLOSSARY)
+    app["signals_cache"] = _TTLCache(CACHE_TTL_SIGNALS)
     app.router.add_get("/api/v1/health", _handle_health)
     app.router.add_get("/api/v1/track-record", _make_track_record_handler(bot_module, app["track_record_cache"]))
     app.router.add_get("/api/v1/zones", _make_zones_handler(bot_module, app["zones_cache"]))
     app.router.add_get("/api/v1/glossary", _make_glossary_handler(app["glossary_cache"]))
+    app.router.add_get("/api/v1/signals", _make_signals_handler(bot_module, app["signals_cache"]))
     return app
 
 

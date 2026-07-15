@@ -208,9 +208,12 @@ def test_ttl_cache_expires_after_ttl():
 class _FakeBotModule:
     BOT_TOKEN = BOT_TOKEN
 
-    def __init__(self, zones=None, coins=None):
+    def __init__(self, zones=None, coins=None, top_long=None, top_short=None, binance_prices=None):
         self._zones = zones or []
         self._coins = coins or []
+        self.TOP_LONG_SIGNALS = top_long or {}
+        self.TOP_SHORT_SIGNALS = top_short or {}
+        self._binance_prices = binance_prices or {}
 
     def _limitki_collect_zones(self):
         return self._zones
@@ -223,6 +226,19 @@ class _FakeBotModule:
 
     def get_top500(self):
         return self._coins
+
+    def get_binance_24h(self, symbol):
+        if symbol in self._binance_prices:
+            return {"last": self._binance_prices[symbol]}
+        return {}
+
+    def top_trades_long_status(self, entry, cur, tp1, tp2, tp3, sl):
+        import bot
+        return bot.top_trades_long_status(entry, cur, tp1, tp2, tp3, sl)
+
+    def top_trades_short_status(self, entry, cur, tp1, tp2, sl):
+        import bot
+        return bot.top_trades_short_status(entry, cur, tp1, tp2, sl)
 
 
 def _make_client(loop, app):
@@ -388,4 +404,93 @@ def test_rate_limit_enforced_over_http(monkeypatch):
                 resp = await client.get("/api/v1/glossary", headers=headers)
                 statuses.append(resp.status)
             assert 429 in statuses
+    _run(go())
+
+
+# ── /api/v1/signals ──────────────────────────────────────────────────────
+
+def test_signals_endpoint_long_active_schema():
+    from datetime import datetime
+    top_long = {"BTC": {"time": datetime(2026, 7, 15, 3, 0), "entry": 60000,
+                         "tp1": 61200, "tp2": 62400, "tp3": 64800, "sl": 51000,
+                         "rr": 3.2, "status": "active"}}
+
+    async def go():
+        app = ma.build_app(_FakeBotModule(top_long=top_long, binance_prices={"BTC": 60300}))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/signals",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            assert resp.status == 200
+            body = await resp.json()
+            assert body["ok"] is True
+            assert len(body["data"]) == 1
+            row = body["data"][0]
+            assert row["symbol"] == "BTC"
+            assert row["direction"] == "long"
+            assert row["entry"] == 60000
+            assert row["current_price"] == 60300
+            assert row["status_text"] == "🟢 В плюсе"
+            assert row["rr"] == 3.2
+    _run(go())
+
+
+def test_signals_endpoint_excludes_done_status():
+    from datetime import datetime
+    top_long = {"BTC": {"time": datetime(2026, 7, 15), "entry": 60000, "tp1": 61200,
+                         "tp2": 62400, "tp3": 64800, "sl": 51000, "status": "done"}}
+
+    async def go():
+        app = ma.build_app(_FakeBotModule(top_long=top_long))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/signals",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            body = await resp.json()
+            assert body["data"] == []
+    _run(go())
+
+
+def test_signals_endpoint_short_direction():
+    from datetime import datetime
+    top_short = {"ETH": {"time": datetime(2026, 7, 15), "entry": 3000, "tp1": 2940,
+                          "tp2": 2880, "sl": 3450, "rr": 2.1, "status": "active"}}
+
+    async def go():
+        app = ma.build_app(_FakeBotModule(top_short=top_short, binance_prices={"ETH": 2950}))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/signals",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            body = await resp.json()
+            row = body["data"][0]
+            assert row["symbol"] == "ETH"
+            assert row["direction"] == "short"
+            assert row["tp3"] is None
+    _run(go())
+
+
+def test_signals_endpoint_empty_when_no_active_signals():
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/signals",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            body = await resp.json()
+            assert body["data"] == []
+    _run(go())
+
+
+def test_signals_endpoint_rejects_unauthenticated():
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/signals")
+            assert resp.status == 401
     _run(go())
