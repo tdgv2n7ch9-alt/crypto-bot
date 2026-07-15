@@ -491,6 +491,13 @@ TP_LADDER_MIN_STEP_PCT = 0.5  # владелец, кейс MOODENG 2026-07-13: T
 # отвечает за боевые entry/SL/TP1, трогать выбор TP1 нельзя), только TP2 (шаг от TP1)
 # и TP3 (шаг от TP2).
 
+FIB_FALLBACK_MIN_STEP_MULT = 1.0  # владелец, ДА на фикс 2026-07-15 (кейс ZEC:
+# TP2=687.33 дальше TP3=669.53 -- Fibonacci-фоллбэк TP3 использовал фиксированный
+# 5.0x риска, который оказался БЛИЖЕ, чем уже принятая структурная TP2 на 8x+).
+# Минимальный шаг (в риск-единицах) для монотонности Fibonacci-фоллбэка TP2/TP3
+# относительно фактической дистанции предыдущей принятой цели -- см.
+# build_trade_from_structure().
+
 
 def build_trade_from_structure(direction: str, price: float, zones: dict):
     """Строит вход/SL/TP от зон структуры (find_sr_zones()). direction: "long"/"short".
@@ -503,8 +510,20 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
     (боевой R:R-гейт зависит только от TP1). TP2/TP3 -- следующие зоны структуры СО
     ШАГОМ >= TP_LADDER_MIN_STEP_PCT от предыдущей принятой цели (сканирует ВСЕ оставшиеся
     зоны, не только позиционно вторую/третью, пропуская слишком близкие к предыдущей);
-    при нехватке разнесённых зон -- Fibonacci-подобное расширение от риска (3.2x/5.0x)
-    как фоллбэк для незаполненного слота.
+    при нехватке разнесённых зон -- Fibonacci-подобное расширение как фоллбэк для
+    незаполненного слота.
+
+    ГАРАНТИЯ МОНОТОННОСТИ (владелец, баг найден на живой карточке ZEC 2026-07-15:
+    TP2=687.33 дальше TP3=669.53 -- Fibonacci-фоллбэк TP3 использовал ФИКСИРОВАННЫЙ
+    множитель 5.0x риска, который оказался БЛИЖЕ к entry1, чем уже принятая
+    структурная TP2 на 8x+ риска). Фикс: Fibonacci-фоллбэк для TP2/TP3 считается не
+    от фиксированной таблицы множителей, а от ФАКТИЧЕСКОЙ дистанции последней уже
+    принятой цели (`last`, в риск-единицах) + минимальный шаг FIB_FALLBACK_MIN_STEP_MULT
+    -- берётся max(табличный_множитель, факт_множитель_last + шаг), так что в обычном
+    случае (зоны разнесены нормально) поведение НЕ меняется, а в конфликтном случае
+    фоллбэк гарантированно оказывается строго дальше предыдущей цели. Это гарантирует
+    одновременно и монотонность цены, и монотонность R:R (rr = множитель риска,
+    прямо пропорционален дистанции).
 
     Возвращает None, если нет ни одной зоны для входа (нечего строить), иначе dict:
     {"entry1","entry2","entry3","entry_lo","entry_hi","sl","tp1","tp2","tp3",
@@ -548,6 +567,7 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
 
     tps = [tp1]
     last = tp1
+    last_risk_mult = abs(tp1 - entry1) / risk
     for slot_idx in (1, 2):
         picked = None
         while remaining_zone_mids:
@@ -557,8 +577,17 @@ def build_trade_from_structure(direction: str, price: float, zones: dict):
                 tp_sources.append("structure")
                 break
         if picked is None:
-            picked = _fib(fib_mults[slot_idx])
+            # Гарантия монотонности: множитель фоллбэка -- не табличное значение
+            # само по себе, а max(табличное, факт_дистанция_last + минимальный шаг).
+            # В обычном случае (зоны разнесены нормально) это равно табличному --
+            # поведение не меняется. В конфликтном случае (last уже дальше табличного
+            # значения) -- фоллбэк гарантированно строго дальше last.
+            next_mult = max(fib_mults[slot_idx], last_risk_mult + FIB_FALLBACK_MIN_STEP_MULT)
+            picked = _fib(next_mult)
+            last_risk_mult = next_mult
             tp_sources.append("fibonacci")
+        else:
+            last_risk_mult = abs(picked - entry1) / risk
         tps.append(picked)
         last = picked
     tp1, tp2, tp3 = tps

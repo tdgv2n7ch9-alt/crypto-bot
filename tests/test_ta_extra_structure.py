@@ -202,6 +202,82 @@ def test_tp_sources_all_structure_when_well_separated():
     assert trade["tp_sources"] == ["structure", "structure", "structure"]
 
 
+# --- Гарантия монотонности Fibonacci-фоллбэка (владелец, ДА 2026-07-15, живой
+# кейс ZEC: TP2=687.33 дальше TP3=669.53 -- TP3 упал на фиксированный
+# fib_mults[2]=5.0x риска, который оказался БЛИЖЕ структурной TP2 на 8x+
+# риска). Фикс: фоллбэк = max(табличный_множитель, факт_дистанция_last + шаг) ---
+
+def test_zec_case_far_structure_tp2_forces_fibonacci_tp3_beyond_it():
+    """Точное воспроизведение живого бага: TP1 близко (структура), TP2 --
+    структурная зона ДАЛЕКО (8x риска от entry1), TP3 -- ни одной зоны не
+    осталось (фоллбэк). До фикса TP3 был бы fib(5.0x) = БЛИЖЕ TP2 (8x) --
+    нарушение монотонности. После фикса TP3 обязан быть строго дальше TP2."""
+    price = 100.0
+    zones = {
+        "below": [_zone(90, 95)],  # entry1=95, sl=90*(1-2.5%)=87.75, risk=7.25
+        "above": [
+            _zone(100, 100),     # TP1 -- близко (структура)
+            _zone(153, 153),     # TP2 -- далеко, ровно 8.0x риска от entry1 (структура)
+            # TP3: зон не осталось -- фоллбэк
+        ],
+    }
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    assert trade is not None
+    assert trade["tp_sources"] == ["structure", "structure", "fibonacci"]
+    assert trade["tp1"] == 100
+    assert trade["tp2"] == 153
+    assert trade["tp3"] > trade["tp2"], "TP3 обязан быть строго дальше TP2 -- баг ZEC воспроизведён бы иначе"
+    # Фактическое значение: next_mult = max(5.0, 8.0 + 1.0) = 9.0 -> tp3 = 95 + 7.25*9.0
+    assert trade["tp3"] == 95 + 7.25 * 9.0
+
+
+def test_generated_targets_always_ordered_and_rr_increases():
+    """Тест владельца дословно: "сгенерённые цели всегда упорядочены, R:R
+    возрастает" -- по нескольким сценариям (только структура/только фоллбэк/
+    смешанные с конфликтной дальней зоной)."""
+    scenarios = [
+        # только фоллбэк (нет ни одной TP-зоны)
+        {"below": [_zone(90, 95)], "above": []},
+        # только структура, хорошо разнесена
+        {"below": [_zone(90, 95)], "above": [_zone(105, 110), _zone(120, 120), _zone(140, 140)]},
+        # структура TP1 + далёкая TP2 (8x) + фоллбэк TP3 -- конфликтный кейс (баг ZEC)
+        {"below": [_zone(90, 95)], "above": [_zone(100, 100), _zone(153, 153)]},
+        # структура TP1 + ОЧЕНЬ далёкая TP2 (20x риска) + фоллбэк TP3
+        {"below": [_zone(90, 95)], "above": [_zone(100, 100), _zone(240, 240)]},
+        # short-направление, аналогичный конфликтный кейс
+        {"below": [_zone(60, 60)], "above": [_zone(105, 110)]},
+    ]
+    for zones in scenarios:
+        for direction in ("long", "short"):
+            entry_side = "below" if direction == "long" else "above"
+            if not zones.get(entry_side):
+                continue
+            trade = ta_extra.build_trade_from_structure(direction, 100.0, zones)
+            if trade is None:
+                continue
+            tp1, tp2, tp3 = trade["tp1"], trade["tp2"], trade["tp3"]
+            entry1, sl = trade["entry1"], trade["sl"]
+            d1 = abs(tp1 - entry1)
+            d2 = abs(tp2 - entry1)
+            d3 = abs(tp3 - entry1)
+            assert d1 < d2 < d3, f"цели должны быть строго упорядочены по расстоянию: {zones} {direction}"
+            assert trade["rr_tp1"] < trade["rr_tp2"] < trade["rr_tp3"], f"R:R должен строго возрастать: {zones} {direction}"
+
+
+def test_fibonacci_fallback_unchanged_when_no_conflict():
+    """Когда фактическая дистанция last НЕ превышает табличный множитель
+    (обычный случай, зоны структуры не создают конфликт) -- фоллбэк даёт
+    ТЕ ЖЕ числа, что и до фикса (max(табличное, ...) == табличное)."""
+    price = 100.0
+    zones = {"below": [_zone(90, 95)], "above": []}  # ни одной TP-зоны -- чистый фоллбэк с самого начала
+    trade = ta_extra.build_trade_from_structure("long", price, zones)
+    entry1, sl = trade["entry1"], trade["sl"]
+    risk = abs(entry1 - sl)
+    assert trade["tp1"] == entry1 + risk * 2.0
+    assert trade["tp2"] == entry1 + risk * 3.2
+    assert trade["tp3"] == entry1 + risk * 5.0
+
+
 def test_rr_gate_pass_unaffected_by_tp_ladder_fix():
     """Мини-пакет, владелец: "боевой скоринг не трогает" -- rr_gate_pass зависит
     ТОЛЬКО от TP1/entry1/SL, которые валидатор лестницы не меняет. Один и тот
