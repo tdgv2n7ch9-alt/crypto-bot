@@ -251,14 +251,24 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 import threading
 _cg_lock = threading.Lock()
 _cg_last_call_ts = 0.0
-_CG_MIN_INTERVAL = 1.3          # мин. пауза между запросами к CoinGecko (~45/мин, с запасом от лимита)
+_CG_MIN_INTERVAL = 2.5          # владелец, находка 2026-07-15 (health-регресс "CoinGecko:
+# пустой ответ"): живые логи показали 11 последовательных вызовов /coins/{id}
+# (часовой прогрев rug-кэша по watch_zones) с интервалом ~1.3-1.5с (т.е. прежний
+# _CG_MIN_INTERVAL=1.3с СОБЛЮДАЛСЯ честно) -- и КАЖДЫЙ получил 429. Значит прежнее
+# допущение "~45/мин с запасом" уже не соответствует реальному текущему лимиту
+# бесплатного тарифа CoinGecko -- увеличено до ~24/мин с запасом.
 _cg_cache = {}                  # (url, params_tuple) -> (ts, data)
 _CG_CACHE_TTL = 60              # сек — одинаковые запросы в этом окне не бьют сеть повторно
+_CG_429_RETRY_WAIT = 8.0        # доп. пауза перед ОДНОЙ повторной попыткой при 429 --
+# CoinGecko лимит обычно скользящий по минуте, короткий бэкофф часто восстанавливает
+# без замедления всего пайплайна на постоянной основе
 
 def _cg_get(url: str, params: dict = None, timeout: int = 10):
     """Единая точка входа для GET-запросов к api.coingecko.com: делит один rate-limit
     и один кэш на все функции бота, чтобы параллельные экраны (OI/funding/OHLC/USDT mcap/
-    dominance) не выбивали друг друга 429-й ошибкой при рендере."""
+    dominance) не выбивали друг друга 429-й ошибкой при рендере. При 429 -- ОДНА
+    повторная попытка после _CG_429_RETRY_WAIT (владелец, находка 2026-07-15 -- см.
+    комментарий у _CG_MIN_INTERVAL), не бесконечный ретрай."""
     global _cg_last_call_ts
     params = params or {}
     cache_key = (url, tuple(sorted(params.items())))
@@ -272,6 +282,10 @@ def _cg_get(url: str, params: dict = None, timeout: int = 10):
             time.sleep(wait)
         r = requests.get(url, params=params, timeout=timeout)
         _cg_last_call_ts = time.time()
+        if r.status_code == 429:
+            time.sleep(_CG_429_RETRY_WAIT)
+            r = requests.get(url, params=params, timeout=timeout)
+            _cg_last_call_ts = time.time()
     r.raise_for_status()
     data = r.json()
     _cg_cache[cache_key] = (time.time(), data)
@@ -13440,8 +13454,19 @@ async def _startup_integrity_check(bot: Bot, owner_id: int):
     try:
         loop = asyncio.get_event_loop()
         test = await loop.run_in_executor(None, _fetch_coingecko_markets, 1, 5)
-        lines.append(f"🟢 CoinGecko: ok ({len(test)} монет получено)" if test
-                      else "🔴 CoinGecko: пустой ответ")
+        if test:
+            lines.append(f"🟢 CoinGecko: ok ({len(test)} монет получено)")
+        else:
+            # Владелец, находка 2026-07-15: "пустой ответ" раньше маскировал
+            # реальную причину (например 429) -- _fetch_coingecko_markets() при
+            # ошибке ЛОГИРУЕТ детали в _DATA_SOURCE_STATUS, но возвращает []
+            # молча. Показываем реальный last_error, если он есть, вместо
+            # общей фразы -- честная диагностика вместо угадывания.
+            status = _DATA_SOURCE_STATUS.get("coingecko_markets") or {}
+            detail = status.get("last_error")
+            lines.append(f"🔴 CoinGecko: пустой ответ ({detail[:150]})" if detail
+                          else "🔴 CoinGecko: пустой ответ (без записанной ошибки -- "
+                               "возможно, легитимно пустая страница)")
     except Exception as e:
         lines.append(f"🔴 CoinGecko: {str(e)[:150]}")
 
