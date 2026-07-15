@@ -760,28 +760,34 @@ _deploy_check_boot_sha = {"sha": None, "date": None}
 _deploy_alerted_shas = set()  # анти-спам: один алерт на конкретный "застрявший" коммит
 
 
-# Пакет 6 М2 (владелец, "ДА"): пути, которые бот сам автосинкает в GitHub через
-# Contents API (journal/watch_zones.json, journal/signals.json,
-# journal/shadow_signals.json, data/chat_ids.json, backups/<date>/...) -- ДОЛЖНЫ
-# совпадать по смыслу с исключением из railway.json build.watchPatterns
-# (watchPatterns там задан позитивным списком кода, эти пути в него НЕ входят =>
-# Railway их не деплоит по дизайну). check_deploy_freshness() ниже использует
-# этот же список, чтобы не путать "деплой не нужен" с "деплой застрял".
-_DEPLOY_IRRELEVANT_PREFIXES = ("journal/", "backups/")
-_DEPLOY_IRRELEVANT_EXACT = ("data/chat_ids.json",)
-
-
+# ДЕФЕКТ (владелец, найдено живьём 2026-07-15 -- алерт "пуш 17 мин не
+# задеплоился" на диапазоне 72ccdc8..47ddbd0, где реально был только
+# PROGRESS.md + journal/*, SKIPPED был корректен): раньше эта проверка была
+# ручным allowlist'ом путей (_DEPLOY_IRRELEVANT_PREFIXES = journal/,
+# backups/, data/chat_ids.json), который НЕ знал про docs/PROGRESS.md/*.md
+# -- как только диапазон между boot_sha и main содержал ЛЮБОЙ doc-коммит
+# (обычное дело после П-Ротация/батчинга shadow-sync -- PROGRESS.md-чекпойнты
+# перемежаются с journal-автосинками), allowlist переставал покрывать 100%
+# файлов и алерт срабатывал ложно-положительно НАВСЕГДА для этого boot_sha
+# (коммит попадал в _deploy_alerted_shas и больше не перепроверялся).
+#
+# Фикс -- инвертировать логику на АВТОРИТЕТНЫЙ источник вместо ручного
+# дубликата: `tools.deploy_watch_check.touches_watch_path()` читает
+# `railway.json` `build.watchPatterns` ЖИВЬЁМ (тот же список, что реально
+# использует Railway и что проверяет `tools/deploy.sh` перед каждым пушем)
+# -- если НИ ОДИН файл в диапазоне не попадает под watchPatterns, деплой
+# объективно не требовался, независимо от того, что это за файлы (docs,
+# journal, будущие новые нерелевантные пути -- ничего вручную поддерживать
+# не нужно, список синхронизируется с railway.json автоматически).
 def _is_deploy_irrelevant_diff(filenames: list) -> bool:
-    """True, только если diff НЕ пуст И ВСЕ изменённые файлы попадают под пути,
-    которые railway.json намеренно исключает из деплоя (см. _DEPLOY_IRRELEVANT_*
-    выше). Пустой/неизвестный список -- честно False, не считаем безопасным, если
-    не знаем наверняка (лучше редкий ложный алерт, чем тихо пропущенный код-пуш)."""
+    """True, только если diff НЕ пуст И НИ ОДИН файл не попадает под
+    railway.json watchPatterns (см. блок выше). Пустой/неизвестный список --
+    честно False, не считаем безопасным, если не знаем наверняка (лучше
+    редкий ложный алерт, чем тихо пропущенный код-пуш)."""
     if not filenames:
         return False
-    return all(
-        f.startswith(_DEPLOY_IRRELEVANT_PREFIXES) or f in _DEPLOY_IRRELEVANT_EXACT
-        for f in filenames
-    )
+    from tools.deploy_watch_check import touches_watch_path
+    return not touches_watch_path(filenames)
 
 
 def _compare_commits_sync(base_sha: str, head_sha: str):
@@ -864,9 +870,12 @@ async def check_deploy_freshness(bot: Bot):
         await bot.send_message(
             owner_id,
             f"⚠️ Пуш в main {mins} мин назад ещё не задеплоился -- этот процесс всё ещё "
-            f"на коммите `{_deploy_check_boot_sha['sha'][:7]}`, main на `{sha[:7]}`. "
-            f"Похоже на Railway SKIPPED-деплой (см. PROGRESS.md 2026-07-11) -- проверь "
-            f"`railway deployment list` / `railway up --ci -y` вручную.",
+            f"на коммите `{_deploy_check_boot_sha['sha'][:7]}`, main на `{sha[:7]}`, и в "
+            f"диапазоне есть файлы, реально попадающие под railway.json watchPatterns "
+            f"(иначе этот алерт не сработал бы). Похоже на Railway SKIPPED-деплой (см. "
+            f"PROGRESS.md 2026-07-11) -- проверь `railway deployment list`; если деплой "
+            f"реально пропущен, восстановление -- ТОЛЬКО триггер-коммит через "
+            f"`tools/deploy.sh`, вручную в обход него не запускать.",
             parse_mode="Markdown",
         )
         _deploy_alerted_shas.add(sha)

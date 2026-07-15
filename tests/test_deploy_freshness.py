@@ -92,6 +92,10 @@ def test_alerts_when_push_older_than_threshold_and_sha_differs():
     call_text = fake_bot.send_message.call_args[0][1]
     assert "aaa1111" in call_text
     assert "bbb2222" in call_text
+    # Владелец, 2026-07-15, п.4: railway up/--ci в обход deploy.sh запрещены --
+    # алерт больше не должен подсказывать этот путь как рекомендацию.
+    assert "railway up" not in call_text
+    assert "deploy.sh" in call_text
 
 
 def test_no_duplicate_alert_for_same_stuck_sha():
@@ -143,6 +147,42 @@ def test_irrelevant_diff_mixed_with_code_is_false():
 
 def test_irrelevant_diff_pure_code_is_false():
     assert bot._is_deploy_irrelevant_diff(["bot.py", "ta_extra.py"]) is False
+
+
+# ── ДЕФЕКТ владельца, 2026-07-15: PROGRESS.md/docs не в старом allowlist'е,
+# ложно-положительный алерт на диапазоне 72ccdc8..47ddbd0 (только PROGRESS.md
+# + journal/*, SKIPPED был корректен). Фикс -- watchPatterns из railway.json
+# как авторитетный источник вместо ручного дубликата списка.
+
+def test_irrelevant_diff_docs_only_is_true():
+    assert bot._is_deploy_irrelevant_diff(["PROGRESS.md"]) is True
+
+
+def test_irrelevant_diff_docs_mixed_with_journal_is_true():
+    """Точное воспроизведение диапазона 72ccdc8..47ddbd0 -- PROGRESS.md +
+    несколько journal-файлов, ни один не попадает под watchPatterns."""
+    assert bot._is_deploy_irrelevant_diff(
+        ["PROGRESS.md", "journal/shadow_signals.json", "journal/signals.json",
+         "journal/archive/shadow_signals_20260711_20260712_4.json"]) is True
+
+
+def test_irrelevant_diff_docs_dir_is_true():
+    assert bot._is_deploy_irrelevant_diff(["docs/TZ_P-MiniApp_v1.md"]) is True
+
+
+def test_irrelevant_diff_docs_mixed_with_code_is_false():
+    assert bot._is_deploy_irrelevant_diff(["PROGRESS.md", "bot.py"]) is False
+
+
+def test_irrelevant_diff_uses_live_watch_patterns_not_hardcoded(monkeypatch):
+    """Список НЕ хардкожен в bot.py -- читается через tools.deploy_watch_check.
+    touches_watch_path()'s дефолтный аргумент patterns=None вызывает
+    load_watch_patterns() -- подменяем ЕЁ, доказывая отсутствие дублирующего
+    хардкода паттернов внутри bot.py."""
+    from tools import deploy_watch_check as dwc
+    monkeypatch.setattr(dwc, "load_watch_patterns", lambda *a, **kw: ["PROGRESS.md"])
+    assert bot._is_deploy_irrelevant_diff(["PROGRESS.md"]) is False
+    assert bot._is_deploy_irrelevant_diff(["journal/signals.json"]) is True
 
 
 # ── _compare_commits_sync() ──
