@@ -235,6 +235,17 @@ _scan_result_cache = {k: {"ts": 0, "data": None} for k in _SCAN_TYPES}
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
 
+# Живая находка (владелец, 2026-07-15, при верификации деплоя TP-фикса через
+# `railway logs`): python-telegram-bot строит Application/Bot ниже в этом файле,
+# и httpx-клиент внутри него логирует ПОЛНЫЙ URL каждого запроса на уровне INFO --
+# а Telegram Bot API кладёт токен прямо в URL (`.../bot<TOKEN>/getMe` и т.д.).
+# Без этой строки СТАРТОВЫЙ getMe-запрос печатает боевой BOT_TOKEN в контейнерный
+# лог в открытом виде -- виден любому с доступом к `railway logs`, не только при
+# ручных вызовах Bot()/Application() из скриптов (тот случай уже был задокументирован
+# в CLAUDE.md, этот -- новый: обычный старт самого бота). Должно стоять ДО первого
+# HTTP-запроса телеграм-клиента (т.е. до создания Application ниже).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # === Общий rate-limiter + кэш для CoinGecko (free tier легко ловит 429 при частых вызовах) ===
 import threading
 _cg_lock = threading.Lock()
