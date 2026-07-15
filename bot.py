@@ -130,6 +130,7 @@ import event_radar
 import new_coin_scan
 import inbox
 import glossary
+import course_content
 import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
@@ -2930,6 +2931,9 @@ def main_kb_v2():
         [InlineKeyboardButton("📊 РЫНОК",   callback_data="mv2_rynok")],
         [InlineKeyboardButton(inbox.menu_badge("radary", "📡 РАДАРЫ", counts), callback_data="mv2_radary")],
         [InlineKeyboardButton("💼 МОИ",     callback_data="mv2_moi")],
+        # ПАКЕТ П-ОБУЧЕНИЕ (владелец, 2026-07-15): курс «Криптотрейдинг --
+        # 64 урока» отдельным разделом -- 7-я кнопка главного меню v2.
+        [InlineKeyboardButton("📚 ОБУЧЕНИЕ", callback_data="mv2_obuchenie")],
         [InlineKeyboardButton("⚙️ СИСТЕМА", callback_data="mv2_sistema")],
     ])
 
@@ -4665,6 +4669,164 @@ async def _mv2_render_sistema(q):
     await q.edit_message_text(text, parse_mode="Markdown", reply_markup=_mv2_back_kb(kb))
 
 
+# ── 📚 ОБУЧЕНИЕ (Пакет П-Обучение, владелец, 2026-07-15) ────────────────────
+# Курс «Криптотрейдинг -- 64 урока», источник -- course_content.py (single
+# source of truth, см. его докстринг). Три экрана: список модулей
+# (пагинация), список уроков модуля, текст урока (пагинация под лимит
+# Telegram 4096). Контент применяется как есть -- этот код только рендерит,
+# не переформулирует.
+
+OBUCHENIE_MODULE_PAGE_SIZE = 8
+_OBUCHENIE_LESSON_PAGE_LIMIT = 3500  # запас под заголовок/словарь-кнопку/пагинацию
+
+
+def _obuchenie_paginate_text(text: str, limit: int = _OBUCHENIE_LESSON_PAGE_LIMIT) -> list:
+    """Бьёт текст на страницы <= limit символов, по границам абзацев (\\n\\n)
+    в первую очередь, затем по строкам, и только если ОДНА строка сама длиннее
+    limit -- жёстким разрезом (не должно случаться на курсе, но не падает).
+    Всегда возвращает хотя бы одну страницу, даже для пустой строки."""
+    if not text:
+        return [""]
+    if len(text) <= limit:
+        return [text]
+    paragraphs = text.split("\n\n")
+    pages = []
+    current = ""
+    for para in paragraphs:
+        candidate = f"{current}\n\n{para}" if current else para
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            pages.append(current)
+            current = ""
+        if len(para) <= limit:
+            current = para
+            continue
+        # один абзац сам длиннее limit -- режем по строкам
+        lines = para.split("\n")
+        for line in lines:
+            candidate_line = f"{current}\n{line}" if current else line
+            if len(candidate_line) <= limit:
+                current = candidate_line
+                continue
+            if current:
+                pages.append(current)
+            # и одна строка длиннее limit -- жёсткий разрез посимвольно
+            while len(line) > limit:
+                pages.append(line[:limit])
+                line = line[limit:]
+            current = line
+    if current:
+        pages.append(current)
+    return pages or [""]
+
+
+def _obuchenie_module_list_kb(offset: int = 0):
+    modules = course_content.MODULES
+    page = modules[offset:offset + OBUCHENIE_MODULE_PAGE_SIZE]
+    kb_rows = [[InlineKeyboardButton(course_content.CHEATSHEET["title"], callback_data="mv2_obuchenie_cheat_0")]]
+    for m in page:
+        kb_rows.append([InlineKeyboardButton(f"{m['id']}. {m['title']}",
+                                              callback_data=f"mv2_obuchenie_mod_{m['id']}")])
+    if offset + OBUCHENIE_MODULE_PAGE_SIZE < len(modules):
+        kb_rows.append([InlineKeyboardButton(
+            "Показать ещё", callback_data=f"mv2_obuchenie_more_{offset + OBUCHENIE_MODULE_PAGE_SIZE}")])
+    return kb_rows
+
+
+async def _mv2_render_obuchenie(q, offset: int = 0):
+    text = (f"📚 *ОБУЧЕНИЕ*\n\nКурс «Криптотрейдинг — 64 урока»: "
+            f"{len(course_content.MODULES) - 1} модулей + шпаргалка с приложением.\n\n"
+            f"{course_content.INTRO_TEXT}")
+    kb = _obuchenie_module_list_kb(offset)
+    await q.edit_message_text(text, parse_mode="Markdown", reply_markup=_mv2_back_kb(kb))
+
+
+async def _mv2_render_obuchenie_module(bot, chat_id, message_id, module_id: int):
+    module = course_content.find_module(module_id)
+    if not module:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                     text=f"⚠️ Модуль {module_id} не найден.",
+                                     reply_markup=_mv2_back_kb(back_to="mv2_obuchenie"))
+        return
+    text = f"📚 *{module['id']}. {module['title'].upper()}*"
+    kb_rows = []
+    if not module["lessons"]:
+        # Модуль 16 -- Шпаргалка + Приложение, отдельные экраны.
+        kb_rows.append([InlineKeyboardButton(course_content.CHEATSHEET["title"], callback_data="mv2_obuchenie_cheat_0")])
+        kb_rows.append([InlineKeyboardButton(course_content.APPENDIX["title"], callback_data="mv2_obuchenie_appendix_0")])
+    else:
+        for lesson in module["lessons"]:
+            kb_rows.append([InlineKeyboardButton(
+                f"Урок {lesson['num']}. {lesson['title']}",
+                callback_data=f"mv2_obuchenie_lesson_{lesson['key']}_0")])
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                 parse_mode="Markdown",
+                                 reply_markup=_mv2_back_kb(kb_rows, back_to="mv2_obuchenie"))
+
+
+async def _mv2_render_obuchenie_lesson(bot, chat_id, message_id, lesson_key: str, page: int):
+    module, lesson = course_content.find_lesson(lesson_key)
+    if not lesson:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                     text=f"⚠️ Урок «{lesson_key}» не найден.",
+                                     reply_markup=_mv2_back_kb(back_to="mv2_obuchenie"))
+        return
+    pages = _obuchenie_paginate_text(lesson["body"])
+    page = max(0, min(page, len(pages) - 1))
+    header = f"📚 *Урок {lesson['num']}. {lesson['title']}*"
+    if len(pages) > 1:
+        header += f" _(стр. {page + 1}/{len(pages)})_"
+    body = pages[page]
+    note = lesson.get("methodology_note")
+    parts = [header, "", body]
+    if note and page == len(pages) - 1:
+        parts += ["", f"📎 *Связь с методикой проекта:* {note}"]
+    text = "\n".join(parts)
+
+    kb_rows = []
+    if lesson.get("terms"):
+        kb_rows.append([InlineKeyboardButton("❓ Словарь", callback_data=f"glossary_course_{lesson_key}")])
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("« Пред. страница", callback_data=f"mv2_obuchenie_lesson_{lesson_key}_{page - 1}"))
+    if page < len(pages) - 1:
+        nav_row.append(InlineKeyboardButton("След. страница »", callback_data=f"mv2_obuchenie_lesson_{lesson_key}_{page + 1}"))
+    if nav_row:
+        kb_rows.append(nav_row)
+    back_to = f"mv2_obuchenie_mod_{module['id']}" if module else "mv2_obuchenie"
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                 parse_mode="Markdown", reply_markup=_mv2_back_kb(kb_rows, back_to=back_to))
+
+
+async def _mv2_render_obuchenie_static(bot, chat_id, message_id, kind: str, page: int):
+    """`kind` -- "cheat" (Шпаргалка) или "appendix" (Приложение). Обе -- без
+    модуля-родителя, "Назад" ведёт на список модулей ОБУЧЕНИЯ."""
+    source = course_content.CHEATSHEET if kind == "cheat" else course_content.APPENDIX
+    pages = _obuchenie_paginate_text(source["body"])
+    page = max(0, min(page, len(pages) - 1))
+    header = f"📚 *{source['title']}*"
+    if len(pages) > 1:
+        header += f" _(стр. {page + 1}/{len(pages)})_"
+    text = "\n\n".join([header, pages[page]])
+
+    kb_rows = []
+    if source.get("terms"):
+        card = "course_appendix" if kind == "appendix" else None
+        if card:
+            kb_rows.append([InlineKeyboardButton("❓ Словарь", callback_data=f"glossary_{card}")])
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("« Пред. страница", callback_data=f"mv2_obuchenie_{kind}_{page - 1}"))
+    if page < len(pages) - 1:
+        nav_row.append(InlineKeyboardButton("След. страница »", callback_data=f"mv2_obuchenie_{kind}_{page + 1}"))
+    if nav_row:
+        kb_rows.append(nav_row)
+    await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text,
+                                 parse_mode="Markdown", reply_markup=_mv2_back_kb(kb_rows, back_to="mv2_obuchenie"))
+
+
 async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str):
     q = update.callback_query
     bot = ctx.bot
@@ -4747,6 +4909,51 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
     elif data == "mv2_radar_patterns":
         await cmd_patterns(_mv2_fake_update(q), ctx, back_to="mv2_radary")
 
+    elif data == "mv2_obuchenie":
+        await _mv2_render_obuchenie(q)
+
+    elif data.startswith("mv2_obuchenie_more_"):
+        try:
+            offset = int(data[len("mv2_obuchenie_more_"):])
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_obuchenie(q, offset=offset)
+
+    elif data.startswith("mv2_obuchenie_mod_"):
+        try:
+            module_id = int(data[len("mv2_obuchenie_mod_"):])
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_obuchenie_module(bot, chat_id, q.message.message_id, module_id)
+
+    elif data.startswith("mv2_obuchenie_lesson_"):
+        rest = data[len("mv2_obuchenie_lesson_"):]
+        try:
+            lesson_key, page_s = rest.rsplit("_", 1)
+            page = int(page_s)
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_obuchenie_lesson(bot, chat_id, q.message.message_id, lesson_key, page)
+
+    elif data.startswith("mv2_obuchenie_cheat_"):
+        try:
+            page = int(data[len("mv2_obuchenie_cheat_"):])
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_obuchenie_static(bot, chat_id, q.message.message_id, "cheat", page)
+
+    elif data.startswith("mv2_obuchenie_appendix_"):
+        try:
+            page = int(data[len("mv2_obuchenie_appendix_"):])
+        except ValueError:
+            await q.answer("Не удалось разобрать запрос.")
+            return
+        await _mv2_render_obuchenie_static(bot, chat_id, q.message.message_id, "appendix", page)
+
     elif data == "mv2_moi":
         await _mv2_render_moi(q)
 
@@ -4778,8 +4985,16 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
         # полный /терминология список. "Назад" -- на саму карточку
         # (не на раздел), чтобы тап по Словарю не терял контекст экрана.
         card = data[len("glossary_"):]
-        card_back = {"whale": "whale_status", "pump": "pump_radar",
-                     "tochki": "mv2_tochki", "x100": "x100_scan"}.get(card)
+        if card.startswith("course_") and card != "course_appendix":
+            # ПАКЕТ П-ОБУЧЕНИЕ: карточка урока -- "Назад" на страницу 0
+            # самого урока (не на список уроков), тот же принцип, что и
+            # остальные card_back ниже -- контекст экрана не теряется.
+            card_back = f"mv2_obuchenie_lesson_{card[len('course_'):]}_0"
+        elif card == "course_appendix":
+            card_back = "mv2_obuchenie_appendix_0"
+        else:
+            card_back = {"whale": "whale_status", "pump": "pump_radar",
+                         "tochki": "mv2_tochki", "x100": "x100_scan"}.get(card)
         text = glossary.format_card_glossary_text(card)
         await q.edit_message_text(text, parse_mode="Markdown",
                                    reply_markup=attach_home_row(None, back_to=card_back))
@@ -4807,6 +5022,19 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
     elif MENU_V2_ENABLED and (data.startswith("mv2_")):
+        await _mv2_callback_router(update, ctx, data)
+
+    elif data.startswith("glossary_"):
+        # НАЙДЕНО ЖИВЬЁМ (Пакет П-Обучение, владелец, 2026-07-15): обработчик
+        # "elif data.startswith('glossary_')" реально существовал только
+        # ВНУТРИ _mv2_callback_router, который вызывается ТОЛЬКО при
+        # data.startswith("mv2_") -- "glossary_whale"/"glossary_pump"/
+        # "glossary_x100"/"glossary_tochki" (и новые "glossary_course_*")
+        # никогда не начинаются с "mv2_", поэтому тап по [❓ Словарь] на всех
+        # 4 существовавших карточках был мёртвым (без ошибки, просто без
+        # эффекта) -- не зависит от MENU_V2_ENABLED, кнопки рендерятся
+        # безусловно. Починено маршрутизацией сюда независимо от флага (тот
+        # же путь, что и раньше внутри роутера, просто теперь достижимый).
         await _mv2_callback_router(update, ctx, data)
 
     elif data == "top_spot":
