@@ -792,7 +792,21 @@ def _push_pending_archives_sync() -> dict:
 
 
 def _write_local(record: dict) -> bool:
+    """Владелец, находка 2026-07-15 (регресс: 997 дублей/23 вне порядка в
+    journal/archive/*.json на живом контейнере -- ВСЕ дубли confined к УЖЕ
+    заархивированным записям, 0 в активном файле, 0 в git-копии архивов;
+    расследование указывает на исторический эпизод ДО фикса дефекта watchdog
+    (задача #181, "cwd-scoped pre-start guard" -- два процесса бота писали в
+    один и тот же shadow-файл параллельно, каждый со своим `pump_watch`,
+    оба логировали один и тот же reversal-кандидат с идентичным `ts`).
+    Дефект-источник уже устранён (#181), но идемпотентность на ЗАПИСИ --
+    дешёвая защита от ЛЮБОГО будущего повтора того же класса (двойной
+    процесс/ретрай/гонка), не только от уже известной причины."""
     records = _load_local()
+    key = _dedup_key(record)
+    if any(_dedup_key(r) == key for r in records):
+        log.info(f"shadow_engine: запись {key} уже есть локально -- пропускаю дубль")
+        return True
     records.append(record)
     ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
     if ok:
