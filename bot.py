@@ -6645,6 +6645,16 @@ async def send_scheduled(bot: Bot):
             except Exception as e:
                 log.error(f"[AUTO] shadow_engine auto_liquidation (не влияет на боевой сигнал) {sym}: {e}")
 
+            # Фаза C on-chain shadow, инкремент 1 (владелец, "Наряд на день"
+            # 2026-07-15, приоритет "д" -- следующий модуль roadmap Фаз B-L):
+            # no-op, пока shadow_engine.ONCHAIN_AUTO_SHADOW_ENABLED=False (флаг
+            # проверяется внутри функции первой строкой, до любого I/O).
+            try:
+                await shadow_engine.log_auto_onchain_shadow_async(
+                    sym, a, promoted_live=promoted, bot_module=sys.modules[__name__])
+            except Exception as e:
+                log.error(f"[AUTO] shadow_engine auto_onchain (не влияет на боевой сигнал) {sym}: {e}")
+
             if not promoted:
                 continue
 
@@ -13438,6 +13448,42 @@ def get_options_data():
                 res['skew']=derivatives_extra.compute_options_skew(items)
     except: pass
     _opts_cache=res; _opts_ts=_t.time(); return res
+
+
+_onchain_snapshot_cache = {}  # "BTC" / "OTHER" -> (ts, snapshot) -- Фаза C инкремент 1
+
+def get_onchain_snapshot_cached(symbol: str = "BTC") -> dict:
+    """Кэширующая обёртка над onchain_metrics.get_free_onchain_snapshot() (Фаза
+    C, on-chain shadow инкремент 1, "Наряд на день" 2026-07-15 приоритет "д" --
+    следующий модуль roadmap Фаз B-L после закрытия Фазы B на сегодня). Честная
+    находка ПЕРЕД wiring: get_free_onchain_snapshot() у себя в onchain_metrics.py
+    НЕ имеет кэша -- каждый вызов бьёт до 9 внешних эндпоинтов (mempool.space x3,
+    blockchain.info x3, DeFiLlama x2, alternative.me x1) заново. В отличие от
+    get_options_data() (Deribit, уже кэшируется 600с в этом же файле) и CVD
+    (переиспользует уже открытый Bybit WS-стрим), это была бы прямая проблема
+    при подключении в AUTO-цикл на каждого кандидата -- одинаковые market-метрики
+    запрашивались бы заново для КАЖДОГО символа. Фикс -- 2-бакетный кэш:
+    "market"-часть (F&G/DeFiLlama TVL/стейблкоины) одна и та же для ЛЮБОГО
+    символа, "btc_chain"-часть (хешрейт/сложность/комиссии) есть только при
+    symbol=="BTC" -- поэтому кэшируем не по каждому уникальному символу
+    (расточительно для алтов), а по 2 бакетам: полный снэпшот для BTC отдельно,
+    один общий "market-only" снэпшот для всех остальных символов. TTL 300с --
+    консервативнее 600с Deribit-кэша (часть источников, F&G/mempool congestion,
+    меняется чаще, чем BTC-опционный рынок), но кратно реже, чем без кэша.
+    Итог: максимум 2 реальных сетевых прохода за 300с окно, независимо от числа
+    просканированных AUTO-кандидатов."""
+    import time as _t
+    is_btc = symbol.upper() == "BTC"
+    key = "BTC" if is_btc else "OTHER"
+    cached = _onchain_snapshot_cache.get(key)
+    if cached and _t.time() - cached[0] < 300:
+        snap = dict(cached[1])
+    else:
+        snap = onchain_metrics.get_free_onchain_snapshot(symbol)
+        _onchain_snapshot_cache[key] = (_t.time(), snap)
+        snap = dict(snap)
+    snap["symbol"] = symbol.upper()
+    return snap
 
 
 def get_perp_spot_premium(symbol: str = "BTC") -> dict:

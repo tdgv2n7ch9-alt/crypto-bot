@@ -1476,6 +1476,67 @@ async def log_auto_liquidation_shadow_async(symbol: str, a: dict, promoted_live:
     return True
 
 
+# ── Фаза C on-chain shadow, инкремент 1 (владелец, "Наряд на день"
+# 2026-07-15, приоритет "д" -- следующий модуль roadmap Фаз B-L после
+# закрытия Фазы B на сегодня): F&G/DeFiLlama TVL+стейблкоины/BTC хешрейт-
+# сложность-комиссии для КАЖДОГО AUTO-кандидата, за флагом ONCHAIN_AUTO_
+# SHADOW_ENABLED (по умолчанию False). Данные -- через bot.
+# get_onchain_snapshot_cached() (2-бакетный TTL-кэш 300с поверх НЕкэшированного
+# onchain_metrics.get_free_onchain_snapshot(), см. докстринг там же) -- НЕ
+# считает сам, чтобы не бить внешние API по разу на каждого кандидата.
+
+ONCHAIN_AUTO_SHADOW_ENABLED = False
+
+
+def _build_auto_onchain_shadow_record(symbol: str, a: dict, promoted_live: bool,
+                                       bot_module, snapshot: dict) -> dict:
+    """`snapshot` -- уже посчитан вызывающей стороной (log_auto_onchain_shadow_
+    async ниже, через run_in_executor -- сама эта функция сеть не трогает).
+    market/btc_chain сохраняются ЦЕЛИКОМ как вложенные словари (тот же принцип,
+    что heatmap/skew в инкрементах 3-4 -- не теряем per-source 'ok' честность
+    частичной деградации), fear_greed вынесен в верхнеуровневые поля отдельно
+    -- самая часто нужная для будущей корреляции с исходами одиночная метрика."""
+    market = snapshot.get("market") or {}
+    fg = market.get("fear_greed") or {}
+    return {
+        "ts": time.time(),
+        "type": "auto_onchain_shadow",
+        "symbol": symbol,
+        "direction": "long" if a.get("is_long") else "short",
+        "promoted_live": promoted_live,
+        "onchain_ok": bool(snapshot.get("ok")),
+        "fear_greed_value": fg.get("value"),
+        "fear_greed_classification": fg.get("classification"),
+        "market": market,
+        "btc_chain": snapshot.get("btc_chain"),
+    }
+
+
+async def log_auto_onchain_shadow_async(symbol: str, a: dict, promoted_live: bool,
+                                         bot_module) -> bool:
+    """Вызывается из bot.send_scheduled() ПОСЛЕ боевого решения -- см.
+    ONCHAIN_AUTO_SHADOW_ENABLED докстринг выше. При выключенном флаге --
+    гарантированный no-op (флаг первой строкой, ДО любого I/O, включая
+    get_onchain_snapshot_cached() -- при холодном кэше сама по себе сеть)."""
+    if not ONCHAIN_AUTO_SHADOW_ENABLED:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        snapshot = await loop.run_in_executor(None, bot_module.get_onchain_snapshot_cached, symbol)
+        record = _build_auto_onchain_shadow_record(symbol, a, promoted_live, bot_module, snapshot)
+    except Exception as e:
+        log.error(f"shadow_engine.log_auto_onchain_shadow_async: build failed for {symbol}: {e}")
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        log.error(f"shadow_engine: GitHub sync failed for auto_onchain_shadow ({symbol}): {e}")
+    return True
+
+
 # ── ПАКЕТ 19, П4 (владелец): L/S ratio -- shadow A/B "за тренд vs контр" ──
 #
 # Живьём (Whale Radar, bot._analyze_whale_signal(), bot.py:5985-5992): L/S
