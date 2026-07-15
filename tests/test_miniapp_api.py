@@ -208,12 +208,23 @@ def test_ttl_cache_expires_after_ttl():
 class _FakeBotModule:
     BOT_TOKEN = BOT_TOKEN
 
-    def __init__(self, zones=None, coins=None, top_long=None, top_short=None, binance_prices=None):
+    def __init__(self, zones=None, coins=None, top_long=None, top_short=None, binance_prices=None,
+                 btc_ctx=None, btc_ctx_boom=False, onchain_text="on-chain OK", onchain_boom=False):
         self._zones = zones or []
         self._coins = coins or []
         self.TOP_LONG_SIGNALS = top_long or {}
         self.TOP_SHORT_SIGNALS = top_short or {}
         self._binance_prices = binance_prices or {}
+        self._btc_ctx = btc_ctx
+        self._btc_ctx_boom = btc_ctx_boom
+
+        class _FakeOnchainMetrics:
+            def format_onchain_card_text(_self, symbol):
+                if onchain_boom:
+                    raise RuntimeError("simulated onchain failure")
+                return onchain_text
+
+        self.onchain_metrics = _FakeOnchainMetrics()
 
     def _limitki_collect_zones(self):
         return self._zones
@@ -239,6 +250,12 @@ class _FakeBotModule:
     def top_trades_short_status(self, entry, cur, tp1, tp2, sl):
         import bot
         return bot.top_trades_short_status(entry, cur, tp1, tp2, sl)
+
+    def get_btc_market_context(self):
+        if getattr(self, "_btc_ctx_boom", False):
+            raise RuntimeError("simulated btc_ctx failure")
+        return self._btc_ctx or {"ok": True, "btc_price": 60000.0, "btc_ch24h": 1.5,
+                                  "dominance": 52.0, "trend_1h": "bullish"}
 
 
 def _make_client(loop, app):
@@ -494,3 +511,86 @@ def test_signals_endpoint_rejects_unauthenticated():
             resp = await client.get("/api/v1/signals")
             assert resp.status == 401
     _run(go())
+
+
+# ── /api/v1/dashboard ────────────────────────────────────────────────────
+
+def test_dashboard_endpoint_returns_btc_context_and_onchain_text():
+    async def go():
+        app = ma.build_app(_FakeBotModule(
+            btc_ctx={"ok": True, "btc_price": 61000.0, "btc_ch24h": 2.1,
+                     "dominance": 53.5, "trend_1h": "bullish", "fear_greed": 60},
+            onchain_text="On-chain: netflow negative"))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/dashboard",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            assert resp.status == 200
+            body = await resp.json()
+            assert body["ok"] is True
+            assert body["data"]["btc_context"]["btc_price"] == 61000.0
+            assert body["data"]["btc_context"]["dominance"] == 53.5
+            assert body["data"]["onchain_text"] == "On-chain: netflow negative"
+    _run(go())
+
+
+def test_dashboard_endpoint_btc_context_failure_is_honest_none():
+    async def go():
+        app = ma.build_app(_FakeBotModule(btc_ctx_boom=True))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/dashboard",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            assert resp.status == 200  # частичный сбой не валит весь эндпоинт
+            body = await resp.json()
+            assert body["data"]["btc_context"] is None
+            assert body["data"]["onchain_text"] is not None  # второй источник не пострадал
+    _run(go())
+
+
+def test_dashboard_endpoint_onchain_failure_is_honest_none():
+    async def go():
+        app = ma.build_app(_FakeBotModule(onchain_boom=True))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/dashboard",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            assert resp.status == 200
+            body = await resp.json()
+            assert body["data"]["onchain_text"] is None
+            assert body["data"]["btc_context"] is not None
+    _run(go())
+
+
+def test_dashboard_endpoint_rejects_unauthenticated():
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/dashboard")
+            assert resp.status == 401
+    _run(go())
+
+
+def test_dashboard_endpoint_response_is_cached():
+    calls = []
+
+    class _CountingBotModule(_FakeBotModule):
+        def get_btc_market_context(self):
+            calls.append(1)
+            return super().get_btc_market_context()
+
+    async def go():
+        app = ma.build_app(_CountingBotModule())
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            headers = {"X-Telegram-Init-Data": init_data}
+            r1 = await client.get("/api/v1/dashboard", headers=headers)
+            r2 = await client.get("/api/v1/dashboard", headers=headers)
+            assert r1.status == 200 and r2.status == 200
+    _run(go())
+    assert len(calls) == 1  # второй запрос -- из кэша, get_btc_market_context не вызван снова

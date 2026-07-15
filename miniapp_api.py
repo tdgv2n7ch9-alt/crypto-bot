@@ -50,6 +50,7 @@ CACHE_TTL_TRACK_RECORD = 20
 CACHE_TTL_ZONES = 10
 CACHE_TTL_GLOSSARY = 300  # словарь меняется редко (правки в glossary.py, не рантайм)
 CACHE_TTL_SIGNALS = 15
+CACHE_TTL_DASHBOARD = 20
 
 # Раздел 5 ТЗ п.4: "Rate-limit на API (token bucket per chat_id)". СОЗНАТЕЛЬНО
 # независимое состояние от access_control._command_history/_cooldown_until --
@@ -324,6 +325,42 @@ def _make_signals_handler(bot_module, cache: _TTLCache):
     return _handle
 
 
+def _make_dashboard_handler(bot_module, cache: _TTLCache):
+    """`/api/v1/dashboard` -- источник: `bot.get_btc_market_context()` +
+    `onchain_metrics.format_onchain_card_text("BTC")`, ТЕ ЖЕ ДВЕ функции,
+    что реально строят экран "📊 РЫНОК" (`bot.py:_mv2_render_rynok()`), не
+    больше и не меньше. Ничего не пересчитывает заново.
+
+    Честная оговорка про ТЗ раздел 3.1: полная "витрина" из ТЗ (тикер-лента
+    BTC/ETH/SOL+топ движений со спарклайнами, формальный светофор рынка
+    отдельным объектом на 4 индикатора, лента событий дня, виджет ЛИМИТКИ)
+    у РЕАЛЬНОГО экрана РЫНОК СЕЙЧАС не существует -- сам `_mv2_render_rynok()`
+    честно называет себя "ЧАСТИЧНЫМ слиянием" в докстринге (Институционал и
+    подробный Тренд остаются отдельными экранами, не встроены). Этот
+    эндпоинт даёт РОВНО то, что видит текстовый экран, не изобретает
+    недостающие агрегаторы -- расширение до полного ТЗ-видения (event feed,
+    формальный светофор) требует отдельной разведки источников, не в этом
+    инкременте."""
+    async def _handle(request: web.Request) -> web.Response:
+        cached = cache.get()
+        if cached is not None:
+            return _json_response(cached)
+        payload = {"ok": True, "data": {}}
+        try:
+            payload["data"]["btc_context"] = bot_module.get_btc_market_context()
+        except Exception as e:
+            log.error(f"[MINIAPP-API] dashboard btc_context failed: {e}")
+            payload["data"]["btc_context"] = None
+        try:
+            payload["data"]["onchain_text"] = bot_module.onchain_metrics.format_onchain_card_text("BTC")
+        except Exception as e:
+            log.error(f"[MINIAPP-API] dashboard onchain_text failed: {e}")
+            payload["data"]["onchain_text"] = None
+        cache.set(payload)
+        return _json_response(payload)
+    return _handle
+
+
 def _make_glossary_handler(cache: _TTLCache):
     async def _handle(request: web.Request) -> web.Response:
         cached = cache.get()
@@ -345,11 +382,13 @@ def build_app(bot_module) -> web.Application:
     app["zones_cache"] = _TTLCache(CACHE_TTL_ZONES)
     app["glossary_cache"] = _TTLCache(CACHE_TTL_GLOSSARY)
     app["signals_cache"] = _TTLCache(CACHE_TTL_SIGNALS)
+    app["dashboard_cache"] = _TTLCache(CACHE_TTL_DASHBOARD)
     app.router.add_get("/api/v1/health", _handle_health)
     app.router.add_get("/api/v1/track-record", _make_track_record_handler(bot_module, app["track_record_cache"]))
     app.router.add_get("/api/v1/zones", _make_zones_handler(bot_module, app["zones_cache"]))
     app.router.add_get("/api/v1/glossary", _make_glossary_handler(app["glossary_cache"]))
     app.router.add_get("/api/v1/signals", _make_signals_handler(bot_module, app["signals_cache"]))
+    app.router.add_get("/api/v1/dashboard", _make_dashboard_handler(bot_module, app["dashboard_cache"]))
     return app
 
 
