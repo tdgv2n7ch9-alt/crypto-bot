@@ -10415,3 +10415,42 @@ slug или монета переименована на CoinGecko). Не рас
 батчинг shadow-sync). Sweep-поля (п.6) и MiniApp portfolio/dashboard
 остаются для следующей сессии -- время до 08:30 брифа заканчивается,
 переключаюсь на подготовку MORNING_BRIEF_2026-07-15.md.
+
+## 2026-07-15 -- Sweep-поля в shadow-записи для ВСЕХ кандидатов (владелец, ДА, п.6)
+
+СЕЙЧАС ДЕЛАЮ: код+тесты готовы, коммичу/деплою/верифицирую -- последний
+пункт очереди перед 08:30 брифом.
+СЛЕДУЮЩИЙ: MORNING_BRIEF_2026-07-15.md.
+
+**Контекст.** `SWEEP_VOLUME_ANALYSIS_2026-07-15.md` (микро-задача владельца,
+раньше этой ночи) нашёл: `journal/shadow_signals.json` НЕ содержал ни
+`sweep_1h`, ни `sweep_4h` ни в одной из 2991 проверенных записей --
+единственный источник этих полей был `journal/signals.json`, только для
+PROMOTED сигналов (смещённая выборка). Владелец: "вес +10 пока не менять,
+вместо этого добавить sweep-поля в shadow-записи -- решим по исходам через
+1-2 недели".
+
+**Фикс -- чистый passthrough, без пересчёта**: `shadow_engine.
+_adapt_send_scheduled_result(a)` (адаптер `real_full_analysis()` ->
+`compute_shadow()`, тот же принцип, что уже был для `tz13_shadow`) теперь
+прокидывает `a.get("sweep_1h")`/`a.get("sweep_4h")` (уже полностью посчитаны
+внутри `real_full_analysis()` через `ta_extra.detect_sweep()`, никакого
+нового вычисления). `compute_shadow()` отдаёт их как top-level поля
+итоговой записи (`result.get("sweep_1h")`/`result.get("sweep_4h")`) --
+честный `None` для `signal_loop.py`-пути (`fa_engine.build_full_analysis()`
+сейчас sweep не считает, не выдумываем данные там, где их нет).
+
+Теперь КАЖДЫЙ AUTO-кандидат (не только promoted), прогнанный через
+`log_send_scheduled_shadow_async()`, несёт `sweep_1h`/`sweep_4h` в
+shadow-записи -- через 1-2 недели накопления можно будет посчитать
+корреляцию с исходами по ПОЛНОЙ выборке кандидатов, не только по
+promoted-подмножеству, как в сегодняшнем анализе.
+
+Тесты: 4 новых (`test_shadow_send_scheduled.py`) -- адаптер прокидывает
+sweep-поля 1:1, честный `None` при отсутствии в `a`, `compute_shadow()`
+отдаёт их как top-level поля записи, честный `None` при отсутствии в
+`result`. `py_compile` отдельным шагом -- чисто. Полный `pytest`: **1280
+passed, 1 skipped**, без регрессий (проверено против всех файлов, прямо
+зовущих `compute_shadow()`: `test_amd_inducement_shadow.py`,
+`test_order_block_shadow.py`, `test_shadow_whale_confluence.py`,
+`test_chart_patterns.py`).

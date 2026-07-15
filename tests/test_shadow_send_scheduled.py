@@ -62,6 +62,51 @@ def test_adapt_missing_candles_defaults_to_empty_list():
     assert adapted["candles_4h"] == []
 
 
+def test_adapt_passes_through_sweep_fields():
+    """Владелец, ДА (2026-07-15, п.6): sweep_1h/sweep_4h прокидываются в shadow-
+    запись для ВСЕХ кандидатов, не только promoted -- см. SWEEP_VOLUME_
+    ANALYSIS_2026-07-15.md за причиной. Чистый passthrough, без пересчёта."""
+    a = _fake_real_full_analysis_result()
+    a["sweep_1h"] = {"type": "sweep_high", "level": 105.0, "bars_ago": 3, "volume_confirmed": False}
+    a["sweep_4h"] = {"type": "sweep_low", "level": 90.0, "bars_ago": 8, "volume_confirmed": True}
+    adapted = se._adapt_send_scheduled_result(a)
+    assert adapted["sweep_1h"] == a["sweep_1h"]
+    assert adapted["sweep_4h"] == a["sweep_4h"]
+
+
+def test_adapt_missing_sweep_fields_default_to_none():
+    a = _fake_real_full_analysis_result()
+    adapted = se._adapt_send_scheduled_result(a)
+    assert adapted["sweep_1h"] is None
+    assert adapted["sweep_4h"] is None
+
+
+def test_compute_shadow_includes_sweep_fields():
+    """Владелец, ДА (2026-07-15, п.6): compute_shadow() отдаёт sweep_1h/sweep_4h
+    как top-level поля записи -- честный passthrough из result, без пересчёта."""
+    result = {
+        "block11_trade_plan": {"direction": "long", "entry1": 100, "entry3": 98, "sl": 96,
+                                "tp1": 104, "tp2": 108, "tp3": 112, "rr_tp1": 2.0},
+        "candles_4h": [{"timestamp": 0, "open": 99, "high": 101, "low": 98, "close": 100}],
+        "sweep_1h": {"type": "sweep_high", "level": 105.0, "bars_ago": 3, "volume_confirmed": False},
+        "sweep_4h": None,
+    }
+    record = se.compute_shadow("BTCUSDT", result, _FakeBotModule())
+    assert record["sweep_1h"] == result["sweep_1h"]
+    assert record["sweep_4h"] is None
+
+
+def test_compute_shadow_sweep_fields_default_to_none_when_absent():
+    result = {
+        "block11_trade_plan": {"direction": "long", "entry1": 100, "entry3": 98, "sl": 96,
+                                "tp1": 104, "tp2": 108, "tp3": 112, "rr_tp1": 2.0},
+        "candles_4h": [{"timestamp": 0, "open": 99, "high": 101, "low": 98, "close": 100}],
+    }
+    record = se.compute_shadow("BTCUSDT", result, _FakeBotModule())
+    assert record["sweep_1h"] is None
+    assert record["sweep_4h"] is None
+
+
 def test_log_send_scheduled_shadow_async_writes_local_record(monkeypatch):
     captured = {}
 

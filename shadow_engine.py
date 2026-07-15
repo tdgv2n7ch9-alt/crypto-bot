@@ -666,6 +666,12 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         "tz13_entry_zone": tz13.get("entry_zone"),
         "tz13_sl": tz13.get("sl"),
         "tz13_tp1": tz13.get("tp1"), "tz13_tp2": tz13.get("tp2"), "tz13_tp3": tz13.get("tp3"),
+        # Sweep-поля для ВСЕХ кандидатов (владелец, ДА, 2026-07-15) -- см.
+        # докстринг _adapt_send_scheduled_result() про источник и мотивацию.
+        # honest None у signal_loop.py-пути (fa_engine.build_full_analysis()
+        # сейчас не считает sweep) -- не выдумываем данные там, где их нет.
+        "sweep_1h": result.get("sweep_1h"),
+        "sweep_4h": result.get("sweep_4h"),
     }
 
 
@@ -902,6 +908,15 @@ def _adapt_send_scheduled_result(a: dict) -> dict:
         # внутри real_full_analysis() (ta_extra.build_13block_verdict()), просто
         # прокидывается через адаптер к compute_shadow(), без пересчёта.
         "tz13_shadow": a.get("tz13_shadow"),
+        # Sweep-поля для ВСЕХ кандидатов (владелец, ДА, 2026-07-15, п.6 наряда
+        # "свип +10 без объёмного подтверждения" -- SWEEP_VOLUME_ANALYSIS_
+        # 2026-07-15.md нашёл, что shadow-записи вообще НЕ содержат sweep_1h/
+        # sweep_4h, единственный источник до сих пор был journal/signals.json,
+        # только для PROMOTED сигналов). Уже полностью посчитаны внутри
+        # real_full_analysis() (ta_extra.detect_sweep()), просто прокидываются
+        # -- тот же принцип, что tz13_shadow строкой выше, без пересчёта.
+        "sweep_1h": a.get("sweep_1h"),
+        "sweep_4h": a.get("sweep_4h"),
     }
 
 
