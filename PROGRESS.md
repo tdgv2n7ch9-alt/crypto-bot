@@ -10793,3 +10793,11 @@ ok/skew/expiry/put_iv_avg/call_iv_avg/put_count/call_count/note), не
 passthrough, skew-словарь целиком, честный дефолт 0/0/0/None при
 недоступности Deribit) -- итого 17/17 в файле. `py_compile` отдельным шагом
 -- чисто. Полный `pytest`: **1321 passed, 1 skipped**, без регрессий.
+
+## 2026-07-15 -- Инкремент 3: живая верификация (deployment 11427bfb)
+
+Деплой SUCCESS, чистый старт (`railway logs`), только известные CoinGecko
+429, ни одного Traceback. Флаг `OPTIONS_AUTO_SHADOW_ENABLED=False` -> нет
+отличительных лог-строк (ожидаемо), сам факт чистого старта подтверждает
+корректность нового кода. Задача #195 закрыта по DoD. Переключаюсь на
+инкремент 4 (OKX Liquidation ratio+heatmap).
