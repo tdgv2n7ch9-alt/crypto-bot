@@ -32,7 +32,7 @@ def _seed_state(ts):
 
 def test_first_run_only_bookmarks(monkeypatch, tmp_path):
     _fresh_state_file(monkeypatch, tmp_path)
-    monkeypatch.setattr(asm, "get_klines", lambda interval, limit=3: ([_candle(1000, 0.0006, 0.0006, 0.0006, 0.0006)], "bybit"))
+    monkeypatch.setattr(asm, "get_klines", lambda interval, limit=3, dead_sources=None: ([_candle(1000, 0.0006, 0.0006, 0.0006, 0.0006)], "bybit"))
     sent = []
     result = _run(asm.check_ake_setup(bot=None, send_system_fn=lambda *a, **k: sent.append(a)))
     assert result == []
@@ -43,7 +43,7 @@ def test_a1_test_alert_fires_on_touch(monkeypatch, tmp_path):
     _fresh_state_file(monkeypatch, tmp_path)
     asm._save_state(_seed_state(1000))
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [_candle(2000, 0.00068, 0.00071, 0.00067, 0.00069)], "bybit"  # high >= 0.0007
         return [], "bybit"
@@ -64,7 +64,7 @@ def test_a1_does_not_refire_without_2pct_reset(monkeypatch, tmp_path):
     state["armed"]["test_0007"] = False  # уже сработал недавно
     asm._save_state(state)
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [_candle(2000, 0.00069, 0.00071, 0.00068, 0.0007)], "bybit"  # снова касание, но БЕЗ отхода >2%
         return [], "bybit"
@@ -80,7 +80,7 @@ def test_a1_refires_after_2pct_reset(monkeypatch, tmp_path):
     state["armed"]["test_0007"] = False
     asm._save_state(state)
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [
                 _candle(2000, 0.00069, 0.00069, 0.000682, 0.000685),  # отход >2% ниже 0.0007 -> сброс
@@ -100,7 +100,7 @@ def test_a2_confirm_below_fires_on_close(monkeypatch, tmp_path):
     _fresh_state_file(monkeypatch, tmp_path)
     asm._save_state(_seed_state(1000))
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [_candle(2000, 0.00071, 0.00071, 0.00068, 0.00069)], "bybit"  # close < 0.0007
         return [], "bybit"
@@ -118,7 +118,7 @@ def test_a3_low_sweep_wick_vs_close_labeled(monkeypatch, tmp_path):
     _fresh_state_file(monkeypatch, tmp_path)
     asm._save_state(_seed_state(1000))
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [_candle(2000, 0.00052, 0.00053, 0.00049, 0.00051)], "bybit"  # wick below 0.0005065, close above
         return [], "bybit"
@@ -137,7 +137,7 @@ def test_a4_invalidation_fires_independently_of_other_stages(monkeypatch, tmp_pa
     _fresh_state_file(monkeypatch, tmp_path)
     asm._save_state(_seed_state(1000))
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [], "bybit"
         return [_candle(5000, 0.00074, 0.00076, 0.00073, 0.00075)], "bybit"  # 1H close > 0.00073
@@ -155,7 +155,7 @@ def test_a5_targets_fire_independently(monkeypatch, tmp_path):
     _fresh_state_file(monkeypatch, tmp_path)
     asm._save_state(_seed_state(1000))
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [_candle(2000, 0.00051, 0.00052, 0.0005, 0.000505)], "bybit"  # low touches both 0.000558 and 0.000506
         return [], "bybit"
@@ -192,7 +192,7 @@ def test_all_alerts_are_critical_true(monkeypatch, tmp_path):
     _fresh_state_file(monkeypatch, tmp_path)
     asm._save_state(_seed_state(1000))
 
-    def fake_klines(interval, limit=3):
+    def fake_klines(interval, limit=3, dead_sources=None):
         if interval == "15":
             return [_candle(2000, 0.00069, 0.00071, 0.00068, 0.00069)], "bybit"
         return [], "bybit"
@@ -203,3 +203,86 @@ def test_all_alerts_are_critical_true(monkeypatch, tmp_path):
         sent.append(critical)
     _run(asm.check_ake_setup(bot=None, send_system_fn=fake_send))
     assert all(c is True for c in sent)
+
+
+# --- Распространение фикса #240: run_in_executor, dead-source tracking, honest notify ---
+
+def test_get_klines_dead_source_not_retried_within_tick(monkeypatch):
+    calls = {"bybit": 0, "bingx": 0}
+
+    def fake_bybit(interval, limit):
+        calls["bybit"] += 1
+        raise RuntimeError("bybit down")
+
+    def fake_bingx(interval, limit):
+        calls["bingx"] += 1
+        return [], "bingx"
+
+    monkeypatch.setattr(asm, "_fetch_klines_bybit", fake_bybit)
+    monkeypatch.setattr(asm, "_fetch_klines_bingx", fake_bingx)
+
+    dead_sources = set()
+    asm.get_klines("15", asm.CANDLE_LIMIT, dead_sources)
+    asm.get_klines("60", asm.CANDLE_LIMIT, dead_sources)  # тот же тик
+    assert calls["bybit"] == 1
+    assert calls["bingx"] == 2
+
+
+def test_check_ake_setup_uses_run_in_executor(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    asm._save_state(_seed_state(1000))
+
+    executor_calls = []
+
+    async def fake_run_in_executor(fn, *args):
+        executor_calls.append(fn.__name__)
+        return fn(*args)
+
+    def _mk(name, real):
+        real.__name__ = name
+        return real
+
+    monkeypatch.setattr(asm, "get_klines",
+                         _mk("get_klines", lambda interval, limit=3, dead_sources=None: ([], "bybit")))
+
+    _run(asm.check_ake_setup(bot=None, send_system_fn=lambda *a, **k: None,
+                              run_in_executor_fn=fake_run_in_executor))
+    assert executor_calls.count("get_klines") >= 1
+
+
+def test_check_ake_setup_honest_notify_on_total_source_failure(monkeypatch, tmp_path):
+    """Владелец В ПОЗИЦИИ -- если все источники свечей отказали, монитор обязан
+    честно сообщить, не молчать."""
+    _fresh_state_file(monkeypatch, tmp_path)
+    asm._save_state(_seed_state(1000))
+
+    def fake_klines(interval, limit=3, dead_sources=None):
+        raise RuntimeError("все источники недоступны")
+    monkeypatch.setattr(asm, "get_klines", fake_klines)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    _run(asm.check_ake_setup(bot=None, send_system_fn=fake_send))
+    assert len(sent) == 1
+    assert sent[0][1] is True
+    assert "источники свечей" in sent[0][0]
+
+
+def test_check_ake_setup_notify_not_spammed_every_tick(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    state = _seed_state(1000)
+    state["last_source_down_notify_ts"] = time.time()
+    asm._save_state(state)
+
+    def fake_klines(interval, limit=3, dead_sources=None):
+        raise RuntimeError("все источники недоступны")
+    monkeypatch.setattr(asm, "get_klines", fake_klines)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    _run(asm.check_ake_setup(bot=None, send_system_fn=fake_send))
+    assert sent == []

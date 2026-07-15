@@ -34,6 +34,10 @@ UNLOCK_PCT_MCAP = 6
 
 POLL_INTERVAL_SEC = 60
 CANDLE_HISTORY_MAX = 200  # ~50ч на 15м -- с запасом для swing-пересчёта HL
+REQUEST_TIMEOUT_SEC = 10  # владелец, критический регресс bsc_wallet_monitor 2026-07-15
+# (#240) -- жёсткий потолок на КАЖДЫЙ сетевой вызов, тот же паттерн распространён сюда
+SOURCE_DOWN_NOTIFY_INTERVAL_SEC = 15 * 60  # честный [SYS] раз в 15 мин при отказе
+# ВСЕХ источников, не молчать и не спамить на каждый минутный тик
 
 _JOURNAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal")
 STATE_FILE = os.path.join(_JOURNAL_DIR, "bank_setup_state.json")
@@ -94,7 +98,7 @@ def _save_state(state: dict) -> None:
 def _fetch_klines_bybit(interval: str, limit: int = 5):
     r = requests.get(BYBIT_KLINE_URL, params={
         "category": "linear", "symbol": BANK_SYMBOL, "interval": interval, "limit": limit,
-    }, timeout=10)
+    }, timeout=REQUEST_TIMEOUT_SEC)
     d = r.json()
     if d.get("retCode") != 0:
         raise RuntimeError(f"bybit kline error: {d.get('retMsg')}")
@@ -111,7 +115,7 @@ def _bingx_interval(tf: str) -> str:
 def _fetch_klines_bingx(interval: str, limit: int = 5):
     r = requests.get(BINGX_KLINE_URL, params={
         "symbol": "BANK-USDT", "interval": _bingx_interval(interval), "limit": limit,
-    }, timeout=10)
+    }, timeout=REQUEST_TIMEOUT_SEC)
     d = r.json()
     if d.get("code") != 0:
         raise RuntimeError(f"bingx kline error: {d.get('msg')}")
@@ -121,14 +125,51 @@ def _fetch_klines_bingx(interval: str, limit: int = 5):
               "l": float(row["low"]), "c": float(row["close"])} for row in rows]
 
 
-def get_klines(interval: str, limit: int = 5):
+def get_klines(interval: str, limit: int = 5, dead_sources: set = None):
     """Bybit первичный источник, BingX -- резерв. Честно пробрасывает исключение,
-    если ОБА отказали -- вызывающий код обязан пропустить цикл, не выдумывать свечи."""
+    если ОБА отказали -- вызывающий код обязан пропустить цикл, не выдумывать свечи.
+
+    `dead_sources` -- опциональный set, разделяемый между НЕСКОЛЬКИМИ вызовами этой
+    функции В ОДНОМ ТИКЕ (check_bank_setup вызывает её дважды -- 15м и 1H): владелец,
+    критический регресс bsc_wallet_monitor 2026-07-15 (#240) -- источник, отказавший
+    ОДИН раз в этом тике, не должен повторно тратить сетевой таймаут-бюджет на каждом
+    следующем вызове в том же тике (тот же принцип, что dead_providers в
+    bsc_wallet_monitor.get_transfer_logs(), только без чанкинга -- здесь достаточно
+    простого set без итераций по диапазону)."""
+    if dead_sources is None:
+        dead_sources = set()
+    if "bybit" not in dead_sources:
+        try:
+            return _fetch_klines_bybit(interval, limit), "bybit"
+        except Exception as e:
+            log.info(f"bank_setup_monitor: bybit klines ({interval}) failed: {e}, "
+                     f"помечаю мёртвым до конца тика, пробую bingx")
+            dead_sources.add("bybit")
+    if "bingx" not in dead_sources:
+        try:
+            return _fetch_klines_bingx(interval, limit), "bingx"
+        except Exception as e:
+            log.info(f"bank_setup_monitor: bingx klines ({interval}) failed: {e}, "
+                     f"помечаю мёртвым до конца тика")
+            dead_sources.add("bingx")
+    raise RuntimeError(f"bank_setup_monitor: все источники ({sorted(dead_sources)}) "
+                        f"отказали для interval={interval}")
+
+
+async def _notify_source_down(state: dict, bot, send_system_fn) -> None:
+    """Честное [SYS]-уведомление при отказе ВСЕХ источников, rate-limited раз в
+    SOURCE_DOWN_NOTIFY_INTERVAL_SEC -- владелец: "не молчать и не копить", но и не
+    спамить на каждый минутный тик (тот же паттерн, что bsc_wallet_monitor #240)."""
+    last_notify = state.get("last_source_down_notify_ts", 0)
+    if time.time() - last_notify < SOURCE_DOWN_NOTIFY_INTERVAL_SEC:
+        return
     try:
-        return _fetch_klines_bybit(interval, limit), "bybit"
+        await send_system_fn(bot, "⚠️ BANK-монитор: все источники свечей (Bybit/BingX) "
+                                   "отказали -- проверка сетапа временно недоступна, "
+                                   "повторные попытки продолжаются", critical=True)
     except Exception as e:
-        log.info(f"bank_setup_monitor: bybit klines ({interval}) failed: {e}, пробую bingx")
-    return _fetch_klines_bingx(interval, limit), "bingx"
+        log.error(f"bank_setup_monitor: не удалось отправить honest down-notify: {e}")
+    state["last_source_down_notify_ts"] = time.time()
 
 
 def _recompute_hl_after_new_high(candles_history: list, new_high_ts: int, old_hl_level: float) -> float:
@@ -176,12 +217,21 @@ def format_invalidation_alert() -> str:
             f"{_unlock_reference_line()}")
 
 
-async def check_bank_setup(bot, send_system_fn=None) -> list:
+async def check_bank_setup(bot, send_system_fn=None, run_in_executor_fn=None) -> list:
     """Джоб (scheduler.add_job, interval POLL_INTERVAL_SEC). Возвращает список
-    отправленных типов алертов (для тестов/логов), обычно []."""
+    отправленных типов алертов (для тестов/логов), обычно [].
+
+    Владелец, критический регресс bsc_wallet_monitor 2026-07-15 (#240) --
+    `run_in_executor_fn` распространяет тот же фикс сюда: блокирующие
+    `requests`-вызовы (через get_klines) идут через executor, не выполняются
+    синхронно внутри этой async-корутины."""
     if send_system_fn is None:
         import bot as bot_module
         send_system_fn = bot_module.send_system
+    if run_in_executor_fn is None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        run_in_executor_fn = lambda fn, *a: loop.run_in_executor(None, fn, *a)
 
     state = _load_state()
     sent = []
@@ -189,10 +239,14 @@ async def check_bank_setup(bot, send_system_fn=None) -> list:
     if state["stage"] in (STAGE_DONE, STAGE_INVALIDATED):
         return sent  # терминальная стадия -- монитор больше ничего не делает
 
+    dead_sources = set()  # разделяется между вызовами get_klines в ЭТОМ тике (15м + 1H)
+
     try:
-        candles_15m, src15 = get_klines("15", limit=10)
+        candles_15m, src15 = await run_in_executor_fn(get_klines, "15", 10, dead_sources)
     except Exception as e:
         log.error(f"bank_setup_monitor: ВСЕ источники 15м-свечей отказали: {e}")
+        await _notify_source_down(state, bot, send_system_fn)
+        _save_state(state)
         return sent
 
     # Только НОВЫЕ закрытые свечи с прошлого прогона
@@ -244,7 +298,7 @@ async def check_bank_setup(bot, send_system_fn=None) -> list:
     # закрытие 1H выше SL отменяет сетап в любой момент.
     if state["stage"] not in (STAGE_DONE, STAGE_INVALIDATED):
         try:
-            candles_1h, _ = get_klines("60", limit=3)
+            candles_1h, _ = await run_in_executor_fn(get_klines, "60", 3, dead_sources)
         except Exception as e:
             log.info(f"bank_setup_monitor: 1H-свечи для инвалидации недоступны: {e}")
             candles_1h = []

@@ -135,6 +135,7 @@ import methodology_content
 import bsc_wallet_monitor
 import bank_setup_monitor
 import ake_setup_monitor
+import zone_alert_monitor
 import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
@@ -13621,6 +13622,7 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["bsc_wallet_monitor"] = bsc_wallet_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["bank_setup_monitor"] = bank_setup_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["ake_setup_monitor"] = ake_setup_monitor.POLL_INTERVAL_SEC
+    _job_expected_interval_sec["zone_alert_monitor"] = zone_alert_monitor.POLL_INTERVAL_SEC
 
     scheduler.add_job(
         _heartbeat_wrapper("send_scheduled", send_scheduled),
@@ -13765,6 +13767,15 @@ async def _start_pump_detector(app):
         _heartbeat_wrapper("ake_setup_monitor", ake_setup_monitor.check_ake_setup),
         "interval",
         seconds=ake_setup_monitor.POLL_INTERVAL_SEC,
+        args=[app.bot],
+    )
+    # Наряды владельца KAITOUSDT SHORT и AVAXUSDT LONG, 2026-07-15 -- генерик
+    # конфиг-driven движок (zone_alert_configs.py регистрирует символы). См.
+    # zone_alert_monitor.py докстринг.
+    scheduler.add_job(
+        _heartbeat_wrapper("zone_alert_monitor", zone_alert_monitor.check_all_zones),
+        "interval",
+        seconds=zone_alert_monitor.POLL_INTERVAL_SEC,
         args=[app.bot],
     )
     scheduler.start()

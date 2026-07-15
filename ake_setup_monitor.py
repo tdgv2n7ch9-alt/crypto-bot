@@ -30,6 +30,10 @@ INTERIM_TARGET = 0.000558
 RESET_MOVE_PCT = 2.0  # владелец: "отход >2% = новый алерт" -- дедуп-сброс
 POLL_INTERVAL_SEC = 60
 CANDLE_LIMIT = 3
+REQUEST_TIMEOUT_SEC = 10  # владелец, критический регресс bsc_wallet_monitor 2026-07-15
+# (#240) -- жёсткий потолок на КАЖДЫЙ сетевой вызов, тот же паттерн распространён сюда
+SOURCE_DOWN_NOTIFY_INTERVAL_SEC = 15 * 60  # честный [SYS] раз в 15 мин при отказе
+# ВСЕХ источников -- владелец В ПОЗИЦИИ, "не молчать и не копить"
 
 _JOURNAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal")
 STATE_FILE = os.path.join(_JOURNAL_DIR, "ake_setup_state.json")
@@ -90,7 +94,7 @@ def _save_state(state: dict) -> None:
 def _fetch_klines_bybit(interval: str, limit: int):
     r = requests.get(BYBIT_KLINE_URL, params={
         "category": "linear", "symbol": AKE_SYMBOL, "interval": interval, "limit": limit,
-    }, timeout=10)
+    }, timeout=REQUEST_TIMEOUT_SEC)
     d = r.json()
     if d.get("retCode") != 0:
         raise RuntimeError(f"bybit kline error: {d.get('retMsg')}")
@@ -103,7 +107,7 @@ def _fetch_klines_bingx(interval: str, limit: int):
     bingx_interval = {"15": "15m", "60": "1h"}[interval]
     r = requests.get(BINGX_KLINE_URL, params={
         "symbol": "AKE-USDT", "interval": bingx_interval, "limit": limit,
-    }, timeout=10)
+    }, timeout=REQUEST_TIMEOUT_SEC)
     d = r.json()
     if d.get("code") != 0:
         raise RuntimeError(f"bingx kline error: {d.get('msg')}")
@@ -112,12 +116,46 @@ def _fetch_klines_bingx(interval: str, limit: int):
               "l": float(row["low"]), "c": float(row["close"])} for row in rows]
 
 
-def get_klines(interval: str, limit: int = CANDLE_LIMIT):
+def get_klines(interval: str, limit: int = CANDLE_LIMIT, dead_sources: set = None):
+    """Bybit первичный, BingX -- резерв. `dead_sources` -- опциональный set,
+    разделяемый между несколькими вызовами В ОДНОМ ТИКЕ (владелец, критический
+    регресс bsc_wallet_monitor 2026-07-15, #240 -- источник, отказавший один раз
+    в этом тике, не повторяется на следующем вызове в том же тике)."""
+    if dead_sources is None:
+        dead_sources = set()
+    if "bybit" not in dead_sources:
+        try:
+            return _fetch_klines_bybit(interval, limit), "bybit"
+        except Exception as e:
+            log.info(f"ake_setup_monitor: bybit klines ({interval}) failed: {e}, "
+                     f"помечаю мёртвым до конца тика, пробую bingx")
+            dead_sources.add("bybit")
+    if "bingx" not in dead_sources:
+        try:
+            return _fetch_klines_bingx(interval, limit), "bingx"
+        except Exception as e:
+            log.info(f"ake_setup_monitor: bingx klines ({interval}) failed: {e}, "
+                     f"помечаю мёртвым до конца тика")
+            dead_sources.add("bingx")
+    raise RuntimeError(f"ake_setup_monitor: все источники ({sorted(dead_sources)}) "
+                        f"отказали для interval={interval}")
+
+
+async def _notify_source_down(state: dict, bot, send_system_fn) -> None:
+    """Честное [SYS]-уведомление при отказе ВСЕХ источников, rate-limited раз в
+    SOURCE_DOWN_NOTIFY_INTERVAL_SEC -- владелец В ПОЗИЦИИ, "не молчать и не копить",
+    но и не спамить на каждый минутный тик."""
+    last_notify = state.get("last_source_down_notify_ts", 0)
+    if time.time() - last_notify < SOURCE_DOWN_NOTIFY_INTERVAL_SEC:
+        return
     try:
-        return _fetch_klines_bybit(interval, limit), "bybit"
+        await send_system_fn(bot, "⚠️ AKE-сетап-монитор: все источники свечей "
+                                   "(Bybit/BingX) отказали -- проверка триггеров "
+                                   "временно недоступна, повторные попытки "
+                                   "продолжаются", critical=True)
     except Exception as e:
-        log.info(f"ake_setup_monitor: bybit klines ({interval}) failed: {e}, пробую bingx")
-    return _fetch_klines_bingx(interval, limit), "bingx"
+        log.error(f"ake_setup_monitor: не удалось отправить honest down-notify: {e}")
+    state["last_source_down_notify_ts"] = time.time()
 
 
 def _wallet_moved_24h(wallet: str) -> bool:
@@ -181,18 +219,28 @@ def format_target_alert(level: float) -> str:
     return f"🎯 AKE: цель {level} достигнута -- зона частичной фиксации\n{_wallets_status_line()}"
 
 
-async def check_ake_setup(bot, send_system_fn=None) -> list:
+async def check_ake_setup(bot, send_system_fn=None, run_in_executor_fn=None) -> list:
+    """Владелец, критический регресс bsc_wallet_monitor 2026-07-15 (#240) --
+    `run_in_executor_fn` распространяет тот же фикс сюда (владелец В ПОЗИЦИИ,
+    этот монитор -- главный алерт-пакет по сделке)."""
     if send_system_fn is None:
         import bot as bot_module
         send_system_fn = bot_module.send_system
+    if run_in_executor_fn is None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        run_in_executor_fn = lambda fn, *a: loop.run_in_executor(None, fn, *a)
 
     state = _load_state()
     sent = []
+    dead_sources = set()  # разделяется между вызовами get_klines в ЭТОМ тике (15м + 1H)
 
     try:
-        candles_15m, src15 = get_klines("15")
+        candles_15m, src15 = await run_in_executor_fn(get_klines, "15", CANDLE_LIMIT, dead_sources)
     except Exception as e:
         log.error(f"ake_setup_monitor: ВСЕ источники 15м-свечей отказали: {e}")
+        await _notify_source_down(state, bot, send_system_fn)
+        _save_state(state)
         return sent
 
     last_ts = state.get("last_closed_15m_ts")
@@ -239,7 +287,7 @@ async def check_ake_setup(bot, send_system_fn=None) -> list:
 
     # A4: инвалидация -- закрытие 1H выше 0.00073, сброс >2% ниже уровня
     try:
-        candles_1h, _ = get_klines("60")
+        candles_1h, _ = await run_in_executor_fn(get_klines, "60", CANDLE_LIMIT, dead_sources)
     except Exception as e:
         log.info(f"ake_setup_monitor: 1H-свечи для инвалидации недоступны: {e}")
         candles_1h = []
