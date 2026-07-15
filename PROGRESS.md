@@ -10454,3 +10454,23 @@ passed, 1 skipped**, без регрессий (проверено против 
 зовущих `compute_shadow()`: `test_amd_inducement_shadow.py`,
 `test_order_block_shadow.py`, `test_shadow_whale_confluence.py`,
 `test_chart_patterns.py`).
+
+## 2026-07-15 -- Sweep-поля: живая верификация (deployment a868f323)
+
+Деплой SUCCESS, чистый старт (`railway logs`), ни одного Traceback.
+`shadow_engine.log_send_scheduled_shadow_async: started for CC` -- поток
+работает штатно с новым кодом. Задача (владелец, п.6) закрыта по DoD.
+
+**Итог ночи по всем 6 пунктам решения владельца**:
+1. MiniApp Этап 1 до 5/5 -- 4/5 сделано (health/track-record/zones/glossary/
+   signals), portfolio заблокирован (нет источника в коде), dashboard не
+   начат (не входил в исходный список 5 функций-источников, отдельная
+   разведка агрегаторов РЫНОК-экрана для следующей сессии).
+2. Фаза B инкремент 2 (PCR+Max Pain) -- ЗАКРЫТО, деплой+живая верификация.
+3. GitHub Pages для статики Этапа 2 -- зафиксировано, ничего не разворачивал.
+4. Публичный домен API -- НЕ открыт, верификация только через railway ssh.
+5. Батчинг shadow-sync -- ЗАКРЫТО, живое подтверждение 90с интервала.
+6. Sweep-поля в shadow -- ЗАКРЫТО, деплой+живая верификация.
+
+Гейты Пакет 8 М2 / Пакет 12 / MiniApp Этап 2 -- не тронуты, как поручено.
+Дальше -- MORNING_BRIEF_2026-07-15.md к 08:30.
