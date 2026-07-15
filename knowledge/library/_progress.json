@@ -1,0 +1,808 @@
+{
+  "total": 160,
+  "files": {
+    "-4712541865087879273.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "1. Вводныи_ урок.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "1.2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "10. Боковое движение.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "11. Риск-менеджмент.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "12_Практическии__модуль_Демо_торговля.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "13. Индикаторы.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "14. Психология.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "15. Кластерныи_ анализ.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "16. Фундаментальныи_ анализ.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "17. Стрим Торговые сетапы.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "18. Бектесты 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "18. Бектесты 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "18. Бектесты 3.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2. Работа с Trading View.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2.2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2023-03-01 11-53-24.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2023-03-01 13-42-22_Trim.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2023-03-01 15-15-03.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2025-10-21 19-28-39.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2025-10-25 19-43-59.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2025-10-27 11-07-21.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "2025-11-14 18-56-03.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "21. Стрим Мультиструктура.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "22. Стрим Торговые инструменты _Pro_.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "23. Стрим Практическии_ модуль.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "24. Стрим Психология.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "25. Стрим Supply_Demand.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "26. Стрим AMD_Wyckoff Часть 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "27. Стрим Wyckoff Часть 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "28_Стрим_Индикаторы_и_особенности_торговли_FX.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "29. Стрим Торговые сетапы.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "3. Работа с Биржеи_.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "3.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "30_Стрим_Фундаментальныи__анализ_Pro.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "32. Бектест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "33. Бектест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "34. Бектест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "35. Бектест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "36 Стрим Работа в POI.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "37_Стрим_Логика_запуска_алгоритма.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "38. Практическии_ модуль.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "39. Стрим ММХМ.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "4. Рыночная структура Base.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "4.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "40. Стрим SMT.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "41. Стрим Практическии_ модуль.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "42. Стрим Продвинутыи_ Price Action.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "43. Стрим Торговые сетапы.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "44. Бэктест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "45. Бэктест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "46. Бэктест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "47.Бэктест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "48.Бэктест.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "5. Рыночная структура_ Advanced.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "5.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "6. Ликвидность.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "6.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "7. Работа с уровнями Фибоначчи.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "8. Торговые инструменты_ Base.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "9. Торговые инструменты Advanced.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "BPR.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Binance 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Binance 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Binance 3.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Conference 09.02.23 Liquidity Provider..md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Conference 16.02.23 Liquidity Provider. 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Conference 16.02.23 Liquidity Provider..md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Conference 26.02.23 Dova Lazarus. 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Conference 26.02.23 Dova Lazarus..md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "FVG 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "FVG 2.md": {
+      "status": "done",
+      "library_file": "fvg_practical_usage.md",
+      "batch": 1
+    },
+    "FVG.md": {
+      "status": "done",
+      "library_file": "fvg_practical_usage.md",
+      "batch": 1
+    },
+    "Fibonacci 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Fibonacci 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Fibonacci 3.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Forex position size.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Lesson _2 _ Продолжение.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Lesson _4 Liquidity Provider. Фибоначчи. part 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Lesson__1_Dova_Lazarus_Введение_в_Forex__Сессии__Брокеры__Новости.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Lesson__2_Cryptomannn_Cтруктура_Синхронизация_Ликвидность_Частичное.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Lesson__3_Dova_Lazarus_Открытия__контекст_открытии_.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Lesson__5_Liquidity_Provider_AMD_SFP_Открытие_позиции_во_время_формирования.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Ob1.md": {
+      "status": "done",
+      "library_file": "order_block_sk_criteria.md",
+      "batch": 1
+    },
+    "Orderflow.md": {
+      "status": "done",
+      "library_file": "order_flow_session_liquidity.md",
+      "batch": 1
+    },
+    "POI.md": {
+      "status": "done",
+      "library_file": "poi.md",
+      "batch": 1
+    },
+    "RTO POI 1.md": {
+      "status": "done",
+      "library_file": "rto_poi_multi_zone.md",
+      "batch": 1
+    },
+    "STB BTS 1.md": {
+      "status": "done",
+      "library_file": "stb_bts_modeling.md",
+      "batch": 1
+    },
+    "STB BTS 2.md": {
+      "status": "done",
+      "library_file": "stb_bts_modeling.md",
+      "batch": 1
+    },
+    "Session1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Session2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Smart Money.md": {
+      "status": "done",
+      "library_file": "smart_money_intro.md",
+      "batch": 1
+    },
+    "Trading view.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "conference 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "conference 15 01 23.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "conference 5.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "dwm.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "lesson 4.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "lesson 6 part 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "lesson 6 part1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "lesson 8.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "ob2.md": {
+      "status": "done",
+      "library_file": "order_block_sk_criteria.md",
+      "batch": 1
+    },
+    "Воркшоп 2.0 1 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 10 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 11 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 12 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 13 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 14 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 15 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 2 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 3 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 4 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 5 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 6 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 7 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 8 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Воркшоп 2.0 9 день.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Вход в сделку_ БУ_ RR 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Вход в сделку_ БУ_ RR 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Вход в сделку_ БУ_ RR 3.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "ЕНТРИ ТАИ_ПС 4блок.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Ликвидность 2.md": {
+      "status": "done",
+      "library_file": "liquidity_pools_basics.md",
+      "batch": 1
+    },
+    "Стрим 1 2021.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 1 2022.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 1 от Санчо.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 10.1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 10.2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 11.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 2 2021.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 2 2022.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 2 от Санчо.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 2.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 3 2021.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 3 2022.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 3 от Санчо.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 3.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 4 2021.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 4 2022.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 4.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 5 2021.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 5 2022.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 5.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 6 2021.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 6 2022.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 6.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 7.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 8.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Стрим 9.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Структура 1.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 1. Структура.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 2. Ликвидность и имбаланс.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 3. OB_ MB_ BB_ Wick.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 4. Дивергенция_ TDP_ TTS.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 5. Время и киллзоны.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 6. Рендж и Ваи_кофф.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 7. Сетапы.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    },
+    "Урок 8. Стили торговли.md": {
+      "status": "pending",
+      "library_file": null,
+      "batch": null
+    }
+  },
+  "done_count": 11,
+  "last_batch": 1,
+  "last_updated": "2026-07-15"
+}

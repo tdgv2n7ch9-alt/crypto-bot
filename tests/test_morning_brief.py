@@ -97,6 +97,31 @@ def test_shadow_table_section_shows_all_contours(monkeypatch):
     assert "13.3/72ч" in text
 
 
+# ── library_progress_section() -- Пакет П-Библиотека Этап 2 (владелец) ──
+
+def test_library_progress_section_reports_done_total(monkeypatch, tmp_path):
+    import json
+    progress_file = tmp_path / "_progress.json"
+    progress_file.write_text(json.dumps({"total": 160, "done_count": 11}), encoding="utf-8")
+    monkeypatch.setattr(mb, "LIBRARY_PROGRESS_PATH", str(progress_file))
+    text = "\n".join(mb.library_progress_section())
+    assert "11/160" in text
+
+
+def test_library_progress_section_honest_na_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(mb, "LIBRARY_PROGRESS_PATH", str(tmp_path / "does_not_exist.json"))
+    text = "\n".join(mb.library_progress_section())
+    assert "н/д" in text
+
+
+def test_library_progress_section_honest_na_on_corrupt_json(monkeypatch, tmp_path):
+    bad_file = tmp_path / "_progress.json"
+    bad_file.write_text("not valid json{{{", encoding="utf-8")
+    monkeypatch.setattr(mb, "LIBRARY_PROGRESS_PATH", str(bad_file))
+    text = "\n".join(mb.library_progress_section())
+    assert "н/д" in text
+
+
 # ── _latest_evolution_finding() ──
 
 def test_latest_evolution_finding_picks_last_dated_heading(monkeypatch, tmp_path):
@@ -256,6 +281,7 @@ def test_build_morning_brief_assembles_all_sections(monkeypatch):
     assert "# MORNING BRIEF" in text
     assert "## 1) Рынок к утру" in text
     assert "## 2) Тень одной таблицей" in text
+    assert "## Библиотека: конспекты видео" in text
     assert "## 3) Топ-3 находки ночи" in text
     assert "## 4) Вопросы владельцу на сегодня" in text
 

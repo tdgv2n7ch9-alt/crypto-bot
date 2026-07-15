@@ -205,6 +205,28 @@ def _top_rugscan_finding() -> str:
     return f"Rug-скан: {top['symbol']} максимальный score {top['score']} ({reasons}), проверено {len(scored)} символов"
 
 
+LIBRARY_PROGRESS_PATH = os.path.join(REPO_ROOT, "knowledge", "library", "_progress.json")
+
+
+def library_progress_section() -> list:
+    """Пакет П-Библиотека, Этап 2 (владелец, 2026-07-15): "Прогресс в
+    утренний бриф (N/160)" -- честное чтение knowledge/library/_progress.json
+    (пишется по мере обработки батчей конспектов), не оценка на глаз.
+    Файл может отсутствовать (пакет ещё не стартовал в этом окружении) --
+    честное "н/д", не выдумываем прогресс."""
+    lines = ["", "## Библиотека: конспекты видео", ""]
+    try:
+        import json
+        with open(LIBRARY_PROGRESS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        done = data.get("done_count", 0)
+        total = data.get("total", 0)
+        lines.append(f"Конспекты (Этап 2): {done}/{total} готово.")
+    except (OSError, ValueError):
+        lines.append("Конспекты (Этап 2): н/д (файл прогресса не найден).")
+    return lines
+
+
 def top_findings_section() -> list:
     """3) Топ-3 находки ночи (библиотека/он-чейн/rug-скан) -- одна строка
     на источник, живой пересчёт где возможно, иначе последняя запись
@@ -249,6 +271,7 @@ def build_morning_brief(now_ts: float = None) -> str:
     lines += market_section(now)
     lines += shadow_table_section()
     lines += closed_outcomes_section()
+    lines += library_progress_section()
     lines += top_findings_section()
     lines += open_questions_section()
     return "\n".join(lines) + "\n"
