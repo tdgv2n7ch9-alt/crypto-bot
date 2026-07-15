@@ -4103,7 +4103,26 @@ def _limitki_collect_zones() -> list:
     return items
 
 
-def _limitki_zone_status(side: str, lo: float, hi: float, price: float, cancelled: bool = False):
+_SPOT_DCA_NOTE_MARKERS = ("спот-план", "спот-набор", "спот план", "спот набор", "spot-набор", "spot набор")
+
+
+def _is_spot_dca_zone(note: str) -> bool:
+    """НАЙДЕНО ЖИВЬЁМ (владелец, 2026-07-15, добавление SOL-зоны): зона
+    "спот-план"/DCA-накопления -- это ГЛУБОКАЯ цель, к которой цена подходит
+    СВЕРХУ (текущая цена сейчас выше всей зоны, ждём падения внутрь), в
+    отличие от обычных тактических LONG-зон рядом с ценой (к ним цена чаще
+    подходит СНИЗУ, после пробоя/ретеста). `_limitki_zone_status()` этого не
+    знал -- живой пример: AVAXUSDT зона 2.79-4.14 (`note` содержит
+    "спот-план") при цене $6.68 показывала "ОТРАБОТАНА" ("возможность
+    мимо"), хотя цена НИКОГДА не была в этой зоне -- просто ещё не упала
+    туда. Маркер в `note` (уже существующая свободнотекстовая конвенция --
+    см. AVAXUSDT/SOLUSDT записи в watch_zones.json) -- единственный сигнал,
+    который есть у стейтлес-функции, чтобы отличить эти два сценария."""
+    note_lower = (note or "").lower()
+    return any(marker in note_lower for marker in _SPOT_DCA_NOTE_MARKERS)
+
+
+def _limitki_zone_status(side: str, lo: float, hi: float, price: float, cancelled: bool = False, note: str = ""):
     """Статус 1 из 4 (владелец, ПАКЕТ UX-НАВИГАЦИЯ п.3 -- добавлен 4й статус
     ОТМЕНЕНА поверх исходных 3): ЖДЁМ ЦЕНУ / ЦЕНА В ЗОНЕ / ОТРАБОТАНА /
     ОТМЕНЕНА -- стейтлес, вычисляется только из текущей цены и границ зоны
@@ -4115,6 +4134,12 @@ def _limitki_zone_status(side: str, lo: float, hi: float, price: float, cancelle
     явно помечена `cancelled: true` в watch_zones.json (автор отменил
     разметку крестом), остаётся в файле для истории, но не участвует в
     статусном расчёте от цены -- единственная ветка, не зависящая от price.
+
+    `note` -- см. `_is_spot_dca_zone()`: для зон-накопления ("спот-план"/
+    "спот-набор" в тексте заметки) ветка ОТРАБОТАНА для LONG-зоны НИЖЕ
+    текущей цены (симметрично SHORT-зоны выше цены) заменяется на ЖДЁМ ЦЕНУ
+    -- цена ещё не была в зоне, а не "уже прошла и ушла".
+
     Возвращает (label, distance_pct) -- distance_pct = None для ОТМЕНЕНА
     (дистанция не имеет смысла), 0 внутри зоны, иначе % от текущей цены до
     ближней границы."""
@@ -4123,12 +4148,17 @@ def _limitki_zone_status(side: str, lo: float, hi: float, price: float, cancelle
     lo, hi = min(lo, hi), max(lo, hi)
     if lo <= price <= hi:
         return "ЦЕНА В ЗОНЕ", 0.0
+    spot_dca = _is_spot_dca_zone(note)
     if side == "LONG":
         if price > hi:
+            if spot_dca:
+                return "ЖДЁМ ЦЕНУ", (price - hi) / price * 100 if price else 0.0
             return "ОТРАБОТАНА", (price - hi) / price * 100 if price else 0.0
         return "ЖДЁМ ЦЕНУ", (lo - price) / price * 100 if price else 0.0
     else:  # SHORT
         if price < lo:
+            if spot_dca:
+                return "ЖДЁМ ЦЕНУ", (lo - price) / price * 100 if price else 0.0
             return "ОТРАБОТАНА", (lo - price) / price * 100 if price else 0.0
         return "ЖДЁМ ЦЕНУ", (price - hi) / price * 100 if price else 0.0
 
@@ -4159,10 +4189,10 @@ async def _limitki_row_text(item: dict) -> str:
 
     cancelled = bool(zone.get("cancelled"))
     if cancelled:
-        status, dist = _limitki_zone_status(side, lo, hi, price, cancelled=True)
+        status, dist = _limitki_zone_status(side, lo, hi, price, cancelled=True, note=zone.get("note", ""))
         status_txt = f"🚫 {status}"
     elif price:
-        status, dist = _limitki_zone_status(side, lo, hi, price)
+        status, dist = _limitki_zone_status(side, lo, hi, price, note=zone.get("note", ""))
         status_icon = {"ЦЕНА В ЗОНЕ": "🟢", "ЖДЁМ ЦЕНУ": "🟡", "ОТРАБОТАНА": "⚪"}[status]
         status_txt = f"{status_icon} {status} ({dist:.1f}%)"
     else:
@@ -4319,7 +4349,7 @@ def author_zones_status_summary() -> dict:
         price = price_map.get(symbol) or 0
         dist = None
         if price:
-            status, dist = _limitki_zone_status(zone["side"], zone["lo"], zone["hi"], price)
+            status, dist = _limitki_zone_status(zone["side"], zone["lo"], zone["hi"], price, note=zone.get("note", ""))
         else:
             status = "н/д (нет цены)"
         counts[status] = counts.get(status, 0) + 1
@@ -12858,6 +12888,58 @@ async def _cmd_patterns_digest(update: Update, ctx: ContextTypes.DEFAULT_TYPE, b
 
 ZONES_PAGE_SIZE = 10
 
+# ── Спот-план (владелец, 2026-07-15, SOL-зона): journal/spot_plans.json --
+# ДО этого пакета файл писался (tools/summer_spot_plan.py), но НИГДЕ не
+# читался в живом боте (честная находка более ранней сессии, см.
+# PROGRESS.md "НОЧЬ#3 Н7") -- зоны там существовали только на диске, без
+# единого живого экрана. Эта функция -- первое реальное подключение,
+# показывает лестницу DCA + SL + дистанцию % от живой цены до верхней
+# границы (первая ступень входа), тот же принцип дистанции, что
+# _limitki_zone_status()'s ЖДЁМ ЦЕНУ.
+SPOT_PLANS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "spot_plans.json")
+
+
+def _load_spot_plans() -> dict:
+    """Честный {} при отсутствии/битом файле (тот же принцип, что
+    level_watch.load_watch_zones()). Файл НЕ имеет runtime-записи изнутри
+    бота (в отличие от watch_zones.json/`/zones_set`) -- обновляется только
+    через git-коммит (tools/summer_spot_plan.py или ручная правка)."""
+    import json as _json_local
+    try:
+        with open(SPOT_PLANS_FILE, encoding="utf-8") as f:
+            return _json_local.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.info(f"[SPOT-PLAN] load failed: {e}")
+        return {}
+
+
+def _spot_plan_row_text(symbol: str, plan: dict, price: float) -> str:
+    """Одна строка спот-плана: тикер, лестница 50/30/20 (`ladder`), SL,
+    дистанция % от живой цены до верхней границы зоны (`zone.hi` -- первая,
+    ближайшая ступень входа). Честное "н/д", если лестницы/цены нет --
+    не выдумывает числа."""
+    zone = plan.get("zone") or {}
+    hi = zone.get("hi")
+    ladder = plan.get("ladder") or []
+    sl = plan.get("sl")
+    if ladder:
+        ladder_txt = " / ".join(f"{fp(rung.get('price'))} ({rung.get('pct')}%)" for rung in ladder)
+    else:
+        ladder_txt = "н/д"
+    if price and hi:
+        if price > hi:
+            dist_txt = f" · {(price - hi) / price * 100:.1f}% до входа"
+        else:
+            dist_txt = " · цена уже в зоне/ниже входа"
+    else:
+        dist_txt = ""
+    sl_txt = f" · SL {fp(sl)}" if sl else ""
+    note = plan.get("note")
+    note_txt = f"\n   _{note}_" if note else ""
+    return f"*{symbol}* {ladder_txt}{sl_txt}{dist_txt}{note_txt}"
+
 
 def _zones_collect_all() -> list:
     """Все зоны LONG/SHORT из watch_zones.json (ЛЮБОЙ tier -- в отличие от
@@ -12927,10 +13009,10 @@ async def _zones_screen_text(offset: int = 0) -> tuple:
         price = price_by_symbol.get(sym, 0)
         cancelled = bool(zone.get("cancelled"))
         if cancelled:
-            status, _dist = _limitki_zone_status(side, lo, hi, price, cancelled=True)
+            status, _dist = _limitki_zone_status(side, lo, hi, price, cancelled=True, note=zone.get("note", ""))
             icon, dist_txt = "🚫", ""
         elif price:
-            status, dist = _limitki_zone_status(side, lo, hi, price)
+            status, dist = _limitki_zone_status(side, lo, hi, price, note=zone.get("note", ""))
             icon = {"ЦЕНА В ЗОНЕ": "🟢", "ЖДЁМ ЦЕНУ": "🟡", "ОТРАБОТАНА": "⚪"}[status]
             dist_txt = f" ({dist:.1f}%)"
         else:
@@ -12949,7 +13031,37 @@ async def _zones_screen_text(offset: int = 0) -> tuple:
     has_more = offset + ZONES_PAGE_SIZE < len(rows)
     if not page:
         page = ["Зон нет." if total == 0 else "Больше зон нет."]
-    lines = header + page + ["", "_Только чтение, не сигнал/гейт — информационный вотчер._"]
+    lines = header + page
+
+    # Спот-план -- только на последней странице (список короткий, не
+    # пагинируется отдельно, не дублируется на промежуточных страницах).
+    if not has_more:
+        spot_plans = _load_spot_plans()
+        plan_symbols = [s for s in spot_plans if s not in ("updated", "source")]
+        if plan_symbols:
+            spot_price_by_symbol = {}
+            for sym_pair in plan_symbols:
+                sym = sym_pair.replace("USDT", "")
+                if sym in price_by_symbol:
+                    spot_price_by_symbol[sym_pair] = price_by_symbol[sym]
+                    continue
+                try:
+                    coin = next((c for c in coins if c["symbol"] == sym), None)
+                    cg_price = (coin.get("quote", {}).get("USDT", {}).get("price", 0) if coin else 0) or 0
+                except Exception:
+                    cg_price = 0.0
+                try:
+                    price, _ = resolve_price(sym, cg_price)
+                except Exception:
+                    price = cg_price
+                spot_price_by_symbol[sym_pair] = price or 0
+            lines += ["", card_v2.SEP, "", "📈 *СПОТ-ПЛАН* (DCA-накопление, отдельный контур от зон выше)", ""]
+            for sym_pair in plan_symbols:
+                sym = sym_pair.replace("USDT", "")
+                plan = spot_plans[sym_pair]
+                lines.append(_spot_plan_row_text(sym, plan, spot_price_by_symbol.get(sym_pair, 0)))
+
+    lines += ["", "_Только чтение, не сигнал/гейт — информационный вотчер._"]
     return "\n".join(lines), has_more
 
 

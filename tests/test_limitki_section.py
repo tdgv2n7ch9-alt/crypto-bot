@@ -108,6 +108,77 @@ def test_status_short_worked_out_price_below_zone():
     assert label == "ОТРАБОТАНА"
 
 
+# ── _limitki_zone_status() -- спот-DCA зоны (НАЙДЕНО ЖИВЬЁМ, владелец,       ──
+# 2026-07-15, SOL-зона): AVAXUSDT 2.79-4.14 при живой цене $6.68 показывала
+# "ОТРАБОТАНА" ("возможность мимо"), хотя цена никогда не была в зоне --
+# просто ещё не упала туда. Фикс: маркер "спот-план"/"спот-набор" в note. ──
+
+def test_status_long_spot_dca_far_above_is_waiting_not_worked_out():
+    """Живой кейс: AVAXUSDT 2.79-4.14, note содержит 'спот-план', цена 6.681
+    (реально наблюдалось живьём 2026-07-15) -- ДО фикса возвращало
+    ОТРАБОТАНА, честный ожидаемый результат -- ЖДЁМ ЦЕНУ."""
+    label, dist = bot._limitki_zone_status(
+        "LONG", 2.79, 4.14, price=6.681,
+        note="лестница входа 4.10/3.45/2.90, SL 2.70, спот-план")
+    assert label == "ЖДЁМ ЦЕНУ"
+    assert dist > 0
+
+
+def test_status_long_spot_dca_matches_owner_wording_spot_nabor():
+    """Точная формулировка владельца ('SPOT-набор', латиница) для новой
+    SOL-зоны -- тоже должна триггерить исправленную ветку."""
+    label, _ = bot._limitki_zone_status(
+        "LONG", 18.77, 25.00, price=77.91,
+        note="глобальная зона спроса, база 2023, W1, SPOT-набор")
+    assert label == "ЖДЁМ ЦЕНУ"
+
+
+def test_status_long_without_spot_marker_still_worked_out():
+    """Регресс-замок: обычные (не спот-DCA) LONG-зоны БЕЗ маркера в note
+    сохраняют старое поведение -- ОТРАБОТАНА, когда цена ушла выше зоны."""
+    label, dist = bot._limitki_zone_status("LONG", 100, 110, price=130, note="обычная тактическая зона")
+    assert label == "ОТРАБОТАНА"
+    assert dist > 0
+
+
+def test_status_long_spot_dca_price_in_zone_still_price_v_zone():
+    """Маркер спот-DCA не должен ломать нормальный статус 'ЦЕНА В ЗОНЕ'."""
+    label, dist = bot._limitki_zone_status("LONG", 100, 110, price=105, note="спот-план")
+    assert label == "ЦЕНА В ЗОНЕ"
+    assert dist == 0.0
+
+
+def test_status_short_spot_dca_far_below_is_waiting_not_worked_out():
+    """Симметричный случай для SHORT (синтетический -- живых SHORT-спот-DCA
+    зон в данных пока нет, но логика должна быть последовательной)."""
+    label, dist = bot._limitki_zone_status("SHORT", 100, 110, price=70, note="спот-план")
+    assert label == "ЖДЁМ ЦЕНУ"
+    assert dist > 0
+
+
+def test_status_cancelled_zone_ignores_spot_marker():
+    """ОТМЕНЕНА всегда приоритетнее -- маркер спот-DCA не должен эту ветку
+    перебивать."""
+    label, dist = bot._limitki_zone_status("LONG", 100, 110, price=130, cancelled=True, note="спот-план")
+    assert label == "ОТМЕНЕНА"
+    assert dist is None
+
+
+def test_is_spot_dca_zone_detects_all_known_variants():
+    for note in ("спот-план", "спот-набор", "спот план", "спот набор",
+                 "SPOT-набор", "SPOT набор", "лестница входа, спот-план, SL 2.70"):
+        assert bot._is_spot_dca_zone(note), note
+
+
+def test_is_spot_dca_zone_false_for_regular_notes():
+    for note in ("галочка автора", "новая локальная зона, ретест снизу", ""):
+        assert not bot._is_spot_dca_zone(note), note
+
+
+def test_is_spot_dca_zone_handles_none():
+    assert bot._is_spot_dca_zone(None) is False
+
+
 # ── _limitki_row_text() -- 1в1 формат ───────────────────────────────────────
 
 def test_row_text_shows_zone_1to1_and_note(monkeypatch):
