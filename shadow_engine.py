@@ -1395,6 +1395,87 @@ async def log_auto_options_shadow_async(symbol: str, a: dict, promoted_live: boo
     return True
 
 
+# ── Фаза B Derivatives, инкремент 4 (владелец, "Наряд на день" 2026-07-15) --
+# OKX Liquidation ratio + heatmap для КАЖДОГО AUTO-кандидата. Тот же
+# безопасный паттерн: флаг первой строкой, гарантированный no-op до любого
+# I/O при LIQUIDATION_AUTO_SHADOW_ENABLED=False.
+#
+# Источник -- `bot.get_liq_data(symbol)` (OKX, `bot.py:13466`), уже
+# использует собственный 5-минутный кэш ПО СИМВОЛУ (`_liq_cache`) --
+# повторные вызовы для одного символа в пределах 300с не дают новых сетевых
+# запросов, тот же принцип экономии, что у Deribit-кэша в инкрементах 2-3.
+# В отличие от PCR/Max Pain (BTC-широкий рыночный показатель), это ГЕНУИННО
+# посимвольные данные -- у каждого AUTO-кандидата свой OKX-инструмент
+# (`{symbol}-USDT-SWAP`).
+#
+# НЕ дублирует П-LiqCluster (владелец, задание 15.07.2026 ночь) --
+# `_fetch_auto_liq_line()`/`level_watch.format_liquidation_cluster_line()`
+# строят строку ликвидационного КЛАСТЕРА для карточки входа (визуализация
+# зоны над/под entry), это другой контур с другим назначением. Здесь --
+# сырой liq_ratio/heatmap для теневой корреляции с исходами, не для показа
+# в карточке.
+LIQUIDATION_AUTO_SHADOW_ENABLED = False
+
+
+def _build_auto_liquidation_shadow_record(symbol: str, a: dict, promoted_live: bool,
+                                           bot_module, liq_data: dict) -> dict:
+    """`liq_data` -- уже посчитан вызывающей стороной (log_auto_liquidation_
+    shadow_async ниже, через run_in_executor -- сама эта функция сеть не трогает).
+    `liq_signal` ('bullish'/'bearish'/'neutral') -- та же классификация, что
+    `bot.get_liq_data()` уже вычисляет (liq_ratio>2 bearish, <0.5 bullish,
+    bot.py:13504), не пересчитываем заново."""
+    direction = "long" if a.get("is_long") else "short"
+    liq_signal = liq_data.get("liq_signal", "neutral")
+
+    aligned = (liq_signal == "bullish" and direction == "long") or \
+              (liq_signal == "bearish" and direction == "short")
+    opposed = (liq_signal == "bullish" and direction == "short") or \
+              (liq_signal == "bearish" and direction == "long")
+
+    return {
+        "ts": time.time(),
+        "type": "auto_liquidation_shadow",
+        "symbol": symbol,
+        "direction": direction,
+        "promoted_live": promoted_live,
+        "liq_long": liq_data.get("liq_long"),
+        "liq_short": liq_data.get("liq_short"),
+        "liq_ratio": liq_data.get("liq_ratio"),
+        "liq_signal": liq_signal,
+        "heatmap": liq_data.get("heatmap"),
+        "aligned": aligned,
+        "opposed": opposed,
+        "liq_data_ok": bool(liq_data.get("ok")),
+    }
+
+
+async def log_auto_liquidation_shadow_async(symbol: str, a: dict, promoted_live: bool,
+                                             bot_module) -> bool:
+    """Вызывается из bot.send_scheduled() ПОСЛЕ боевого решения -- см.
+    LIQUIDATION_AUTO_SHADOW_ENABLED докстринг выше. При выключенном флаге --
+    гарантированный no-op (флаг первой строкой, ДО любого I/O, включая
+    get_liq_data() -- сам по себе может дать сетевой запрос при холодном кэше).
+    `symbol` -- базовый символ (например "BTC"), тот же формат, что
+    get_liq_data() ожидает (bot.py:13466 сам достраивает "-USDT-SWAP")."""
+    if not LIQUIDATION_AUTO_SHADOW_ENABLED:
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        liq_data = await loop.run_in_executor(None, bot_module.get_liq_data, symbol)
+        record = _build_auto_liquidation_shadow_record(symbol, a, promoted_live, bot_module, liq_data)
+    except Exception as e:
+        log.error(f"shadow_engine.log_auto_liquidation_shadow_async: build failed for {symbol}: {e}")
+        return False
+    ok_local = _write_local(record)
+    if not ok_local:
+        return False
+    try:
+        await loop.run_in_executor(None, _sync_to_github_sync, record)
+    except Exception as e:
+        log.error(f"shadow_engine: GitHub sync failed for auto_liquidation_shadow ({symbol}): {e}")
+    return True
+
+
 # ── ПАКЕТ 19, П4 (владелец): L/S ratio -- shadow A/B "за тренд vs контр" ──
 #
 # Живьём (Whale Radar, bot._analyze_whale_signal(), bot.py:5985-5992): L/S
