@@ -38,11 +38,18 @@ def _dedup_key(rec):
     return (rec.get("symbol"), rec.get("ts"))
 
 
-def dedup_records(records: list) -> tuple:
-    """Возвращает (deduped_records, removed_count) -- оставляет ПЕРВОЕ вхождение
-    каждого (symbol, ts). Записи без symbol/ts (битая схема) НЕ трогаются --
-    проходят как есть, честно не пытаемся дедупить то, что не умеем ключевать."""
-    seen = set()
+def dedup_records(records: list, seen: set = None) -> tuple:
+    """Возвращает (deduped_records, removed_count, seen) -- оставляет ПЕРВОЕ
+    вхождение каждого (symbol, ts). `seen` -- опциональное множество уже
+    встреченных ключей, можно передать между вызовами для ГЛОБАЛЬНОЙ
+    дедупликации через НЕСКОЛЬКО файлов (находка 2026-07-15: дедуп только
+    ВНУТРИ каждого файла по отдельности пропускал дубли, размазанные между
+    двумя РАЗНЫМИ архивными файлами -- integrity_report() по объединённому
+    списку всё равно находил 997 дублей, хотя каждый файл поодиночке был
+    "чист"). Записи без symbol/ts (битая схема) НЕ трогаются -- проходят как
+    есть, честно не пытаемся дедупить то, что не умеем ключевать."""
+    if seen is None:
+        seen = set()
     out = []
     removed = 0
     for r in records:
@@ -55,15 +62,20 @@ def dedup_records(records: list) -> tuple:
             continue
         seen.add(key)
         out.append(r)
-    return out, removed
+    return out, removed, seen
 
 
-def process_file(path: str, apply: bool, backup_dir: str) -> dict:
+def process_file(path: str, apply: bool, backup_dir: str, seen: set) -> dict:
+    """`seen` -- ГЛОБАЛЬНОЕ множество ключей, накопленное по файлам,
+    обработанным РАНЬШЕ (в порядке сортировки имён -- хронологический для
+    naming convention shadow_signals_<from>_<to>[_N].json). Мутируется на
+    месте вызывающей стороной через возврат -- каждый файл видит дубли не
+    только внутри себя, но и относительно всех предыдущих файлов."""
     with open(path) as f:
         payload = json.load(f)
     records = payload.get("records", [])
     before = len(records)
-    deduped, removed = dedup_records(records)
+    deduped, removed, seen = dedup_records(records, seen)
     if removed == 0:
         return {"path": path, "before": before, "after": before, "removed": 0, "changed": False}
     if apply:
@@ -91,7 +103,11 @@ def main():
     backup_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "journal", "archive", f"_dedup_backup_{int(time.time())}")
 
-    results = [process_file(f, args.apply, backup_dir) for f in files]
+    global_seen = set()
+    results = []
+    for f in files:
+        r = process_file(f, args.apply, backup_dir, global_seen)
+        results.append(r)
     changed = [r for r in results if r["changed"]]
 
     total_before = sum(r["before"] for r in results)
