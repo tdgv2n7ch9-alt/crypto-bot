@@ -84,6 +84,10 @@ def _patch_common(monkeypatch):
     monkeypatch.setattr(pd, "_build_chart", lambda *a, **kw: None)
     monkeypatch.setattr(pd, "_ensure_history", lambda sym: None)
     monkeypatch.setattr(pd.etherscan_whale, "fetch_transfer_data", lambda *a, **kw: None)
+    # Владелец, задача #3, 2026-07-16: _start_watch() теперь пишет состояние на
+    # диск (save_state_to_disk) -- эти тесты проверяют только текст алерта,
+    # изолируем от реального journal/pump_radar_state.json.
+    monkeypatch.setattr(pd, "save_state_to_disk", lambda: None)
 
 
 def test_dump_alert_lab_shows_rug_line_and_not_long_scenario(monkeypatch):

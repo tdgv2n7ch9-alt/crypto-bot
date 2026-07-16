@@ -13621,8 +13621,36 @@ async def _start_pump_detector(app):
     """post_init hook — запускает pump_detector (kline-слой) и грубый Bybit tickers-детект
     (полное покрытие рынка) в том же event loop, что и бот."""
     import os
-    from pump_detector import run_pump_detector, run_miniticker_stream, PumpContext
+    from pump_detector import (run_pump_detector, run_miniticker_stream, PumpContext,
+                                load_state_from_disk, run_state_persist_loop)
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+
+    # Владелец, 2026-07-16 (КРИТИЧНО, живая находка при AKE-расследовании):
+    # journal/ эфемерный -- редеплой стирает state-файлы мониторов (bank/ake/
+    # zone_alert/pump_radar) и AKE wallet-поллер. Restore из GitHub -- ЗДЕСЬ,
+    # в самом начале функции, ДО asyncio.create_task(run_pump_detector(...))
+    # ниже -- иначе WS-слой памп-радара может успеть начать мутировать
+    # pump_watch/dump_watch на первом же await этой корутины (asyncio.create_task
+    # только планирует задачу, не гарантирует, что она не выполнится раньше
+    # restore, если та стоит ниже по функции после других await) -- pump_
+    # detector.load_state_from_disk() ниже увидел бы "уже не пусто", тихо
+    # отказался бы восстанавливать. Для bank/ake/zone_alert-мониторов порядок
+    # не менялся (те регистрируются через scheduler.add_job() ниже по функции,
+    # их первый тик в любом случае позже restore) -- перенос сюда для них
+    # строго безопаснее (restore ещё раньше "до первого тика"), не регресс.
+    try:
+        loop = asyncio.get_event_loop()
+        restore_result = await loop.run_in_executor(None, journal_persistence.restore_all_sync)
+        if restore_result["restored"]:
+            log.info(f"journal_persistence: восстановлено при старте: {restore_result['restored']}")
+    except Exception as e:
+        log.error(f"journal_persistence: restore_all_sync упал при старте: {e}")
+
+    try:
+        if load_state_from_disk():
+            log.info("pump_detector: состояние радара восстановлено с диска при старте")
+    except Exception as e:
+        log.error(f"pump_detector: load_state_from_disk упал при старте: {e}")
 
     def _get_coin(sym):
         return next((c for c in get_all_coins() if c.get("symbol") == sym), None)
@@ -13653,6 +13681,7 @@ async def _start_pump_detector(app):
     )
     asyncio.create_task(run_pump_detector(ctx))
     asyncio.create_task(run_miniticker_stream(ctx))
+    asyncio.create_task(run_state_persist_loop())
     asyncio.create_task(_whale_radar_task(app.bot, owner_id))
     asyncio.create_task(_level_watch_task(app.bot, owner_id))
 
@@ -13673,19 +13702,6 @@ async def _start_pump_detector(app):
     await subscribers.startup_sync()
     security_log.load_startup_events()
     await access_control.load_lockdown_state()
-
-    # Владелец, 2026-07-16 (КРИТИЧНО, живая находка при AKE-расследовании):
-    # journal/ эфемерный -- редеплой стирает state-файлы мониторов (bank/ake/
-    # zone_alert) и AKE wallet-поллер. Restore из GitHub -- ДО первого тика
-    # любого монитора (иначе монитор сам создаст пустой state-файл раньше,
-    # чем мы восстановим, и restore увидит "файл уже есть", не тронет).
-    try:
-        loop = asyncio.get_event_loop()
-        restore_result = await loop.run_in_executor(None, journal_persistence.restore_all_sync)
-        if restore_result["restored"]:
-            log.info(f"journal_persistence: восстановлено при старте: {restore_result['restored']}")
-    except Exception as e:
-        log.error(f"journal_persistence: restore_all_sync упал при старте: {e}")
 
     # Планировщик (в т.ч. send_scheduled/whale_monitor с next_run_time=now(), т.е. первый
     # тик почти сразу) регистрируется ЗДЕСЬ, а не в main() -- раньше scheduler.start()

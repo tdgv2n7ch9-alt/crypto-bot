@@ -34,6 +34,7 @@ import html
 import io
 import json
 import logging
+import os
 import statistics
 import time
 from collections import deque
@@ -157,6 +158,82 @@ _coarse_discovery_attempts = 0     # сколько раз пытались по
 _coarse_discovery_last_error = None  # текст последней ошибки REST-запроса (None если последний
                                       # успешен) -- если coarse никогда не подключается, здесь видно
                                       # почему (таймаут/DNS/HTTP-код), не только "0 пакетов"
+
+# ── Персист состояния (владелец, задача #3, 2026-07-16) ────────────────────
+# journal/ на Railway эфемерный -- редеплой стирает pump_watch/dump_watch/
+# pump_history (та же причина, что закрывалась для bank/ake/zone_alert/AKE-
+# поллера через journal_persistence.py; ЭТОТ файл -- journal/pump_radar_
+# state.json -- уже был в journal_persistence.SYNCED_FILES с самого начала,
+# но сам pump_detector никогда не писал и не читал его -- GitHub-синк
+# синкал несуществующий файл. Восполняется здесь: pump_detector сам пишет
+# на локальный диск (save_state_to_disk, периодически + на структурных
+# переходах), journal_persistence.sync_all() (уже подключен в bot.py,
+# интервал 15 мин) подхватывает и пушит в GitHub, как для остальных файлов.
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "pump_radar_state.json")
+STATE_SAVE_INTERVAL_SEC = 60  # периодический бэкстоп -- ловит дрейф полей (peak_price/
+# red_streak/last_price) внутри активного WATCHING между структурными переходами
+# (start_watch/finalize), которые сохраняются немедленно (см. вызовы ниже)
+
+
+def _state_snapshot() -> dict:
+    return {
+        "pump_watch": pump_watch,
+        "dump_watch": dump_watch,
+        "pump_history": list(pump_history),
+    }
+
+
+def save_state_to_disk():
+    """Атомарная запись текущего состояния радара на диск. Best-effort --
+    ошибка записи не должна ронять радар (тот же принцип, что во всех
+    остальных монитора этого проекта, см. bsc_wallet_monitor.py)."""
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        tmp = f"{STATE_FILE}.tmp{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump(_state_snapshot(), f, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)
+    except Exception as e:
+        log.error(f"pump_detector: save_state_to_disk упал: {e}")
+
+
+def load_state_from_disk() -> bool:
+    """Восстанавливает pump_watch/dump_watch/pump_history с локального диска.
+    Вызывается ОДИН раз при старте (bot.py: _start_pump_detector), СИНХРОННО
+    и ДО создания asyncio-задач run_pump_detector/run_miniticker_stream --
+    иначе WS-слой может начать мутировать pump_watch раньше, чем восстановление
+    отработает (создание задачи не гарантирует порядок относительно await
+    ниже по функции), и восстановление увидит "уже не пусто", тихо откажется
+    (см. ветку ниже) на свежем, но уже тронутом состоянии.
+
+    Не перетирает уже накопленное в памяти -- если pump_watch/dump_watch уже
+    непустые, значит это не свежий старт процесса, тихо пропускает (тот же
+    принцип, что restore_file_sync() в journal_persistence.py)."""
+    if pump_watch or dump_watch:
+        return False
+    if not os.path.exists(STATE_FILE):
+        return False
+    try:
+        with open(STATE_FILE) as f:
+            data = json.load(f)
+        pump_watch.update(data.get("pump_watch", {}))
+        dump_watch.update(data.get("dump_watch", {}))
+        pump_history.extend(data.get("pump_history", []))
+        log.info(f"pump_detector: восстановлено с диска -- pump_watch={len(pump_watch)}, "
+                 f"dump_watch={len(dump_watch)}, history={len(pump_history)}")
+        return True
+    except Exception as e:
+        log.error(f"pump_detector: load_state_from_disk упал: {e}")
+        return False
+
+
+async def run_state_persist_loop():
+    """Периодический бэкстоп-запись (см. STATE_SAVE_INTERVAL_SEC) -- отдельная
+    asyncio-задача, тот же паттерн, что run_pump_detector/run_miniticker_stream
+    (bot.py: _start_pump_detector, asyncio.create_task)."""
+    while True:
+        await asyncio.sleep(STATE_SAVE_INTERVAL_SEC)
+        save_state_to_disk()
 
 
 class PumpContext:
@@ -470,6 +547,7 @@ def _finalize_any(symbol: str, kind: str, final_stage: str):
                           "final_stage": final_stage, "kind": kind})
     _dump_offers.pop(symbol.upper().replace("USDT", ""), None)
     _release_dynamic_symbol(symbol)
+    save_state_to_disk()  # структурный переход -- сохраняем немедленно, не ждём периодики
     return w
 
 
@@ -551,6 +629,7 @@ async def _start_watch(ctx: PumpContext, symbol: str, kind: str, price: float, z
         "entry_lo": None, "entry_hi": None, "sl": None, "tp1": None, "tp2": None,
     }
     (pump_watch if kind == "pump" else dump_watch)[symbol] = watch
+    save_state_to_disk()  # структурный переход -- сохраняем немедленно, не ждём периодики
 
     live_prices.request_subscription(symbol.upper().replace("USDT", ""))
     _ensure_history(symbol)
@@ -1416,6 +1495,7 @@ async def _confirm_pump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     watch["tp1"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * risk
     watch["tp2"] = watch["entry_lo"] - max(PROMOTE_MIN_RR, 2.0) * 1.6 * risk
     rr = abs(watch["tp1"] - close) / abs(close - watch["sl"]) if close != watch["sl"] else 0
+    save_state_to_disk()  # структурный переход (REVERSAL_CONFIRMED) -- сохраняем немедленно
 
     # ОДИН снапшот funding/OI/killzone на всю карточку (шапка + РАЗБОР + shadow-лог) --
     # см. _compose_alert докстринг про баг рассинхрона OI на карточке EVAA (owner,
@@ -1486,6 +1566,7 @@ async def _confirm_dump_reversal(ctx: PumpContext, symbol: str, watch: dict):
     watch["tp1"] = watch["entry_hi"] + max(DUMP_MIN_RR, 1.5) * risk
     watch["tp2"] = watch["entry_hi"] + max(DUMP_MIN_RR, 1.5) * 1.6 * risk
     rr = abs(watch["tp1"] - close) / abs(close - watch["sl"]) if close != watch["sl"] else 0
+    save_state_to_disk()  # структурный переход (REVERSAL_CONFIRMED) -- сохраняем немедленно
     sym = symbol.upper().replace("USDT", "")
     show_button = rr >= DUMP_MIN_RR
 

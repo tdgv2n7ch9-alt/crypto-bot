@@ -62,6 +62,10 @@ def _patch_common(monkeypatch):
     monkeypatch.setattr(pd.etherscan_whale, "fetch_transfer_data", lambda *a, **kw: None)
     monkeypatch.setattr(pd.rug_radar, "compute_rug_risk",
                          lambda *a, **kw: {"score": 5, "warn": False, "alert": False, "reasons": []})
+    # Владелец, задача #3, 2026-07-16: _start_watch() теперь пишет состояние на
+    # диск (save_state_to_disk) -- эти тесты проверяют только текст сценария,
+    # изолируем от реального journal/pump_radar_state.json.
+    monkeypatch.setattr(pd, "save_state_to_disk", lambda: None)
 
 
 # ── _scenario_lines() unit-уровень: прямая проверка каждого квадранта ──────
