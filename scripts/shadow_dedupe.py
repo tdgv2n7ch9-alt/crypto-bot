@@ -155,32 +155,48 @@ def _gh_patch(path: str, body: dict) -> dict:
     return r.json()
 
 
-def github_multi_file_commit(files_by_repo_path: dict, message: str, branch: str = "main") -> str:
+def github_multi_file_commit(files_by_repo_path: dict, message: str, branch: str = "main",
+                              max_attempts: int = 5) -> str:
     """Атомарный многофайловый коммит через Git Data API. `files_by_repo_path`:
     {repo_relative_path: python_object_to_json_dump}. Возвращает новый commit
-    sha. Поднимает исключение при любом сбое (вызывающая сторона решает, что
-    делать -- в этом скрипте см. main(): сбой бэкап-коммита прерывает
-    санацию, не идём дальше без подтверждённого бэкапа в GitHub)."""
-    ref = _gh_get(f"git/refs/heads/{branch}")
-    base_commit_sha = ref["object"]["sha"]
-    base_commit = _gh_get(f"git/commits/{base_commit_sha}")
-    base_tree_sha = base_commit["tree"]["sha"]
+    sha. Поднимает исключение, если ВСЕ попытки исчерпаны.
 
-    tree_entries = []
-    for repo_path, obj in files_by_repo_path.items():
-        content = json.dumps(obj, ensure_ascii=False, indent=2)
-        blob = _gh_post("git/blobs", {
-            "content": base64.b64encode(content.encode()).decode(),
-            "encoding": "base64",
-        })
-        tree_entries.append({"path": repo_path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+    Владелец, живая находка при первом реальном запуске (2026-07-16): PATCH
+    git/refs/heads/main вернул 422 -- ref main сдвинулся МЕЖДУ GET ref (начало
+    этой функции) и PATCH (конец) из-за конкурентных shadow-sync auto-коммитов
+    живого бота (тот же класс гонки, что #242 нашёл на уровне обычного `git
+    push`). Blob'ы уже созданы к этому моменту НЕ теряются (они -- объекты в
+    git, не привязаны к конкретному родителю) -- ретрай просто заново берёт
+    СВЕЖИЙ ref/base_tree и создаёт новые tree+commit поверх него, старые
+    blob'ы переиспользуются."""
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            ref = _gh_get(f"git/refs/heads/{branch}")
+            base_commit_sha = ref["object"]["sha"]
+            base_commit = _gh_get(f"git/commits/{base_commit_sha}")
+            base_tree_sha = base_commit["tree"]["sha"]
 
-    new_tree = _gh_post("git/trees", {"base_tree": base_tree_sha, "tree": tree_entries})
-    new_commit = _gh_post("git/commits", {
-        "message": message, "tree": new_tree["sha"], "parents": [base_commit_sha],
-    })
-    _gh_patch(f"git/refs/heads/{branch}", {"sha": new_commit["sha"]})
-    return new_commit["sha"]
+            tree_entries = []
+            for repo_path, obj in files_by_repo_path.items():
+                content = json.dumps(obj, ensure_ascii=False, indent=2)
+                blob = _gh_post("git/blobs", {
+                    "content": base64.b64encode(content.encode()).decode(),
+                    "encoding": "base64",
+                })
+                tree_entries.append({"path": repo_path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+
+            new_tree = _gh_post("git/trees", {"base_tree": base_tree_sha, "tree": tree_entries})
+            new_commit = _gh_post("git/commits", {
+                "message": message, "tree": new_tree["sha"], "parents": [base_commit_sha],
+            })
+            _gh_patch(f"git/refs/heads/{branch}", {"sha": new_commit["sha"]})
+            return new_commit["sha"]
+        except requests.exceptions.HTTPError as e:
+            last_exc = e
+            print(f"github_multi_file_commit: попытка {attempt + 1}/{max_attempts} не удалась "
+                  f"({e}) -- гонка с конкурентным коммитом, повторяю со свежим ref")
+    raise last_exc
 
 
 def format_report(reports: list, total_removed: int) -> str:

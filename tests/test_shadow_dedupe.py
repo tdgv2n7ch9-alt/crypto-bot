@@ -170,3 +170,76 @@ def test_github_multi_file_commit_uses_git_data_api_sequence(monkeypatch):
     assert kinds == ["GET", "GET", "POST", "POST", "POST", "PATCH"]
     assert calls[-1][1] == "git/refs/heads/main"
     assert calls[-1][2]["sha"] == "new_commit_sha"
+
+
+def test_github_multi_file_commit_retries_on_ref_race(monkeypatch):
+    """Владелец, живая находка 2026-07-16 (первый реальный запуск): PATCH
+    ref может вернуть 422, если ref сдвинулся МЕЖДУ GET и PATCH (гонка с
+    конкурентным shadow-sync коммитом живого бота, тот же класс, что #242).
+    Ретрай со свежим ref/base_tree обязан вытянуть коммит со второй попытки."""
+    import requests as real_requests
+
+    state = {"patch_calls": 0}
+
+    def fake_get(path):
+        if path.startswith("git/refs/"):
+            return {"object": {"sha": "base_commit_sha"}}
+        if path.startswith("git/commits/"):
+            return {"tree": {"sha": "base_tree_sha"}}
+        raise AssertionError(f"unexpected GET {path}")
+
+    def fake_post(path, body):
+        if path == "git/blobs":
+            return {"sha": "blob_x"}
+        if path == "git/trees":
+            return {"sha": "new_tree_sha"}
+        if path == "git/commits":
+            return {"sha": "new_commit_sha"}
+        raise AssertionError(f"unexpected POST {path}")
+
+    def fake_patch(path, body):
+        state["patch_calls"] += 1
+        if state["patch_calls"] == 1:
+            resp = real_requests.Response()
+            resp.status_code = 422
+            raise real_requests.exceptions.HTTPError("422 race", response=resp)
+        return {}
+
+    monkeypatch.setattr(sd, "_gh_get", fake_get)
+    monkeypatch.setattr(sd, "_gh_post", fake_post)
+    monkeypatch.setattr(sd, "_gh_patch", fake_patch)
+
+    result_sha = sd.github_multi_file_commit({"journal/archive/x.json": {"records": []}}, "test commit")
+    assert result_sha == "new_commit_sha"
+    assert state["patch_calls"] == 2  # первая попытка -- 422, вторая -- успех
+
+
+def test_github_multi_file_commit_raises_after_exhausting_retries(monkeypatch):
+    import requests as real_requests
+
+    def fake_get(path):
+        if path.startswith("git/refs/"):
+            return {"object": {"sha": "base_commit_sha"}}
+        return {"tree": {"sha": "base_tree_sha"}}
+
+    def fake_post(path, body):
+        if path == "git/blobs":
+            return {"sha": "blob_x"}
+        if path == "git/trees":
+            return {"sha": "new_tree_sha"}
+        return {"sha": "new_commit_sha"}
+
+    def always_fails(path, body):
+        resp = real_requests.Response()
+        resp.status_code = 422
+        raise real_requests.exceptions.HTTPError("422 always", response=resp)
+
+    monkeypatch.setattr(sd, "_gh_get", fake_get)
+    monkeypatch.setattr(sd, "_gh_post", fake_post)
+    monkeypatch.setattr(sd, "_gh_patch", always_fails)
+
+    try:
+        sd.github_multi_file_commit({"journal/archive/x.json": {"records": []}}, "test", max_attempts=3)
+        assert False, "должен был поднять исключение после исчерпания попыток"
+    except real_requests.exceptions.HTTPError:
+        pass
