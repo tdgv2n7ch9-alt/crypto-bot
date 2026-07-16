@@ -24,6 +24,12 @@ def _candle(ts, o, h, l, c):
 def _fresh_state_file(monkeypatch, tmp_path):
     monkeypatch.setattr(asm, "STATE_FILE", str(tmp_path / "ake_state.json"))
     monkeypatch.setattr(asm, "BSC_EVENTS_FILE", str(tmp_path / "bsc_events_missing.json"))
+    # Владелец, 2026-07-16: сетап инвалидирован, SETUP_INVALIDATED=True в проде
+    # насовсем -- A1-A5 тесты ниже проверяют исторический код (заморожен как
+    # регресс-замок, что мониторило РЕАЛЬНУЮ сделку), поэтому явно откатывают
+    # флаг здесь. Гейт-поведение (SETUP_INVALIDATED=True -> делегирует в
+    # check_daily_close_revisit) -- отдельный тест ниже.
+    monkeypatch.setattr(asm, "SETUP_INVALIDATED", False)
 
 
 def _seed_state(ts):
@@ -286,3 +292,92 @@ def test_check_ake_setup_notify_not_spammed_every_tick(monkeypatch, tmp_path):
 
     _run(asm.check_ake_setup(bot=None, send_system_fn=fake_send))
     assert sent == []
+
+
+# --- Владелец, 2026-07-16: сетап инвалидирован, A1-A5 разоружены насовсем ---
+
+def test_check_ake_setup_delegates_to_daily_revisit_when_invalidated(monkeypatch, tmp_path):
+    """SETUP_INVALIDATED=True (реальное состояние в проде) -- check_ake_setup
+    больше НЕ оценивает A1-A5, только дневной revisit-алерт."""
+    _fresh_state_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(asm, "SETUP_INVALIDATED", True)
+
+    called = {"revisit": False, "old_klines": False}
+
+    async def fake_revisit(bot, send_system_fn=None, run_in_executor_fn=None):
+        called["revisit"] = True
+        return ["daily_close_revisit"]
+
+    def fake_klines(interval, limit=3, dead_sources=None):
+        called["old_klines"] = True
+        return [_candle(2000, 0.00069, 0.00071, 0.00068, 0.00069)], "bybit"
+
+    monkeypatch.setattr(asm, "check_daily_close_revisit", fake_revisit)
+    monkeypatch.setattr(asm, "get_klines", fake_klines)
+
+    result = _run(asm.check_ake_setup(bot=None, send_system_fn=lambda *a, **k: None))
+    assert called["revisit"] is True
+    assert called["old_klines"] is False  # A1-A5 klines-fetch не вызывается вообще
+    assert result == ["daily_close_revisit"]
+
+
+def test_daily_close_revisit_first_run_only_bookmarks(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(asm, "get_klines",
+                         lambda interval, limit=3, dead_sources=None: ([_candle(1000, 0.0008, 0.00082, 0.00079, 0.0008)], "bybit"))
+    sent = []
+    result = _run(asm.check_daily_close_revisit(bot=None, send_system_fn=lambda *a, **k: sent.append(a)))
+    assert result == []
+    assert sent == []
+    state = asm._load_state()
+    assert state["last_closed_1d_ts"] == 1000
+
+
+def test_daily_close_revisit_fires_on_close_below_level(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    state = asm._default_state()
+    state["last_closed_1d_ts"] = 1000
+    asm._save_state(state)
+
+    def fake_klines(interval, limit=3, dead_sources=None):
+        return [_candle(2000, 0.00075, 0.00076, 0.00065, 0.00068)], "bybit"  # close < 0.0007
+    monkeypatch.setattr(asm, "get_klines", fake_klines)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    result = _run(asm.check_daily_close_revisit(bot=None, send_system_fn=fake_send))
+    assert result == ["daily_close_revisit"]
+    assert sent[0][1] is True
+    assert "0.0007" in sent[0][0]
+    assert "БЕЗ плана входа" in sent[0][0]
+
+
+def test_daily_close_revisit_no_fire_when_close_above_level(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    state = asm._default_state()
+    state["last_closed_1d_ts"] = 1000
+    asm._save_state(state)
+
+    def fake_klines(interval, limit=3, dead_sources=None):
+        return [_candle(2000, 0.00075, 0.0008, 0.00072, 0.00078)], "bybit"  # close >= 0.0007
+    monkeypatch.setattr(asm, "get_klines", fake_klines)
+
+    result = _run(asm.check_daily_close_revisit(bot=None, send_system_fn=lambda *a, **k: None))
+    assert result == []
+
+
+def test_daily_close_revisit_dedup_respects_2pct_reset(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    state = asm._default_state()
+    state["last_closed_1d_ts"] = 1000
+    state["armed"]["daily_close_revisit"] = False  # уже сработал недавно
+    asm._save_state(state)
+
+    def fake_klines(interval, limit=3, dead_sources=None):
+        return [_candle(2000, 0.00068, 0.0007, 0.00066, 0.00069)], "bybit"  # снова ниже, без отхода >2%
+    monkeypatch.setattr(asm, "get_klines", fake_klines)
+
+    result = _run(asm.check_daily_close_revisit(bot=None, send_system_fn=lambda *a, **k: None))
+    assert result == []

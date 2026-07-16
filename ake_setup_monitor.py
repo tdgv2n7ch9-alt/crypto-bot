@@ -47,6 +47,20 @@ WALLET_2 = "0xD229b65d50E412cC3C394233E7a53A1DAc4dA457"
 
 TRIGGERS = ("test_0007", "confirm_below_0007", "low_sweep", "invalidation", "target_558", "target_506")
 
+# Владелец, 2026-07-16: сетап автора инвалидирован по своим же правилам --
+# 1H close > INVALIDATION_LEVEL подтверждён живой сверкой Bybit-свечей
+# (2026-07-16 03:00 UTC, close 0.0007449 -- первое закрытие выше 0.00073 с
+# момента постановки монитора). A1-A5 (TRIGGERS выше) РАЗОРУЖЕНЫ насовсем --
+# check_ake_setup() ниже больше не их не оценивает, когда флаг True. Главный
+# сигнал теперь -- bsc_wallet_monitor (поллер #226, разгрузка кошельков
+# #1/#2 с этих высот). Единственное, что остаётся -- честный информационный
+# алерт дневного закрепа ниже 0.0007 (см. check_daily_close_revisit) как
+# возможный сигнал ВОЗВРАТА идеи, БЕЗ плана входа -- ждём новую разметку
+# автора. См. knowledge/PUMP_REVERSAL_CASES.md, кейс AKE, глава
+# "Инвалидация как часть плана".
+SETUP_INVALIDATED = True
+DAILY_CLOSE_REVISIT_LEVEL = 0.0007
+
 
 def _atomic_write_json(path: str, obj) -> bool:
     tmp_path = f"{path}.tmp{os.getpid()}"
@@ -104,7 +118,7 @@ def _fetch_klines_bybit(interval: str, limit: int):
 
 
 def _fetch_klines_bingx(interval: str, limit: int):
-    bingx_interval = {"15": "15m", "60": "1h"}[interval]
+    bingx_interval = {"15": "15m", "60": "1h", "D": "1d"}[interval]
     r = requests.get(BINGX_KLINE_URL, params={
         "symbol": "AKE-USDT", "interval": bingx_interval, "limit": limit,
     }, timeout=REQUEST_TIMEOUT_SEC)
@@ -219,10 +233,70 @@ def format_target_alert(level: float) -> str:
     return f"🎯 AKE: цель {level} достигнута -- зона частичной фиксации\n{_wallets_status_line()}"
 
 
+def format_daily_close_revisit_alert(close_price: float) -> str:
+    return (f"ℹ️ AKE: дневной клоуз ниже {DAILY_CLOSE_REVISIT_LEVEL} ({close_price}) -- "
+            f"возможное возвращение шорт-идеи. Это ТОЛЬКО уведомление, БЕЗ плана входа "
+            f"-- ждём новую разметку автора.\n{_wallets_status_line()}")
+
+
+async def check_daily_close_revisit(bot, send_system_fn=None, run_in_executor_fn=None) -> list:
+    """Владелец, 2026-07-16 (после инвалидации A1-A5, см. SETUP_INVALIDATED
+    докстринг выше) -- единственный оставшийся живой алерт этого монитора:
+    честный информационный сигнал дневного закрепа ниже DAILY_CLOSE_REVISIT_LEVEL,
+    БЕЗ плана входа. Тот же 2%-дедуп-паттерн, что A1-A5, но на дневном ТФ."""
+    if send_system_fn is None:
+        import bot as bot_module
+        send_system_fn = bot_module.send_system
+    if run_in_executor_fn is None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        run_in_executor_fn = lambda fn, *a: loop.run_in_executor(None, fn, *a)
+
+    state = _load_state()
+    sent = []
+    dead_sources = set()
+
+    try:
+        candles_1d, _src = await run_in_executor_fn(get_klines, "D", CANDLE_LIMIT, dead_sources)
+    except Exception as e:
+        log.error(f"ake_setup_monitor: дневные свечи для revisit-алерта отказали: {e}")
+        await _notify_source_down(state, bot, send_system_fn)
+        _save_state(state)
+        return sent
+
+    last_ts = state.get("last_closed_1d_ts")
+    if last_ts is None:
+        # Первый запуск после инвалидации -- не бэктестим историю, только
+        # букмарк (тот же принцип, что весь остальной проект).
+        state["last_closed_1d_ts"] = candles_1d[-1]["ts"] if candles_1d else None
+        _save_state(state)
+        log.info(f"ake_setup_monitor: revisit-алерт первый запуск, старт с ts={state['last_closed_1d_ts']}")
+        return sent
+
+    new_1d = [c for c in candles_1d if c["ts"] > last_ts]
+    for c in new_1d:
+        if _check_trigger(state, "daily_close_revisit", c["c"] < DAILY_CLOSE_REVISIT_LEVEL,
+                           c["c"] >= DAILY_CLOSE_REVISIT_LEVEL * (1 + RESET_MOVE_PCT / 100)):
+            await send_system_fn(bot, format_daily_close_revisit_alert(c["c"]), critical=True)
+            sent.append("daily_close_revisit")
+        state["last_closed_1d_ts"] = c["ts"]
+
+    _save_state(state)
+    return sent
+
+
 async def check_ake_setup(bot, send_system_fn=None, run_in_executor_fn=None) -> list:
     """Владелец, критический регресс bsc_wallet_monitor 2026-07-15 (#240) --
     `run_in_executor_fn` распространяет тот же фикс сюда (владелец В ПОЗИЦИИ,
-    этот монитор -- главный алерт-пакет по сделке)."""
+    этот монитор -- главный алерт-пакет по сделке).
+
+    Владелец, 2026-07-16: сетап инвалидирован -- см. SETUP_INVALIDATED выше.
+    A1-A5 (весь код ниже этой проверки) больше НЕ выполняется, оставлен как
+    исторический код точно того, что реально мониторило эту сделку -- живая
+    ветка теперь check_daily_close_revisit()."""
+    if SETUP_INVALIDATED:
+        return await check_daily_close_revisit(bot, send_system_fn, run_in_executor_fn)
+
     if send_system_fn is None:
         import bot as bot_module
         send_system_fn = bot_module.send_system
