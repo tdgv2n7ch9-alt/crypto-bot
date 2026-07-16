@@ -6860,8 +6860,16 @@ async def event_radar_monitor(bot: Bot):
                                 if k not in ("updated", "source")}
         watch_symbols = set(WATCHLIST_ZONES.keys()) | watch_zones_symbols
         tracked_symbols = {c["symbol"] for c in get_all_coins()}
-        alerts = event_radar.poll_and_get_alerts(watch_symbols=watch_symbols,
-                                                   tracked_symbols=tracked_symbols)
+        # Владелец, 2026-07-16 (внеочередной аудит блокирующих вызовов,
+        # Tier 1 #2): poll_and_get_alerts() внутри дёргает Bybit+Binance
+        # announcement-эндпоинты синхронно (requests.get) -- вызывался
+        # напрямую в этой async-корутине (scheduled job, интервал 15 мин),
+        # без run_in_executor -- тот же класс регресса, что check_supertrend_
+        # signals/whale_monitor (см. фиксы того же дня).
+        loop = asyncio.get_event_loop()
+        alerts = await loop.run_in_executor(
+            None, lambda: event_radar.poll_and_get_alerts(
+                watch_symbols=watch_symbols, tracked_symbols=tracked_symbols))
     except Exception as e:
         log.error(f"[EVENT-RADAR] poll failed: {e}")
         return
