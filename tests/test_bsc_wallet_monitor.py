@@ -517,6 +517,78 @@ def test_check_ake_wallets_state_advances_to_min_of_both_queries(monkeypatch, tm
     assert state["last_scanned_block"] == 1020
 
 
+# ── DEX-drain детект (владелец, приёмка задачи #2, 2026-07-16) ─────────────
+# Адреса роутеров проверены живьём на BscScan -- см. комментарий у
+# DEX_ROUTER_ADDRESSES в bsc_wallet_monitor.py.
+
+def test_format_dex_drain_alert_text_includes_router_name_and_amount():
+    ev = {"from": "0xwallet", "to": "0x62ccef0b4545166f721caa9fee13c1d3767e27dc",
+          "amount": 1_000_000, "usd": 1000.0, "block": 123, "tx": "0xdrain"}
+    text = bwm.format_dex_drain_alert_text(ev, "OKX: DEX Router 2")
+    assert "ПРОКЛАДКА СЛИВАЕТ" in text
+    assert "OKX: DEX Router 2" in text
+    assert "0xwallet" in text
+    assert "$1,000" in text
+
+
+def test_format_dex_drain_alert_text_handles_price_na():
+    ev = {"from": "0xwallet", "to": "0x62cc...", "amount": 500, "usd": None,
+          "block": 1, "tx": "0xtx"}
+    text = bwm.format_dex_drain_alert_text(ev, "OKX: DEX Router 2")
+    assert "цена н/д" in text
+
+
+def test_check_ake_wallets_dex_drain_alert_fires_without_dollar_threshold(monkeypatch, tmp_path):
+    """Владелец: детект свопа значим сам по себе, БЕЗ порога по сумме --
+    многоступенчатый слив может не набрать ALERT_THRESHOLD_USD ($200K) на
+    одном чанке."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
+
+    wallet = bwm.AKE_WATCHED_WALLETS[0]
+    router = "0x62ccef0b4545166f721caa9fee13c1d3767e27dc"  # OKX: DEX Router 2
+    ev_log = _transfer_log(wallet, router, 100, block=1000, tx="0xtiny_drain")
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b, topics=None: ([ev_log], False, b))
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 100 * 0.001 = $0.1 -- далеко ниже $200K
+
+    sent = []
+    async def fake_send_system(bot, text, critical=False):
+        sent.append((text, critical))
+
+    n = _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send_system))
+    assert n == 1
+    assert len(sent) == 1
+    text, critical = sent[0]
+    assert critical is True
+    assert "ПРОКЛАДКА СЛИВАЕТ" in text
+
+
+def test_check_ake_wallets_dex_drain_takes_priority_over_general_threshold(monkeypatch, tmp_path):
+    """Крупный своп (>ALERT_THRESHOLD_USD) в известный роутер -- РОВНО один
+    алерт, dex-drain текст, не общий "разгрузка" (elif-приоритет)."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
+
+    wallet = bwm.AKE_WATCHED_WALLETS[0]
+    router = "0x10ed43c718714eb63d5aa57b78b54704e256024e"  # PancakeSwap: Router v2
+    ev_log = _transfer_log(wallet, router, 300_000_000, block=1000, tx="0xbig_drain")
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b, topics=None: ([ev_log], False, b))
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # $300K -- выше ALERT_THRESHOLD_USD
+
+    sent = []
+    async def fake_send_system(bot, text, critical=False):
+        sent.append((text, critical))
+
+    n = _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send_system))
+    assert n == 1
+    assert len(sent) == 1  # НЕ два алерта на одно событие
+    text, critical = sent[0]
+    assert "ПРОКЛАДКА СЛИВАЕТ" in text
+    assert "PancakeSwap" in text
+
+
 # ── _build_rpc_providers() (владелец, 2026-07-16: QuickNode primary) ───────
 
 def test_build_rpc_providers_uses_quicknode_as_primary_when_set(monkeypatch):
