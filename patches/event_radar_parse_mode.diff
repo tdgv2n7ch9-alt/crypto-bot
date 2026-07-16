@@ -1,0 +1,56 @@
+Наряд: ночная очередь п.5 (баг форматирования ZEST + EVENT-RADAR), владелец 2026-07-16.
+Подготовлено БЕЗ применения/деплоя -- см. PROGRESS.md, раздел
+"Ночная очередь п.5: локализация бага HTML/Markdown-тегов". На утреннюю
+приёмку.
+
+Корень (подтверждён построчным чтением, не догадка):
+event_radar.format_event_alert() (event_radar.py:386-409) строит текст
+Markdown-синтаксисом (*bold*, `code`), но event_radar_monitor()
+(bot.py:6887) отправляет его через bot.send_message(...) БЕЗ
+parse_mode вообще -- Telegram рендерит *звёздочки*/`бэктики` как
+литеральный текст вместо жирного/моноширинного. Один из двух
+известных путей с классом "текст в одном разметочном стиле, отправка
+без соответствующего parse_mode" -- второй путь (ZEST SHORT 15:14,
+предположительно сырые HTML-теги <b>/<code>) НЕ локализован сегодня
+несмотря на систематическую проверку 10+ карточных путей в bot.py
+(_build_signal_post, build_signal_text, zone-touch, Supertrend, whale,
+card_v2/tochki, _render_fa_result/fa_engine, rug-строка) -- все они
+корректно совпадают parse_mode с используемой разметкой. Требует
+дополнительных данных от владельца (точный скриншот/контекст) для
+точной локализации.
+
+--- a/bot.py
++++ b/bot.py
+@@ -6884,7 +6884,12 @@ async def event_radar_monitor(bot: Bot):
+             continue
+         try:
+-            await bot.send_message(owner_id, text, disable_web_page_preview=True)
++            # Владелец, 2026-07-16 (ночная очередь п.5): format_event_alert()
++            # строит текст Markdown-синтаксисом (*bold*, `code`) -- без
++            # parse_mode Telegram показывал их как сырые символы буквально
++            # в сообщении. Фоллбек без parse_mode на случай, если title
++            # объявления (внешний текст биржи) содержит непарные
++            # Markdown-спецсимволы и ломает парсинг целиком.
++            try:
++                await bot.send_message(owner_id, text, parse_mode="Markdown",
++                                       disable_web_page_preview=True)
++            except Exception:
++                await bot.send_message(owner_id, text, disable_web_page_preview=True)
+             await asyncio.sleep(1)
+         except Exception as e:
+             log.error(f"[EVENT-RADAR] send owner: {e}")
+
+DoD на утро (после приёмки владельца):
+1. py_compile bot.py
+2. Точечный тест: text с *bold*/`code` действительно рендерится жирным/
+   моноширинным при parse_mode="Markdown" -- и что фоллбек без
+   parse_mode срабатывает на невалидном Markdown (непарный `_`/`*`),
+   не роняя отправку целиком.
+3. Полный pytest, без регрессий.
+4. Деплой через tools/deploy.sh, живая верификация: следующее
+   листинг/делистинг-событие в railway logs/Telegram должно прийти с
+   реальным форматированием, не сырыми символами.
+5. Чекпоинт в PROGRESS.md.
+
+ZEST SHORT-бага (второй путь) в этом патче НЕТ -- не локализован,
+см. PROGRESS.md для перечня уже проверенных и исключённых мест.
