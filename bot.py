@@ -7160,10 +7160,25 @@ async def check_supertrend_signals(bot, chat_ids, coins):
                         key=lambda x: x["quote"]["USDT"].get("volume_24h", 0),
                         reverse=True)[:50]
 
+    loop = asyncio.get_event_loop()
     for coin in top_by_vol:
         sym = coin["symbol"]
         try:
-            st_data = get_supertrend_signal(sym)
+            # Владелец, 2026-07-16 (внеочередной разбор watchdog-тишины bsc_wallet_
+            # monitor): get_supertrend_signal() -- синхронный блокирующий вызов
+            # (requests.get внутри get_binance_ohlc()), вызывался СИНХРОННО прямо
+            # в этой async-корутине для КАЖДОГО из топ-50 символов подряд, БЕЗ
+            # run_in_executor. Пока направление не менялось (обычный случай) --
+            # ни одной точки await в цикле вообще (asyncio.sleep(0.5) ниже
+            # достижим только в ветке "направление сменилось"), то есть весь
+            # event loop простаивал синхронно ~50 раз подряд каждые 5 минут --
+            # найдено живьём по логам: ~57-85с тишины в scheduler ровно во время
+            # этого цикла, из-за чего bsc_wallet_monitor (интервал 1 мин, порог
+            # watchdog 2 мин) и другие джобы систематически "не отмечались"
+            # (тот же класс регресса, что уже фиксился в bsc_wallet_monitor.py
+            # 2026-07-15, здесь просто не был применён). Фикс -- тот же паттерн:
+            # блокирующий вызов через run_in_executor, порядок/логика не меняются.
+            st_data = await loop.run_in_executor(None, get_supertrend_signal, sym)
             new_dir = st_data["direction"]
             old_dir = supertrend_cache.get(sym)
 
