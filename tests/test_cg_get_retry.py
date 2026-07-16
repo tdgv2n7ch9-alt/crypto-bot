@@ -38,6 +38,8 @@ def _reset_cg_state(monkeypatch):
     влияли на текущий (общие модульные глобали)."""
     monkeypatch.setattr(bot, "_cg_cache", {})
     monkeypatch.setattr(bot, "_cg_last_call_ts", 0.0)
+    monkeypatch.setattr(bot, "_cg_consecutive_429", 0)
+    monkeypatch.setattr(bot, "_cg_cooldown_until", 0.0)
     # ускоряем тесты -- не ждём реальные секунды паузы/бэкоффа
     monkeypatch.setattr(bot.time, "sleep", lambda s: None)
 
@@ -83,6 +85,76 @@ def test_cg_min_interval_increased_from_prior_value():
     """Регресс-замок: находка 2026-07-15 (11 запросов с честным интервалом
     1.3с -- все 429) -- пауза увеличена, не откатывается случайно назад."""
     assert bot._CG_MIN_INTERVAL > 1.3
+
+
+# ── circuit breaker (владелец, приёмка v130, 2026-07-16) ───────────────────
+
+def test_cg_get_opens_circuit_breaker_after_persistent_429(monkeypatch):
+    """Живая находка: даже после ОДНОГО ретрая устойчивый 429 продолжается --
+    circuit breaker должен взвестись (cooldown > 0) после исчерпания ретрая."""
+    def fake_get(url, params=None, timeout=10):
+        return _FakeResponse(429)
+
+    monkeypatch.setattr(bot.requests, "get", fake_get)
+    with pytest.raises(Exception):
+        bot._cg_get("https://api.coingecko.com/api/v3/coins/markets", params={"page": 1})
+
+    status = bot.cg_rate_limit_status()
+    assert status["in_cooldown"] is True
+    assert status["consecutive_429"] == 1
+
+
+def test_cg_get_skips_network_call_during_cooldown(monkeypatch):
+    """Пока breaker открыт -- НИ ОДНОГО сетевого вызова, честная быстрая ошибка."""
+    monkeypatch.setattr(bot, "_cg_consecutive_429", 1)
+    monkeypatch.setattr(bot, "_cg_cooldown_until", time.time() + 30)
+
+    calls = {"n": 0}
+    def fake_get(url, params=None, timeout=10):
+        calls["n"] += 1
+        return _FakeResponse(200, [])
+
+    monkeypatch.setattr(bot.requests, "get", fake_get)
+    with pytest.raises(RuntimeError, match="circuit breaker"):
+        bot._cg_get("https://api.coingecko.com/api/v3/coins/markets", params={"page": 2})
+    assert calls["n"] == 0
+
+
+def test_cg_get_cooldown_escalates_exponentially_on_repeat_429(monkeypatch):
+    """Второй подряд открытый breaker (после того, как первый истёк) должен
+    дать окно БОЛЬШЕ первого -- экспоненциальный, не фиксированный бэкофф."""
+    def fake_get(url, params=None, timeout=10):
+        return _FakeResponse(429)
+
+    monkeypatch.setattr(bot.requests, "get", fake_get)
+    now = time.time()
+    monkeypatch.setattr(bot.time, "time", lambda: now)
+
+    with pytest.raises(Exception):
+        bot._cg_get("https://api.coingecko.com/api/v3/coins/markets", params={"page": 1})
+    first_cooldown = bot._cg_cooldown_until - now
+
+    # breaker "истёк" -- время ушло вперёд за пределы cooldown, но счётчик не сброшен
+    # руками (имитируем истечение окна, НЕ успех) -- следующая попытка тоже 429
+    monkeypatch.setattr(bot, "_cg_cooldown_until", now)  # окно уже прошло
+    with pytest.raises(Exception):
+        bot._cg_get("https://api.coingecko.com/api/v3/coins/markets", params={"page": 3})
+    second_cooldown = bot._cg_cooldown_until - now
+
+    assert second_cooldown > first_cooldown
+
+
+def test_cg_get_success_resets_consecutive_429_counter(monkeypatch):
+    monkeypatch.setattr(bot, "_cg_consecutive_429", 3)
+    monkeypatch.setattr(bot, "_cg_cooldown_until", 0.0)  # окно уже истекло
+
+    def fake_get(url, params=None, timeout=10):
+        return _FakeResponse(200, [{"id": "bitcoin"}])
+
+    monkeypatch.setattr(bot.requests, "get", fake_get)
+    bot._cg_get("https://api.coingecko.com/api/v3/coins/markets", params={"page": 5})
+    assert bot._cg_consecutive_429 == 0
+    assert bot.cg_rate_limit_status()["in_cooldown"] is False
 
 
 # ── _startup_integrity_check() -- честная диагностика CoinGecko-строки ─────

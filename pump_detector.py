@@ -307,11 +307,18 @@ async def _discover_top_symbols() -> list:
     """Топ-N Binance Futures перпетуалов по 24h объёму через CoinGecko /derivatives
     (Binance REST запрещён — используем ту же точку входа, что и OI/funding в bot.py).
     Это always-on база (для live_prices), НЕ единственный источник детекта — тот теперь
-    полностью покрывает рынок через !miniTicker@arr, см. run_miniticker_stream()."""
+    полностью покрывает рынок через !miniTicker@arr, см. run_miniticker_stream().
+
+    Владелец, приёмка v130 (2026-07-16): раньше бил напрямую через requests.get,
+    в обход общего rate-limit/кэша/circuit breaker'а bot._cg_get -- редкий вызов
+    (раз в SYMBOL_REFRESH_SEC=6ч), но всё равно "утечка" мимо единой точки учёта
+    CoinGecko-трафика (тот же паттерн, что _notify_owner() уже использует для
+    bot.send_system() -- ленивый импорт, без цикличности с bot.py на уровне
+    модуля)."""
     try:
-        r = requests.get("https://api.coingecko.com/api/v3/derivatives", timeout=15)
-        r.raise_for_status()
-        rows = [x for x in r.json()
+        import bot as _bot_module
+        rows_raw = _bot_module._cg_get("https://api.coingecko.com/api/v3/derivatives", timeout=15)
+        rows = [x for x in rows_raw
                 if x.get("contract_type") == "perpetual" and "Binance" in (x.get("market") or "")
                 and x.get("symbol", "").endswith("USDT")]
         rows.sort(key=lambda x: float(x.get("volume_24h") or 0), reverse=True)

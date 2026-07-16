@@ -186,8 +186,23 @@ def _auth_middleware_factory(bot_module):
     return _auth_middleware
 
 
-async def _handle_health(request: web.Request) -> web.Response:
-    return _json_response({"ok": True, "status": "live", "ts": time.time()})
+def _make_health_handler(bot_module):
+    async def _handle(request: web.Request) -> web.Response:
+        # Владелец, приёмка v130 (2026-07-16): "деградация в /health жёлтым"
+        # при CoinGecko circuit breaker -- ok=True (бот жив, UptimeRobot не
+        # должен пейджить на деградацию стороннего источника данных), но
+        # status="degraded" вместо "live" + детали, чтобы можно было увидеть
+        # проблему без залезания в логи.
+        payload = {"ok": True, "status": "live", "ts": time.time()}
+        try:
+            cg_status = bot_module.cg_rate_limit_status()
+            if cg_status["in_cooldown"]:
+                payload["status"] = "degraded"
+                payload["coingecko"] = cg_status
+        except Exception as e:
+            log.error(f"[MINIAPP-API] health: cg_rate_limit_status failed: {e}")
+        return _json_response(payload)
+    return _handle
 
 
 def _make_track_record_handler(bot_module, cache: _TTLCache):
@@ -383,7 +398,7 @@ def build_app(bot_module) -> web.Application:
     app["glossary_cache"] = _TTLCache(CACHE_TTL_GLOSSARY)
     app["signals_cache"] = _TTLCache(CACHE_TTL_SIGNALS)
     app["dashboard_cache"] = _TTLCache(CACHE_TTL_DASHBOARD)
-    app.router.add_get("/api/v1/health", _handle_health)
+    app.router.add_get("/api/v1/health", _make_health_handler(bot_module))
     app.router.add_get("/api/v1/track-record", _make_track_record_handler(bot_module, app["track_record_cache"]))
     app.router.add_get("/api/v1/zones", _make_zones_handler(bot_module, app["zones_cache"]))
     app.router.add_get("/api/v1/glossary", _make_glossary_handler(app["glossary_cache"]))

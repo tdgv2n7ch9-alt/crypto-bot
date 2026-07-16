@@ -225,6 +225,10 @@ class _FakeBotModule:
                 return onchain_text
 
         self.onchain_metrics = _FakeOnchainMetrics()
+        self._cg_status = {"in_cooldown": False, "cooldown_remaining_sec": 0.0, "consecutive_429": 0}
+
+    def cg_rate_limit_status(self):
+        return self._cg_status
 
     def _limitki_collect_zones(self):
         return self._zones
@@ -275,6 +279,37 @@ def test_health_endpoint_no_auth_required():
             assert resp.status == 200
             body = await resp.json()
             assert body["ok"] is True
+    _run(go())
+
+
+def test_health_endpoint_reports_degraded_on_cg_cooldown():
+    """Владелец, приёмка v130 (2026-07-16): "деградация в /health жёлтым"
+    при активном CoinGecko circuit breaker -- ok остаётся True (бот жив),
+    status переходит в "degraded" с деталями."""
+    async def go():
+        fake = _FakeBotModule()
+        fake._cg_status = {"in_cooldown": True, "cooldown_remaining_sec": 42.0, "consecutive_429": 3}
+        app = ma.build_app(fake)
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/health")
+            assert resp.status == 200
+            body = await resp.json()
+            assert body["ok"] is True
+            assert body["status"] == "degraded"
+            assert body["coingecko"]["consecutive_429"] == 3
+    _run(go())
+
+
+def test_health_endpoint_live_when_cg_not_in_cooldown():
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/health")
+            body = await resp.json()
+            assert body["status"] == "live"
+            assert "coingecko" not in body
     _run(go())
 
 
