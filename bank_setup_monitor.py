@@ -296,6 +296,21 @@ async def check_bank_setup(bot, send_system_fn=None, run_in_executor_fn=None) ->
 
     # Инвалидация -- проверяется независимо от стадии (кроме уже терминальных),
     # закрытие 1H выше SL отменяет сетап в любой момент.
+    #
+    # Владелец, находка 2026-07-16 (регресс: [SYS] "BANK: сетап отменён" пришёл
+    # дважды подряд без смены состояния): цикл ниже был LEVEL-triggered, не
+    # EDGE-triggered -- условие `c["c"] > INVALIDATION_LEVEL` проверялось на
+    # КАЖДОЙ свече в `new_1h` независимо, без учёта того, что state["stage"]
+    # уже стал STAGE_INVALIDATED на ПРЕДЫДУЩЕЙ итерации ЭТОГО ЖЕ цикла --
+    # если в одном тике набегало НЕСКОЛЬКО новых 1H-свечей выше уровня подряд
+    # (цена держится выше INVALIDATION_LEVEL не один час), алерт отправлялся
+    # на каждую из них. Тот же паттерн 15м-цикла выше (`if state["stage"] in
+    # (STAGE_DONE, STAGE_INVALIDATED): break`) уже был edge-safe -- 1H-цикл
+    # такой защиты не имел. Фикс: проверка стадии ВНУТРИ цикла на каждой
+    # итерации (не только один раз до цикла) -- ровно один переход
+    # WATCHING_* -> STAGE_INVALIDATED = ровно один алерт, даже при батче
+    # нескольких новых свечей за один тик. `invalidated_at_ts` -- владелец:
+    # "state-флаг... с ts отмены".
     if state["stage"] not in (STAGE_DONE, STAGE_INVALIDATED):
         try:
             candles_1h, _ = await run_in_executor_fn(get_klines, "60", 3, dead_sources)
@@ -305,8 +320,9 @@ async def check_bank_setup(bot, send_system_fn=None, run_in_executor_fn=None) ->
         last_1h_ts = state.get("last_closed_1h_ts")
         new_1h = [c for c in candles_1h if last_1h_ts is None or c["ts"] > last_1h_ts]
         for c in new_1h:
-            if c["c"] > INVALIDATION_LEVEL:
+            if state["stage"] not in (STAGE_DONE, STAGE_INVALIDATED) and c["c"] > INVALIDATION_LEVEL:
                 state["stage"] = STAGE_INVALIDATED
+                state["invalidated_at_ts"] = c["ts"]
                 await send_system_fn(bot, format_invalidation_alert(), critical=True)
                 sent.append("invalidation")
             state["last_closed_1h_ts"] = c["ts"]

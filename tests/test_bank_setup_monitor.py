@@ -272,3 +272,56 @@ def test_check_bank_setup_notify_not_spammed_every_tick(monkeypatch, tmp_path):
 
     _run(bsm.check_bank_setup(bot=None, send_system_fn=fake_send))
     assert sent == []  # только что уведомляли -- в пределах интервала молчим
+
+
+def test_invalidation_fires_once_when_multiple_new_1h_candles_qualify(monkeypatch, tmp_path):
+    """Владелец, регресс 2026-07-16: [SYS] "BANK: сетап отменён" пришёл ДВАЖДЫ
+    подряд без смены состояния -- корень: цикл по нескольким новым 1H-свечам
+    в одном тике проверял условие независимо на каждой, не учитывая, что
+    stage уже стал STAGE_INVALIDATED на предыдущей итерации. Два новых 1H-
+    свечи в ОДНОМ тике, ОБЕ выше INVALIDATION_LEVEL -- алерт должен уйти
+    РОВНО один раз (edge-triggered на переход состояния, не level-triggered
+    на каждую свечу)."""
+    _fresh_state_file(monkeypatch, tmp_path)
+    bsm._save_state({**bsm._default_state(), "last_closed_15m_ts": 1000})
+
+    def fake_klines(interval, limit=5, dead_sources=None):
+        if interval == "15":
+            return [], "bybit"
+        # 1H: ДВЕ новые свечи подряд, ОБЕ close > 0.0553
+        return [
+            _candle(5000, 0.054, 0.0555, 0.053, 0.0554),
+            _candle(8600, 0.0554, 0.0558, 0.0552, 0.0557),
+        ], "bybit"
+
+    monkeypatch.setattr(bsm, "get_klines", fake_klines)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    result = _run(bsm.check_bank_setup(bot=None, send_system_fn=fake_send))
+    assert result.count("invalidation") == 1
+    assert len(sent) == 1  # РОВНО один алерт, не два
+    state = bsm._load_state()
+    assert state["stage"] == bsm.STAGE_INVALIDATED
+    assert state["invalidated_at_ts"] == 5000  # ts ПЕРВОЙ свечи, где реально сработало
+    assert state["last_closed_1h_ts"] == 8600  # но букмарк продвинут до последней увиденной
+
+
+def test_invalidation_records_ts_of_cancellation(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    bsm._save_state({**bsm._default_state(), "last_closed_15m_ts": 1000})
+
+    def fake_klines(interval, limit=5, dead_sources=None):
+        if interval == "15":
+            return [], "bybit"
+        return [_candle(5000, 0.054, 0.0555, 0.053, 0.0554)], "bybit"
+    monkeypatch.setattr(bsm, "get_klines", fake_klines)
+
+    async def noop_send(bot, text, critical=False):
+        pass
+
+    _run(bsm.check_bank_setup(bot=None, send_system_fn=noop_send))
+    state = bsm._load_state()
+    assert state.get("invalidated_at_ts") == 5000
