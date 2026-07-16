@@ -6985,7 +6985,20 @@ async def send_scheduled(bot: Bot):
                 continue
 
             try:
-                a = real_full_analysis(coin)
+                # Владелец, 2026-07-16 (живой watchdog-алерт в "чистом" окне,
+                # разбор по railway logs -- shadow-лог STABLE started 17:52:32,
+                # OK 17:54:09, 97с блок ровно на этот тик send_scheduled):
+                # real_full_analysis() -- тяжёлая синхронная функция (внутри
+                # неё, среди прочего, синхронный _get_ls_ratio()), вызывалась
+                # НАПРЯМУЮ здесь, до AUTO_SCAN_CAP раз за тик (интервал 1 мин)
+                # -- тот же класс регресса, что уже чинился сегодня 4 раза
+                # (check_supertrend_signals/whale_monitor/event_radar_monitor/
+                # run_level_watch). Тот же паттерн run_in_executor уже применён
+                # в этом же файле для real_full_analysis() на 2 других путях
+                # (см. _scan_top_long_sync() выше, /coin) -- просто не был
+                # распространён сюда, на самый частый и самый тяжёлый caller.
+                loop = asyncio.get_event_loop()
+                a = await loop.run_in_executor(None, real_full_analysis, coin)
             except Exception as e:
                 log.error(f"[AUTO] real_full_analysis {sym}: {e}")
                 continue
