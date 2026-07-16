@@ -12,14 +12,14 @@
       "batch": null
     },
     "1.2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "timur_course_intro_structure.md",
+      "batch": 2
     },
     "1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "timur_course_intro_structure.md",
+      "batch": 2
     },
     "10. Боковое движение.md": {
       "status": "pending",
@@ -72,9 +72,9 @@
       "batch": null
     },
     "18. Бектесты 3.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "backtest_ob_body_rule.md",
+      "batch": 2
     },
     "2. Работа с Trading View.md": {
       "status": "pending",
@@ -157,9 +157,9 @@
       "batch": null
     },
     "27. Стрим Wyckoff Часть 2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "28_Стрим_Индикаторы_и_особенности_торговли_FX.md": {
       "status": "pending",
@@ -177,9 +177,9 @@
       "batch": null
     },
     "3.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "30_Стрим_Фундаментальныи__анализ_Pro.md": {
       "status": "pending",
@@ -207,14 +207,14 @@
       "batch": null
     },
     "36 Стрим Работа в POI.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "37_Стрим_Логика_запуска_алгоритма.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "38. Практическии_ модуль.md": {
       "status": "pending",
@@ -222,9 +222,9 @@
       "batch": null
     },
     "39. Стрим ММХМ.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "4. Рыночная структура Base.md": {
       "status": "pending",
@@ -232,9 +232,9 @@
       "batch": null
     },
     "4.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "40. Стрим SMT.md": {
       "status": "pending",
@@ -287,9 +287,9 @@
       "batch": null
     },
     "5.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "6. Ликвидность.md": {
       "status": "pending",
@@ -297,9 +297,9 @@
       "batch": null
     },
     "6.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "7. Работа с уровнями Фибоначчи.md": {
       "status": "pending",
@@ -317,9 +317,9 @@
       "batch": null
     },
     "BPR.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "bpr_fib_ote_precondition.md",
+      "batch": 2
     },
     "Binance 1.md": {
       "status": "pending",
@@ -377,9 +377,9 @@
       "batch": 1
     },
     "Fibonacci 1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "bpr_fib_ote_precondition.md",
+      "batch": 2
     },
     "Fibonacci 2.md": {
       "status": "pending",
@@ -497,9 +497,9 @@
       "batch": null
     },
     "lesson 4.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "bpr_fib_ote_precondition.md",
+      "batch": 2
     },
     "lesson 6 part 2.md": {
       "status": "pending",
@@ -522,9 +522,9 @@
       "batch": 1
     },
     "Воркшоп 2.0 1 день.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "Воркшоп 2.0 10 день.md": {
       "status": "pending",
@@ -572,9 +572,9 @@
       "batch": null
     },
     "Воркшоп 2.0 5 день.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "Воркшоп 2.0 6 день.md": {
       "status": "pending",
@@ -592,24 +592,24 @@
       "batch": null
     },
     "Воркшоп 2.0 9 день.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "amd_po3_wyckoff_day_templates.md",
+      "batch": 2
     },
     "Вход в сделку_ БУ_ RR 1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Вход в сделку_ БУ_ RR 2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Вход в сделку_ БУ_ RR 3.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "ЕНТРИ ТАИ_ПС 4блок.md": {
       "status": "pending",
@@ -762,47 +762,47 @@
       "batch": null
     },
     "Урок 1. Структура.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 2. Ликвидность и имбаланс.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 3. OB_ MB_ BB_ Wick.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 4. Дивергенция_ TDP_ TTS.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 5. Время и киллзоны.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 6. Рендж и Ваи_кофф.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 7. Сетапы.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     },
     "Урок 8. Стили торговли.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "sancho_8_lesson_course.md",
+      "batch": 2
     }
   },
-  "done_count": 11,
-  "last_batch": 1,
-  "last_updated": "2026-07-15"
+  "done_count": 39,
+  "last_batch": 2,
+  "last_updated": "2026-07-17"
 }
