@@ -153,6 +153,16 @@
       "tier": "author"
     }
   ],
+  "GRAMUSDT": [
+    {
+      "side": "LONG",
+      "lo": 1.28,
+      "hi": 1.35,
+      "prio": 1,
+      "note": "GRAM = переименованный Toncoin (TON), ребрендинг подтверждён живьём 2026-07-16 (TON Foundation, 2026-06-15, конверсия 1:1, тот же актив). Лестница входа 1.35/1.31/1.28 (50/30/20), средняя ~1.326, SL/инвалидация: дневной клоуз ниже 1.257 (стоп ~1.245). Цели 1.595 -> 1.75. Живые алерты -- zone_alert_monitor.py (touch/close-below), см. zone_alert_configs.py build_gram_triggers()",
+      "tier": "author"
+    }
+  ],
   "ONDOUSDT": [
     {
       "side": "LONG",

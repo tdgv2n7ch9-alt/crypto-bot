@@ -239,7 +239,8 @@ def test_check_all_zones_iterates_registry(monkeypatch, tmp_path):
     result = _run(zam.check_all_zones(bot=None, send_system_fn=lambda *a, **k: None))
     assert "KAITOUSDT" in calls
     assert "AVAXUSDT" in calls
-    assert result == {"KAITOUSDT": [], "AVAXUSDT": []}
+    assert "GRAMUSDT" in calls
+    assert result == {"KAITOUSDT": [], "AVAXUSDT": [], "GRAMUSDT": []}
 
 
 def test_check_all_zones_one_symbol_failure_does_not_block_others(monkeypatch, tmp_path):
@@ -255,3 +256,61 @@ def test_check_all_zones_one_symbol_failure_does_not_block_others(monkeypatch, t
     result = _run(zam.check_all_zones(bot=None, send_system_fn=lambda *a, **k: None))
     assert result["KAITOUSDT"] == []  # честный skip, не падение всего джоба
     assert result["AVAXUSDT"] == ["ok"]
+
+
+# --- GRAM (наряд владельца 2026-07-16): поддержка дневного (D) таймфрейма ---
+
+GRAM_TRIGGERS = [
+    {"name": "limit1", "type": "touch", "level": 1.35, "timeframe": "15", "text": "limit1 fired"},
+    {"name": "invalidation", "type": "close_below", "level": 1.257, "timeframe": "D", "text": "inval fired"},
+]
+
+
+def test_first_run_bookmarks_daily_timeframe(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    candles15 = [_candle(1000, 1.3, 1.36, 1.29, 1.33)]
+    candles1d = [_candle(900, 1.3, 1.4, 1.25, 1.32)]
+
+    def fake_klines(symbol, tf, limit=40, dead_sources=None):
+        return (candles15 if tf == "15" else candles1d), "bybit"
+    monkeypatch.setattr(zam, "get_klines", fake_klines)
+
+    _run(zam.check_zone("GRAMUSDT", GRAM_TRIGGERS, "", bot=None, send_system_fn=lambda *a, **k: None))
+    state = zam._load_state("GRAMUSDT", ["limit1", "invalidation"])
+    assert state["last_closed_15m_ts"] == 1000
+    assert state["last_closed_1d_ts"] == 900
+
+
+def test_daily_close_below_trigger_fires(monkeypatch, tmp_path):
+    _fresh_state_file(monkeypatch, tmp_path)
+    zam._save_state("GRAMUSDT", {**zam._default_state(["limit1", "invalidation"]),
+                                   "last_closed_15m_ts": 1000, "last_closed_1d_ts": 900})
+
+    def fake_klines(symbol, tf, limit=40, dead_sources=None):
+        if tf == "D":
+            return [_candle(1900, 1.26, 1.27, 1.24, 1.25)], "bybit"  # close < 1.257
+        return [], "bybit"
+    monkeypatch.setattr(zam, "get_klines", fake_klines)
+
+    sent = []
+    async def fake_send(bot, text, critical=False):
+        sent.append((text, critical))
+
+    result = _run(zam.check_zone("GRAMUSDT", GRAM_TRIGGERS, "", bot=None, send_system_fn=fake_send))
+    assert result == ["invalidation"]
+    assert sent[0][1] is True
+    state = zam._load_state("GRAMUSDT", ["limit1", "invalidation"])
+    assert state["last_closed_1d_ts"] == 1900
+
+
+def test_bingx_interval_supports_daily(monkeypatch):
+    captured = {}
+    class FakeResp:
+        def json(self):
+            return {"code": 0, "data": []}
+    def fake_get(url, params=None, timeout=None):
+        captured["interval"] = params["interval"]
+        return FakeResp()
+    monkeypatch.setattr(zam.requests, "get", fake_get)
+    zam._fetch_klines_bingx("GRAMUSDT", "D", 40)
+    assert captured["interval"] == "1d"

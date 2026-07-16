@@ -62,11 +62,15 @@ def _state_file(symbol: str) -> str:
     return os.path.join(_JOURNAL_DIR, f"zone_alert_state_{symbol.lower()}.json")
 
 
+TF_STATE_KEY = {"15": "last_closed_15m_ts", "60": "last_closed_1h_ts", "D": "last_closed_1d_ts"}
+
+
 def _default_state(trigger_names: list) -> dict:
     return {
         "armed": {t: True for t in trigger_names},
         "last_closed_15m_ts": None,
         "last_closed_1h_ts": None,
+        "last_closed_1d_ts": None,
         "profile_sent": False,
     }
 
@@ -104,7 +108,7 @@ def _fetch_klines_bybit(symbol: str, interval: str, limit: int):
 
 
 def _fetch_klines_bingx(symbol: str, interval: str, limit: int):
-    bingx_interval = {"15": "15m", "60": "1h"}[interval]
+    bingx_interval = {"15": "15m", "60": "1h", "D": "1d"}[interval]
     r = requests.get(BINGX_KLINE_URL, params={
         "symbol": _bingx_symbol(symbol), "interval": bingx_interval, "limit": limit,
     }, timeout=REQUEST_TIMEOUT_SEC)
@@ -233,9 +237,9 @@ async def check_zone(symbol: str, triggers: list, profile_line: str, bot, send_s
 
     is_first_run = state.get("last_closed_15m_ts") is None and "15" in klines_by_tf and klines_by_tf["15"]
     if is_first_run:
-        state["last_closed_15m_ts"] = klines_by_tf["15"][-1]["ts"]
-        if "60" in klines_by_tf and klines_by_tf["60"]:
-            state["last_closed_1h_ts"] = klines_by_tf["60"][-1]["ts"]
+        for tf in tf_needed:
+            if klines_by_tf.get(tf):
+                state[TF_STATE_KEY.get(tf, "last_closed_1h_ts")] = klines_by_tf[tf][-1]["ts"]
         _save_state(symbol, state)
         log.info(f"zone_alert_monitor: {symbol} первый запуск, старт с ts={state['last_closed_15m_ts']}")
         return sent
@@ -243,7 +247,7 @@ async def check_zone(symbol: str, triggers: list, profile_line: str, bot, send_s
     for t in triggers:
         tf = t.get("timeframe", "15")
         candles = klines_by_tf.get(tf, [])
-        last_ts_key = "last_closed_15m_ts" if tf == "15" else "last_closed_1h_ts"
+        last_ts_key = TF_STATE_KEY.get(tf, "last_closed_1h_ts")
         last_ts = state.get(last_ts_key)
         new_candles = [c for c in candles if last_ts is None or c["ts"] > last_ts]
 
@@ -292,6 +296,7 @@ def _zone_registry() -> list:
     return [
         (cfg.KAITO_SYMBOL, cfg.build_kaito_triggers(), cfg.KAITO_PROFILE_LINE),
         (cfg.AVAX_SYMBOL, cfg.build_avax_triggers(), ""),
+        (cfg.GRAM_SYMBOL, cfg.build_gram_triggers(), cfg.GRAM_PROFILE_LINE),
     ]
 
 
