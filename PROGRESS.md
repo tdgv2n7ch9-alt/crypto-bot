@@ -12215,6 +12215,59 @@ Pump Radar reconnect, не связаны с этим изменением). `ra
 увидеть его в Telegram для финального подтверждения.
 
 Задача #2 теперь закрыта ПОЛНОСТЬЮ (вотчлист + recipient-алерт +
-DEX-drain детект), обе точки приёмки владельца отработаны. Стоп до
-финального "принято" -- следующая по очереди #3 (pump_radar_state.json
-персист) начнётся только после него.
+DEX-drain детект), обе точки приёмки владельца отработаны. Владелец
+принял задачу #2 полностью, перешли к #3.
+
+## Задача #3 закрыта: pump_radar_state.json персист
+
+journal/pump_radar_state.json был в journal_persistence.SYNCED_FILES с
+самого начала (закрытие crash-фикса), но pump_detector никогда не писал
+и не читал этот файл -- GitHub-синк синкал несуществующий путь, редеплой
+стирал pump_watch/dump_watch/pump_history (активные WATCHING/REVERSAL_
+CONFIRMED-наблюдения и 24ч историю) без следа.
+
+`pump_detector.py`: `STATE_FILE`, `save_state_to_disk()` (атомарная
+запись, best-effort), `load_state_from_disk()` (restore ТОЛЬКО если
+pump_watch/dump_watch ещё пусты). Немедленная запись на структурных
+переходах (`_start_watch`, `_finalize_any`, `_confirm_pump_reversal`,
+`_confirm_dump_reversal`) + периодический бэкстоп `run_state_persist_
+loop()` каждые 60с для дрейфа полей внутри активного WATCHING.
+
+`bot.py` (`_start_pump_detector`): `journal_persistence.restore_all_sync()`
++ `pump_detector.load_state_from_disk()` перенесены в САМОЕ НАЧАЛО
+функции, ДО `asyncio.create_task(run_pump_detector(...))` -- иначе
+WS-слой мог замутировать pump_watch на первом же await этой корутины
+раньше восстановления (race, не гарантированный порядок между
+create_task и кодом ниже). Для bank/ake/zone_alert (scheduler-based,
+первый тик позже) перенос restore раньше строго безопаснее, не регресс.
+
+Побочный эффект найден и исправлен ДО коммита: 2 существующих теста
+(`test_rug_alert_everywhere.py`, `test_pump_oi_matrix_scenario.py`)
+вызывают `pd._start_watch()` напрямую без изоляции -- начали бы писать
+тестовый мусор в РЕАЛЬНЫЙ `journal/pump_radar_state.json` при каждом
+прогоне pytest (тот же класс проблемы, что SEC М4 с `security_log.json`,
+см. правило CLAUDE.md). Заизолированы через `monkeypatch save_state_
+to_disk=no-op`.
+
+7 новых тестов, `py_compile` OK, полный `pytest` 1637 passed / 1 skipped.
+Коммит `a8928a1f` через `tools/deploy.sh` -> SUCCESS (deployment
+`4d6cc437`).
+
+**Живая верификация, end-to-end**: `railway logs` -- чистый рестарт,
+"Application started", ни одного traceback, все джобы тикают штатно
+(посторонние ERROR -- WS-реконнекты Pump Radar, CoinGecko circuit-breaker,
+не связаны с этим изменением). `railway ssh` -- живой прогон
+`pd.save_state_to_disk()`/`pd.load_state_from_disk()` на контейнере
+подтвердил запись и корректный формат JSON. Затем `journal_persistence.
+sync_file_sync('journal/pump_radar_state.json')` -> `True`, коммит
+`4abad7c8 journal-sync: journal/pump_radar_state.json` подтверждён в
+`git log origin/main` -- цепочка pump_detector-диск -> GitHub теперь
+реально работает (раньше синкала несуществующий файл, DoD подтверждён
+буквально, не на словах).
+
+СЛЕДУЮЩИЙ по очереди (владелец, "по одному, DoD, стоп после каждого"):
+задача #4 -- AKE v2 монитор (T1-T4 триггеры + запись сетапов в shadow).
+Также в очереди (владелец, вне порядка #1-4): баг карточки SHORT ZEST
+15:14 -- сырые HTML-теги (`<b>`, `<code>`) видны текстом, нужно
+проверить `parse_mode` в пути отправки этой карточки. Стоп до приёмки
+владельцем задачи #3.
