@@ -10,9 +10,14 @@ BscScan (https://bscscan.com/token/0x2c3a8Ee94dDD97244a93Bc48298f97d2C412F7Db#ba
 отток кошелька #3 -- knowledge/PUMP_REVERSAL_CASES.md, кейс 1.
 
 eth_getLogs НЕ работает на bsc-dataseed*.binance.org (проверено живьём, все 5
-эндпоинтов блокируют его полностью). Рабочие эндпоинты с ограничением диапазона
-блоков на запрос: 1rpc.io/bnb (50) и bsc-mainnet.public.blastapi.io (10, резерв).
-eth_call (balanceOf и т.п.) работает и на dataseed-нодах -- используется отдельно.
+эндпоинтов блокируют его полностью). eth_call (balanceOf и т.п.) работает и на
+dataseed-нодах -- используется отдельно (RPC_ETH_CALL).
+
+Владелец, 2026-07-16: QuickNode (QUICKNODE_BSC_URL, платный выделенный эндпоинт
+в Railway Variables) -- primary с возвратом MAX_BLOCKS_PER_TICK до 50; ранее
+использовавшийся 1rpc.io/bnb выведен из ротации (нестабилен под нагрузкой этого
+кейса -- живой инцидент 2026-07-15, см. _is_rate_limit_error докстринг ниже).
+bsc-mainnet.public.blastapi.io остаётся единственным fallback-провайдером.
 """
 import json
 import logging
@@ -40,18 +45,31 @@ AKE_WATCHED_WALLETS = [
 
 ALERT_THRESHOLD_USD = 200_000
 
-RPC_PROVIDERS = [
-    {"url": "https://1rpc.io/bnb", "max_range": 50},
-    {"url": "https://bsc-mainnet.public.blastapi.io", "max_range": 10},
-]
+def _build_rpc_providers() -> list:
+    """QuickNode -- primary, если QUICKNODE_BSC_URL задан (владелец, 2026-07-16,
+    выделенный платный эндпоинт в Railway Variables); blastapi -- всегда
+    fallback. Функция, а не константа-на-импорте -- чтобы тесты могли
+    monkeypatch'ить os.environ ДО вызова и получить предсказуемый список без
+    завязки на реальные Railway-переменные окружения процесса."""
+    providers = []
+    quicknode_url = os.environ.get("QUICKNODE_BSC_URL")
+    if quicknode_url:
+        providers.append({"url": quicknode_url, "max_range": 50})
+    else:
+        log.error("bsc_wallet_monitor: QUICKNODE_BSC_URL не задан -- работаю только на fallback-провайдере")
+    providers.append({"url": "https://bsc-mainnet.public.blastapi.io", "max_range": 10})
+    return providers
+
+
+RPC_PROVIDERS = _build_rpc_providers()
 RPC_ETH_CALL = "https://bsc-dataseed.binance.org"  # eth_call работает, eth_getLogs -- нет
 
 POLL_INTERVAL_SEC = 60
 REQUEST_TIMEOUT_SEC = 10  # владелец, находка 2026-07-15: жёсткий потолок на КАЖДЫЙ
 # сетевой вызов -- см. критический регресс ниже (было до 15с без единого таймаут-бюджета)
-MAX_BLOCKS_PER_TICK = 500  # владелец: не пытаться нагнать весь бэклог за один тик --
-# при 27+ последовательных отказах 1rpc.io в одном тике (см. живая находка) блокирующий
-# цикл без этого предела мог растянуться на минуты. Остаток докатывается следующими
+MAX_BLOCKS_PER_TICK = 50  # владелец, 2026-07-16: возвращено на 50 после перехода на
+# QuickNode как primary (выделенный платный эндпоинт, не публичный rate-limited узел
+# вроде бывшего 1rpc.io -- см. докстринг модуля). Остаток докатывается следующими
 # тиками (last_scanned_block продвигается только до обработанной границы, не до latest)
 SOURCE_DOWN_NOTIFY_INTERVAL_SEC = 15 * 60  # владелец: "skip тика ... с [SYS]-
 # уведомлением раз в 15 мин (не молчать и не копить)"
@@ -281,6 +299,7 @@ async def check_ake_wallets(bot, send_system_fn=None, run_in_executor_fn=None) -
     if latest is None:
         log.error("bsc_wallet_monitor: ни один RPC-провайдер не ответил на eth_blockNumber")
         return 0
+    log.info(f"bsc_wallet_monitor: тик через {prov['url']}, latest={latest}")
 
     state = _load_state()
     last_scanned = state.get("last_scanned_block")

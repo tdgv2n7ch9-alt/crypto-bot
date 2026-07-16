@@ -13,9 +13,25 @@ import os
 import sys
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bsc_wallet_monitor as bwm
+
+
+@pytest.fixture(autouse=True)
+def _fixed_rpc_providers(monkeypatch):
+    """Владелец, 2026-07-16: RPC_PROVIDERS теперь строится из QUICKNODE_BSC_URL
+    в окружении процесса (_build_rpc_providers()) -- тесты не должны зависеть
+    от того, задана ли эта переменная на машине, где они запускаются. Фиксируем
+    предсказуемый двухпровайдерный список (primary+fallback), тот же паттерн,
+    что был раньше (1rpc.io+blastapi), но с примерными URL -- сами тесты
+    проверяют fallback-логику по позиции в списке, не по конкретным доменам."""
+    monkeypatch.setattr(bwm, "RPC_PROVIDERS", [
+        {"url": "https://primary.test", "max_range": 50},
+        {"url": "https://bsc-mainnet.public.blastapi.io", "max_range": 10},
+    ])
 
 
 def _run(coro):
@@ -379,3 +395,25 @@ def test_check_ake_wallets_down_notify_not_spammed_every_tick(monkeypatch, tmp_p
 
     _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send))
     assert sent == []  # только что уведомляли -- в пределах интервала молчим
+
+
+# ── _build_rpc_providers() (владелец, 2026-07-16: QuickNode primary) ───────
+
+def test_build_rpc_providers_uses_quicknode_as_primary_when_set(monkeypatch):
+    monkeypatch.setenv("QUICKNODE_BSC_URL", "https://my-endpoint.quiknode.pro/abc123/")
+    providers = bwm._build_rpc_providers()
+    assert providers[0]["url"] == "https://my-endpoint.quiknode.pro/abc123/"
+    assert providers[0]["max_range"] == 50
+    assert providers[1]["url"] == "https://bsc-mainnet.public.blastapi.io"
+
+
+def test_build_rpc_providers_falls_back_to_blastapi_only_when_unset(monkeypatch):
+    monkeypatch.delenv("QUICKNODE_BSC_URL", raising=False)
+    providers = bwm._build_rpc_providers()
+    assert len(providers) == 1
+    assert providers[0]["url"] == "https://bsc-mainnet.public.blastapi.io"
+
+
+def test_max_blocks_per_tick_is_50():
+    """Владелец, 2026-07-16: возвращено на 50 после перехода на QuickNode."""
+    assert bwm.MAX_BLOCKS_PER_TICK == 50
