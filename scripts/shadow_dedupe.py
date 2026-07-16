@@ -102,6 +102,29 @@ def process_files(files: list) -> tuple:
     return reports, new_contents, total_removed
 
 
+def strip_active_overlap_with_archive(active_records: list, archive_uids: set) -> tuple:
+    """Владелец, приёмка v130 (2026-07-16, регресс к #245): живая находка --
+    после санации архива 1042 архивных записи ПОЛНОСТЬЮ (100%) совпали по
+    uid с записями, всё ещё лежащими в активном файле (journal/shadow_signals.json)
+    -- остаточный дубль active<->archive, унаследованный от ДО-фикса истории
+    (см. _record_uid/_warm_uid_index докстринги в shadow_engine.py: индекс
+    идемпотентности раньше прогревался только из активного файла и не видел
+    архивные uid, так что повторная запись уже архивированного бара проходила
+    незамеченной). Архив -- канонический источник для уже устаревших
+    (>ROTATION_KEEP_DAYS) записей, активный файл не должен держать их копии.
+    Возвращает (clean_records, removed_count). Битые записи (без symbol/ts)
+    не трогаются, как и в dedupe_and_sort."""
+    clean = []
+    removed = 0
+    for r in active_records:
+        if isinstance(r, dict) and r.get("symbol") and r.get("ts") is not None:
+            if shadow_engine._record_uid(r) in archive_uids:
+                removed += 1
+                continue
+        clean.append(r)
+    return clean, removed
+
+
 def build_backup_payload(files: list) -> dict:
     """Бэкап ОРИГИНАЛОВ (до какой-либо правки) -- владелец: "ПЕРЕД правкой --
     бэкап оригинала". Один объединённый файл, а не по одному на архив, как
@@ -230,12 +253,41 @@ def main():
     reports, new_contents, total_removed = process_files(files)
     print(format_report(reports, total_removed))
 
+    # Владелец, приёмка v130 (2026-07-16): active<->archive остаточный дубль
+    # (см. strip_active_overlap_with_archive докстринг) -- проверяется КАЖДЫЙ
+    # прогон, независимо от того, нашлось ли что-то новое ВНУТРИ архива --
+    # активный файл не в git, чинится локальной перезаписью, без коммита.
+    archive_uids = set()
+    for content in new_contents.values():
+        for r in content.get("records", []):
+            if isinstance(r, dict) and r.get("symbol") and r.get("ts") is not None:
+                archive_uids.add(shadow_engine._record_uid(r))
+
+    with open(shadow_engine.SHADOW_FILE) as f:
+        active_payload = json.load(f)
+    active_records = active_payload.get("records", [])
+    clean_active, removed_active = strip_active_overlap_with_archive(active_records, archive_uids)
+    if removed_active:
+        print(f"\nАктивный файл <-> архив: найдено {removed_active} остаточных дублей "
+              f"(uid уже в архиве) из {len(active_records)} активных записей.")
+    else:
+        print(f"\nАктивный файл <-> архив: пересечений нет ({len(active_records)} активных записей чисты).")
+
     if not args.apply:
         print("\n(dry-run -- ничего не изменено, ничего не закоммичено. Повторить с --apply.)")
         return
 
+    if removed_active:
+        tmp_path = f"{shadow_engine.SHADOW_FILE}.tmp{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            json.dump({"schema_version": active_payload.get("schema_version", 1), "records": clean_active},
+                      f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, shadow_engine.SHADOW_FILE)
+        print(f"Активный файл переписан локально: {len(active_records)} -> {len(clean_active)} записей "
+              f"(убрано {removed_active} дублей с архивом, GitHub не тронут -- активный файл не в git).")
+
     if total_removed == 0:
-        print("\nДублей нет -- нечего коммитить.")
+        print("\nДублей внутри архива нет -- архивные файлы/GitHub не трогаю.")
         return
 
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d")

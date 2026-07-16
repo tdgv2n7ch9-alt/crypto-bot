@@ -53,23 +53,46 @@ def test_write_local_allows_different_symbol_same_ts(monkeypatch, tmp_path):
     assert len(data["records"]) == 2
 
 
-def test_write_local_dedup_scoped_to_local_only_not_archive(monkeypatch, tmp_path):
-    """_write_local() проверяет только _load_local() (активный файл) -- НЕ читает
-    архив на каждую запись (было бы дорого при больших архивах). Это ожидаемо:
-    архивная дедупликация -- отдельный инструмент (tools/dedup_shadow_archive.py),
-    не горячий путь записи."""
+def test_write_local_dedup_now_consults_archive_too(monkeypatch, tmp_path):
+    """Владелец, приёмка v130 (2026-07-16, регресс к #245): живая находка --
+    прежняя версия warm-индекса (только активный файл) пропускала повторную
+    запись уже АРХИВИРОВАННОГО uid (нашлось 1042 таких active<->archive
+    дублей на живом контейнере). Теперь _warm_uid_index() читает архив тоже
+    -- та же запись, что уже есть в архиве, должна быть отклонена."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
     monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "_UID_INDEX", None)
+    monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    monkeypatch.setattr(se, "ARCHIVE_DIR", str(archive_dir))
+    import json
+    archived_record = {"symbol": "AKEUSDT", "ts": 12345.6789, "type": "pump_reversal_shadow"}
+    (archive_dir / "shadow_signals_old.json").write_text(
+        json.dumps({"schema_version": 1, "records": [archived_record]}))
+
+    ok = se._write_local(dict(archived_record))
+    assert ok is True  # honest "ok" -- считаем дубль успешно обработанным, не ошибкой
+    # активный файл не создан вовсе -- запись отклонена ДО первого append
+    assert not os.path.exists(se.SHADOW_FILE)
+
+
+def test_write_local_allows_new_record_not_in_archive(monkeypatch, tmp_path):
+    """Расширение warm-индекса на архив не должно ложно блокировать НОВЫЕ
+    записи, которых в архиве нет."""
+    monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
+    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "_UID_INDEX", None)
+    monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
     archive_dir = tmp_path / "archive"
     archive_dir.mkdir()
     monkeypatch.setattr(se, "ARCHIVE_DIR", str(archive_dir))
     import json
     (archive_dir / "shadow_signals_old.json").write_text(
-        json.dumps({"schema_version": 1, "records": [{"symbol": "AKEUSDT", "ts": 12345.6789}]}))
+        json.dumps({"schema_version": 1, "records": [
+            {"symbol": "AKEUSDT", "ts": 12345.6789, "type": "pump_reversal_shadow"}]}))
 
-    # тот же ключ, что уже в архиве, но НЕ в активном файле -- должен записаться
-    # (write-time guard не консультирует архив, это by-design для горячего пути)
-    ok = se._write_local({"symbol": "AKEUSDT", "ts": 12345.6789})
+    ok = se._write_local({"symbol": "BTCUSDT", "ts": 99999.0, "type": "pump_reversal_shadow"})
     assert ok is True
     with open(se.SHADOW_FILE) as f:
         data = json.load(f)
@@ -89,6 +112,16 @@ def test_record_uid_differs_by_type_same_symbol_and_ts():
 def test_record_uid_stable_for_identical_record():
     r = {"symbol": "AKEUSDT", "ts": 100.0, "type": "pump_reversal_shadow"}
     assert se._record_uid(r) == se._record_uid(dict(r))
+
+
+def test_record_uid_differs_by_contour_same_symbol_ts_type():
+    """Владелец, приёмка v130: uid=hash(symbol+contour+ts+type) -- формула
+    расширена на 4-е поле (contour) по прямому наряду. Без него два РАЗНЫХ
+    контура, случайно совпавшие по symbol+type+ts (напр. tz13 и
+    external_trader1_btc на одном тике), тихо схлопывались бы в один uid."""
+    a = se._record_uid({"symbol": "BTCUSDT", "ts": 100.0, "type": "shadow", "contour": "tz13"})
+    b = se._record_uid({"symbol": "BTCUSDT", "ts": 100.0, "type": "shadow", "contour": "external_trader1_btc"})
+    assert a != b
 
 
 def test_write_local_rejects_duplicate_via_uid_index_without_rereading_disk(monkeypatch, tmp_path):

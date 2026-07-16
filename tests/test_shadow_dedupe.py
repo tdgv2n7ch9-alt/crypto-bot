@@ -66,6 +66,32 @@ def test_dedupe_and_sort_global_seen_set_catches_cross_file_duplicates():
     assert clean2[0]["symbol"] == "BTCUSDT"
 
 
+def test_strip_active_overlap_with_archive_removes_matching_uid():
+    """Владелец, приёмка v130 (2026-07-16): active<->archive остаточный дубль
+    -- запись, чей uid уже в архиве, должна быть убрана из активного файла."""
+    archived = _rec("AKEUSDT", 100.0)
+    active_records = [archived, _rec("BTCUSDT", 200.0)]
+    archive_uids = {sd.shadow_engine._record_uid(archived)}
+    clean, removed = sd.strip_active_overlap_with_archive(active_records, archive_uids)
+    assert removed == 1
+    assert len(clean) == 1
+    assert clean[0]["symbol"] == "BTCUSDT"
+
+
+def test_strip_active_overlap_with_archive_keeps_non_overlapping():
+    active_records = [_rec("AKEUSDT", 100.0), _rec("BTCUSDT", 200.0)]
+    clean, removed = sd.strip_active_overlap_with_archive(active_records, set())
+    assert removed == 0
+    assert len(clean) == 2
+
+
+def test_strip_active_overlap_with_archive_preserves_broken_records():
+    broken = {"note": "no symbol/ts"}
+    clean, removed = sd.strip_active_overlap_with_archive([broken], {"some-uid"})
+    assert removed == 0
+    assert broken in clean
+
+
 def test_process_files_reports_per_file_and_total(tmp_path):
     import json
     f1 = tmp_path / "shadow_signals_a.json"
