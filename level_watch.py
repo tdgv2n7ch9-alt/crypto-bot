@@ -404,6 +404,15 @@ async def run_level_watch(bot_send, owner_id, path: str = WATCH_ZONES_FILE,
     диска на КАЖДОМ тике -- дёшево (маленький локальный JSON), зато /zones_set
     (владелец меняет разметку с телефона) подхватывается без рестарта процесса.
     `get_liq_data_fn` -- см. check_and_alert()."""
+    # Владелец, 2026-07-16 (внеочередной аудит блокирующих вызовов, Tier 1
+    # #3): fetch_price() -- синхронный requests.get к Bybit -- вызывался
+    # напрямую для КАЖДОГО символа в watch_zones.json подряд, БЕЗ единой
+    # точки await (если ни одна зона не триггерит check_and_alert() тоже
+    # не приостанавливает выполнение -- async def без внутреннего await не
+    # уступает event loop), каждые POLL_INTERVAL_SEC=30с -- самый частый
+    # интервал среди всех фонов проекта, тот же класс регресса, что
+    # check_supertrend_signals/whale_monitor/event_radar_monitor.
+    loop = asyncio.get_event_loop()
     state = state if state is not None else LevelWatchState()
     i = 0
     while iterations is None or i < iterations:
@@ -413,7 +422,7 @@ async def run_level_watch(bot_send, owner_id, path: str = WATCH_ZONES_FILE,
         for symbol, zones in config.items():
             if symbol in _META_KEYS or not isinstance(zones, list):
                 continue
-            price = fetch_price(symbol)
+            price = await loop.run_in_executor(None, fetch_price, symbol)
             if price is not None:
                 await check_and_alert(bot_send, owner_id, state, symbol, price, zones,
                                        source=source, updated=updated,
