@@ -13488,6 +13488,34 @@ async def cmd_journal_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+STARTUP_NOTIFY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "journal", "last_startup_notify.json")
+STARTUP_NOTIFY_MIN_GAP_SEC = 30 * 60  # владелец, приёмка v130: не спамить "запущен"
+# чаще раза в 30 мин, даже если рестартов реально несколько подряд (активный
+# деплой-сеанс с несколькими коммитами -- легитимный случай, не crash-loop).
+
+
+def _read_last_startup_notify_ts():
+    import json
+    try:
+        with open(STARTUP_NOTIFY_STATE_FILE) as f:
+            return json.load(f).get("ts")
+    except Exception:
+        return None
+
+
+def _write_last_startup_notify_ts(ts: float) -> None:
+    import json
+    try:
+        os.makedirs(os.path.dirname(STARTUP_NOTIFY_STATE_FILE), exist_ok=True)
+        tmp_path = f"{STARTUP_NOTIFY_STATE_FILE}.tmp{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            json.dump({"ts": ts}, f)
+        os.replace(tmp_path, STARTUP_NOTIFY_STATE_FILE)
+    except Exception as e:
+        log.error(f"_write_last_startup_notify_ts: не удалось записать {STARTUP_NOTIFY_STATE_FILE}: {e}")
+
+
 async def _startup_integrity_check(bot: Bot, owner_id: int):
     """ROADMAP П1.3 -- одно сообщение владельцу при старте вместо разрозненных: что реально
     проверено (подписчики/журнал загружены, CoinGecko отвечает), а не выдуманное "всё ок".
@@ -13568,8 +13596,22 @@ async def _startup_integrity_check(bot: Bot, owner_id: int):
         lines.append(f"🔴 Shadow-архив: синк упал ({str(e)[:150]})")
 
     try:
-        # П-Каналы (владелец): рутинный стартовый отчёт, не критично.
-        await send_system(bot, "\n".join(lines), parse_mode="Markdown")
+        # Владелец, приёмка v130 (2026-07-16, диагностика "рестарты 12:09/12:19/
+        # 12:24"): в окне активных деплоев (несколько коммитов подряд, каждый со
+        # своим `tools/deploy.sh`-циклом) стартовое сообщение "запущен" уходило
+        # на КАЖДЫЙ рестарт -- легитимно (это разные деплои), но владельцу на
+        # приёме читается как crash-loop. Throttle -- если с прошлого отправленного
+        # стартового сообщения прошло < STARTUP_NOTIFY_MIN_GAP_SEC, отправку
+        # пропускаем (молча, лог -- info), остальная работа функции (архив-синк
+        # и т.п. выше) уже выполнена независимо от throttle.
+        last_ts = _read_last_startup_notify_ts()
+        now = time.time()
+        if last_ts is not None and now - last_ts < STARTUP_NOTIFY_MIN_GAP_SEC:
+            log.info(f"_startup_integrity_check: стартовое сообщение пропущено "
+                      f"(throttle, {now - last_ts:.0f}с с прошлого < {STARTUP_NOTIFY_MIN_GAP_SEC}с)")
+        else:
+            await send_system(bot, "\n".join(lines), parse_mode="Markdown")
+            _write_last_startup_notify_ts(now)
     except Exception as e:
         print(f"_startup_integrity_check: не удалось отправить сообщение владельцу: {e}")
 

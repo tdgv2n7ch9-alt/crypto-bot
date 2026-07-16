@@ -159,6 +159,13 @@ def test_cg_get_success_resets_consecutive_429_counter(monkeypatch):
 
 # ── _startup_integrity_check() -- честная диагностика CoinGecko-строки ─────
 
+@pytest.fixture(autouse=True)
+def _reset_startup_notify_state(monkeypatch, tmp_path):
+    """Изолирует STARTUP_NOTIFY_STATE_FILE от реального journal/ на диске --
+    иначе тесты читали бы/писали бы настоящий файл между прогонами."""
+    monkeypatch.setattr(bot, "STARTUP_NOTIFY_STATE_FILE", str(tmp_path / "last_startup_notify.json"))
+
+
 def test_startup_check_shows_real_error_not_generic_empty(monkeypatch):
     monkeypatch.setattr(bot, "subscribers", type("S", (), {"status": staticmethod(lambda: {"count": 1, "source": "github"})})())
     monkeypatch.setattr(bot.signal_journal, "get_status_counts", lambda: (0, 0))
@@ -196,3 +203,72 @@ def test_startup_check_honest_when_no_recorded_error(monkeypatch):
     import asyncio
     asyncio.run(bot._startup_integrity_check(_FakeBot(), owner_id=123))
     assert "без записанной ошибки" in sent["text"]  # честно, не выдумывает причину
+
+
+# ── стартовое сообщение throttle (владелец, приёмка v130, 2026-07-16) ──────
+
+def _patch_startup_check_deps(monkeypatch):
+    monkeypatch.setattr(bot, "subscribers", type("S", (), {"status": staticmethod(lambda: {"count": 1, "source": "github"})})())
+    monkeypatch.setattr(bot.signal_journal, "get_status_counts", lambda: (0, 0))
+    monkeypatch.setattr(bot, "_fetch_coingecko_markets", lambda pages, per_page: [{"id": "bitcoin"}])
+    monkeypatch.setattr(bot.shadow_engine, "get_local_records", lambda: [])
+    monkeypatch.setattr(bot.shadow_engine, "integrity_report", lambda recs: {"schema_ok": True, "duplicate_count": 0, "out_of_order_count": 0, "total": 0})
+    monkeypatch.setattr(bot.shadow_engine, "_push_pending_archives_sync", lambda: {"attempted": 0, "succeeded": 0})
+
+
+def test_startup_notify_sent_on_first_ever_run(monkeypatch):
+    """Нет файла состояния -- считаем, что throttle-окно не активно, отправляем."""
+    _patch_startup_check_deps(monkeypatch)
+    sent = {"n": 0}
+    class _FakeBot:
+        async def send_message(self, chat_id, text, **kw):
+            sent["n"] += 1
+
+    import asyncio
+    asyncio.run(bot._startup_integrity_check(_FakeBot(), owner_id=123))
+    assert sent["n"] == 1
+
+
+def test_startup_notify_skipped_within_throttle_window(monkeypatch):
+    """Владелец, приёмка v130: диагностика "рестарты 12:09/12:19/12:24" --
+    несколько легитимных деплоев подряд не должны спамить стартовым
+    сообщением на КАЖДЫЙ рестарт."""
+    _patch_startup_check_deps(monkeypatch)
+    bot._write_last_startup_notify_ts(time.time() - 60)  # 1 мин назад -- внутри окна 30 мин
+
+    sent = {"n": 0}
+    class _FakeBot:
+        async def send_message(self, chat_id, text, **kw):
+            sent["n"] += 1
+
+    import asyncio
+    asyncio.run(bot._startup_integrity_check(_FakeBot(), owner_id=123))
+    assert sent["n"] == 0
+
+
+def test_startup_notify_sent_again_after_window_passes(monkeypatch):
+    _patch_startup_check_deps(monkeypatch)
+    bot._write_last_startup_notify_ts(time.time() - bot.STARTUP_NOTIFY_MIN_GAP_SEC - 1)  # чуть за окном
+
+    sent = {"n": 0}
+    class _FakeBot:
+        async def send_message(self, chat_id, text, **kw):
+            sent["n"] += 1
+
+    import asyncio
+    asyncio.run(bot._startup_integrity_check(_FakeBot(), owner_id=123))
+    assert sent["n"] == 1
+
+
+def test_startup_notify_writes_state_after_sending(monkeypatch):
+    _patch_startup_check_deps(monkeypatch)
+    before = time.time()
+
+    class _FakeBot:
+        async def send_message(self, chat_id, text, **kw):
+            pass
+
+    import asyncio
+    asyncio.run(bot._startup_integrity_check(_FakeBot(), owner_id=123))
+    ts = bot._read_last_startup_notify_ts()
+    assert ts is not None and ts >= before
