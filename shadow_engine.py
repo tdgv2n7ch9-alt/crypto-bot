@@ -63,6 +63,7 @@ Multi-TF confluence на реальных промоушен-проверках 
 """
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -791,27 +792,72 @@ def _push_pending_archives_sync() -> dict:
     return result
 
 
+_UID_INDEX = None  # None = не прогрет; set() после прогрева -- владелец, задача
+# #245 (санация shadow-журнала, 2026-07-16): in-memory индекс uid'ов активного
+# файла, прогревается ОДИН раз лениво при первом _write_local() (и заново
+# после успешной ротации), а не полным сканом на КАЖДУЮ запись.
+_UID_INDEX_FILE = None  # SHADOW_FILE, для которого прогрет _UID_INDEX -- регресс-
+# замок (найден живьём при написании тестов): без этой проверки индекс, прогретый
+# для одного пути SHADOW_FILE, молча используется после подмены пути (тесты
+# monkeypatch'ат SHADOW_FILE между кейсами; в проде путь не меняется в рантайме,
+# но дешёвая защита не помешает) -- ложные "дубли" из чужого файла.
+
+
+def _record_uid(rec: dict) -> str:
+    """uid = hash(symbol + type + ts) -- владелец, задача #245: диагноз
+    показал, что дубли/вне-порядок живут ИСКЛЮЧИТЕЛЬНО в архиве (санация
+    #233 была применена только локально на тогдашнем контейнере, никогда не
+    закоммичена -- каждый redeploy тянул грязный архив заново из git), а не
+    в активном писателе -- но uid здесь всё равно усиливается сравнительно
+    со старым `_dedup_key` (symbol, ts): добавлено `type` (тип события,
+    напр. "pump_reversal_shadow"/"auto_ema_stack_shadow") на случай, если в
+    будущем один и тот же symbol+ts когда-нибудь получит два РАЗНЫХ по типу
+    события (сейчас compute_shadow() объединяет контуры в один record --
+    tz13_score/bpr_zone_count/oi_funding_ls_shadow как поля одной записи,
+    так что доп. поле уже, а не грубее)."""
+    raw = f"{rec.get('symbol', '')}|{rec.get('type', '')}|{rec.get('ts', '')}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _warm_uid_index() -> set:
+    """Прогрев из ТЕКУЩЕГО активного файла (не архивов -- те уже вне зоны
+    идемпотентности будущих записей). Один read при первом обращении в
+    процессе, не на каждый write."""
+    return {_record_uid(r) for r in _load_local()}
+
+
 def _write_local(record: dict) -> bool:
-    """Владелец, находка 2026-07-15 (регресс: 997 дублей/23 вне порядка в
-    journal/archive/*.json на живом контейнере -- ВСЕ дубли confined к УЖЕ
-    заархивированным записям, 0 в активном файле, 0 в git-копии архивов;
-    расследование указывает на исторический эпизод ДО фикса дефекта watchdog
-    (задача #181, "cwd-scoped pre-start guard" -- два процесса бота писали в
-    один и тот же shadow-файл параллельно, каждый со своим `pump_watch`,
-    оба логировали один и тот же reversal-кандидат с идентичным `ts`).
-    Дефект-источник уже устранён (#181), но идемпотентность на ЗАПИСИ --
-    дешёвая защита от ЛЮБОГО будущего повтора того же класса (двойной
-    процесс/ретрай/гонка), не только от уже известной причины."""
-    records = _load_local()
-    key = _dedup_key(record)
-    if any(_dedup_key(r) == key for r in records):
-        log.info(f"shadow_engine: запись {key} уже есть локально -- пропускаю дубль")
+    """Владелец, задача #245 (2026-07-16): переход с O(n)-скана `_dedup_key`
+    на O(1) проверку по in-memory `_UID_INDEX` (прогретому один раз, не на
+    каждую запись). Монотонность НЕ обрывает запись -- если ts новой записи
+    меньше последней в файле, запись всё равно пишется, но с полем
+    `out_of_order=True` (владелец: "не терять данные"). Append-only: строки
+    не переписываются, только добавляются."""
+    global _UID_INDEX, _UID_INDEX_FILE
+    if _UID_INDEX is None or _UID_INDEX_FILE != SHADOW_FILE:
+        _UID_INDEX = _warm_uid_index()
+        _UID_INDEX_FILE = SHADOW_FILE
+
+    uid = _record_uid(record)
+    if uid in _UID_INDEX:
+        log.info(f"shadow_engine: запись uid={uid[:12]} уже есть локально -- пропускаю дубль")
         return True
+
+    records = _load_local()
+    if records:
+        last_ts = records[-1].get("ts")
+        new_ts = record.get("ts")
+        if last_ts is not None and new_ts is not None and new_ts < last_ts:
+            record = {**record, "out_of_order": True}
     records.append(record)
     ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
-    if ok:
-        _rotate_if_needed()  # локально, без сети -- см. докстринг _rotate_if_needed
-    return ok
+    if not ok:
+        return False
+    _UID_INDEX.add(uid)
+    archived = _rotate_if_needed()  # локально, без сети -- см. докстринг _rotate_if_needed
+    if archived:
+        _UID_INDEX = _warm_uid_index()  # ротация изменила активный файл -- пересобрать индекс
+    return True
 
 
 def integrity_report(records: list) -> dict:
