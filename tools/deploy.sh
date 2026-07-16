@@ -12,6 +12,13 @@
 #      хардкод копии, чтобы не разойтись с реальным конфигом).
 #   3. Пауза 3 минуты (как просил владелец) -- деплой должен успеть
 #      стартовать и завершиться на обычных коммитах.
+#   3.5. Проверка `git merge-base --is-ancestor` -- коммит физически ещё в
+#      истории origin/main? (владелец, находка 2026-07-16, задача #242:
+#      push иногда "смывается" гонкой с shadow-sync коммитами живого бота
+#      даже после ранее введённого батчинга -- main переключается на
+#      коммит БЕЗ пушнутого в предках). Если вытеснен -- авто-rebase +
+#      re-push (объект коммита не теряется, теряется только место в
+#      истории) и повторная пауза перед шагом 4.
 #   4. Сравнивает коммит контейнера (`railway deployment list`) с
 #      запушенным. SUCCESS -- готово. SKIPPED, когда watchPatterns НЕ
 #      затронуты -- ОЖИДАЕМО (journal/docs-only коммит), не проблема,
@@ -110,6 +117,53 @@ _log "watchPatterns hit: $WATCH_HIT"
 # ── шаг 3: пауза 3 минуты ──
 _log "waiting 180s for deploy to start/finish..."
 sleep 180
+
+# ── шаг 3.5: коммит физически ещё в истории main? (владелец, находка
+# 2026-07-16, задача #242) -- push иногда "смывается" гонкой с shadow-sync
+# коммитами живого бота: `git push` репортит "main -> main" (шаг 1), но main
+# ПОЗЖЕ оказывается переключён на коммит, НЕ являющийся потомком пушнутого
+# (не просто "не задеплоился" -- коммит физически вытеснен из истории ветки).
+# Живой инцидент: push card_format.py репортил успех, через 3 мин
+# `railway deployment list` не нашёл деплоя для этого коммита вообще
+# (NOT_FOUND), диагностика подтвердила -- main откатился на более старый
+# коммит. Объект коммита НЕ теряется (git fetch по SHA его находит) --
+# теряется только место в истории ветки, поэтому безопасно ре-запушить: тот
+# же контент, новый SHA после rebase на актуальный tip. Уже существующая
+# митигация (батчинг shadow-sync, GITHUB_SYNC_MIN_INTERVAL_SEC=90с в
+# shadow_engine.py) снизила частоту гонки, но не устранила её полностью --
+# эта проверка ловит рецидив по имени и восстанавливается сама, вместо
+# непонятного FATAL на NOT_FOUND ниже.
+git fetch origin main -q
+if ! git merge-base --is-ancestor "$PUSHED_COMMIT" origin/main 2>/dev/null; then
+    _log "WARNING: коммит $PUSHED_SHORT вытеснен из истории origin/main (гонка с shadow-sync, задача #242) -- пробую безопасный re-push"
+    if ! git rebase origin/main -q; then
+        _log "FATAL: коммит вытеснен из main, авто-rebase для re-push не удался -- нужен ручной разбор"
+        _notify_owner "deploy.sh: FATAL, коммит $PUSHED_SHORT вытеснен из main, авто-re-push не удался, нужен ручной разбор"
+        exit 1
+    fi
+    RECOVER_OK=0
+    for i in 1 2 3; do
+        RECOVER_OUT=$(git push origin main 2>&1)
+        if echo "$RECOVER_OUT" | grep -q "main -> main"; then
+            RECOVER_OK=1
+            break
+        fi
+        _log "re-push attempt $i failed, retrying: $RECOVER_OUT"
+        git fetch origin main -q
+        git rebase origin/main -q || break
+        sleep 2
+    done
+    if [ "$RECOVER_OK" -ne 1 ]; then
+        _log "FATAL: re-push после вытеснения коммита не удался"
+        _notify_owner "deploy.sh: FATAL, re-push после вытеснения коммита $PUSHED_SHORT не удался, нужен ручной разбор"
+        exit 1
+    fi
+    PUSHED_COMMIT=$(git rev-parse HEAD)
+    PUSHED_SHORT=$(git rev-parse --short HEAD)
+    _log "re-pushed as $PUSHED_SHORT after ancestor-loss recovery -- waiting additional 120s"
+    _notify_owner "deploy.sh: коммит вытеснен из main гонкой (задача #242), авто-восстановлен как $PUSHED_SHORT, проверяю деплой"
+    sleep 120
+fi
 
 # ── шаг 4: проверка статуса деплоя для запушенного коммита ──
 check_deploy_status() {
