@@ -136,6 +136,7 @@ import bsc_wallet_monitor
 import bank_setup_monitor
 import ake_setup_monitor
 import zone_alert_monitor
+import journal_persistence
 import card_v2
 
 BOT_TOKEN   = os.getenv("BOT_TOKEN")
@@ -13673,6 +13674,19 @@ async def _start_pump_detector(app):
     security_log.load_startup_events()
     await access_control.load_lockdown_state()
 
+    # Владелец, 2026-07-16 (КРИТИЧНО, живая находка при AKE-расследовании):
+    # journal/ эфемерный -- редеплой стирает state-файлы мониторов (bank/ake/
+    # zone_alert) и AKE wallet-поллер. Restore из GitHub -- ДО первого тика
+    # любого монитора (иначе монитор сам создаст пустой state-файл раньше,
+    # чем мы восстановим, и restore увидит "файл уже есть", не тронет).
+    try:
+        loop = asyncio.get_event_loop()
+        restore_result = await loop.run_in_executor(None, journal_persistence.restore_all_sync)
+        if restore_result["restored"]:
+            log.info(f"journal_persistence: восстановлено при старте: {restore_result['restored']}")
+    except Exception as e:
+        log.error(f"journal_persistence: restore_all_sync упал при старте: {e}")
+
     # Планировщик (в т.ч. send_scheduled/whale_monitor с next_run_time=now(), т.е. первый
     # тик почти сразу) регистрируется ЗДЕСЬ, а не в main() -- раньше scheduler.start()
     # вызывался в main() ДО run_polling(), а post_init (эта функция, с await
@@ -13822,6 +13836,17 @@ async def _start_pump_detector(app):
         security_log.sync_to_github,
         "interval",
         minutes=10,
+    )
+    # Владелец, 2026-07-16 (КРИТИЧНО): периодический push state-файлов
+    # мониторов (bank/ake/zone_alert) + AKE wallet-поллер в GitHub -- та же
+    # причина, что restore при старте выше (journal/ эфемерный). Раз в 15
+    # мин, как явно попросил владелец -- окно потери при падении между
+    # push'ами, не ноль, но несравнимо лучше полного обнуления на редеплое.
+    scheduler.add_job(
+        journal_persistence.sync_all,
+        "interval",
+        seconds=journal_persistence.SYNC_INTERVAL_SEC,
+        args=[app.bot],
     )
     # ПАКЕТ 19, П2 (владелец): дайджест инбокса раз в 30 мин -- тот же
     # cron/interval паттерн, что daily/morning digest выше. Сама функция
