@@ -38,10 +38,29 @@ TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
 AKE_WATCHED_WALLETS = [
     "0x27333Bd8c321a263B0565e69eea3b736b9d1f42c",  # #1, 18.3671% supply на момент фиксации
     "0xD229b65d50E412cC3C394233E7a53A1DAc4dA457",  # #2, 15.0000% supply на момент фиксации
-    "0x73d8bd54f7cf5fab43fe4ef40a62d390644946db",  # #3, теперь маркирован BscScan как
-    # "Binance: Alpha 2.0 Router Proxy" -- подтверждённый отток -9.03% относительно
-    # прошлого снапшота владельца, см. PUMP_REVERSAL_CASES.md
+    "0x73d8bd54f7cf5fab43fe4ef40a62d390644946db",  # #3 -- подтверждено живьём на BscScan
+    # (2026-07-16, форк-исследование): публичный тег "Binance: Alpha 2.0 Router Proxy" --
+    # роутер-контракт биржи (>$36M чужих средств в транзите по 115+ токенам), НЕ личная
+    # инсайдерская позиция -- пересмотр интерпретации "18-15% supply у инсайдера" для
+    # ЭТОГО конкретного адреса, см. PUMP_REVERSAL_CASES.md. Продолжаем следить как за
+    # шлюзом раздачи AKE (наблюдаемый факт: транши на свежие адреса продолжаются
+    # независимо от природы адреса), не как за "инсайдером".
+    "0x561beec8614eaa3038f03bce7cb4f72b3d271d8e",  # "Прокладка №1" -- владелец, 2026-07-16:
+    # BscScan подтвердил живьём -- создан ~19ч назад, funded 0xfA23434A...835eE0428, серия
+    # Dag Swap -> OKX DEX Router 2, вывод в BUSD-T, баланс $0 (однодневка, сливает через DEX
+    # сразу, не копит)
+    "0x0a960739374ffb06772a4bb0d1ef96c5a8ae8e17",  # "Прокладка №2" -- тот же паттерн,
+    # funded 0x25370535...0fE0A28DF, тот же владелец, 2026-07-16
 ]
+
+AKE_WATCHED_RECIPIENTS = [
+    "0x6aba0315493b7e6989041c91181337b662fb1b90",  # владелец, 2026-07-16: получатель траншей
+    # от 0x73d8 сегодня 13:5x -- потенциальный "второй цикл" раздачи, следим как за
+    # получателем (topics[2], НЕ topics[1] -- см. _recipient_topics())
+]
+RECIPIENT_ALERT_THRESHOLD_USD = 10_000  # владелец: "если на него пойдут суммы >$10K --
+# алерт critical «второй цикл?»" -- отдельный, более чувствительный порог, чем общий
+# ALERT_THRESHOLD_USD (см. ниже), намеренно ниже: ранний сигнал важнее лишнего алерта
 
 ALERT_THRESHOLD_USD = 200_000
 
@@ -267,14 +286,28 @@ def get_latest_block():
     return None, None
 
 
+def _addr_topic(addr: str) -> str:
+    return "0x" + addr[2:].rjust(64, "0").lower()
+
+
 def _wallet_topics() -> list:
     """topics[1] со списком адресов -- JSON-RPC трактует список внутри позиции
     топика как OR, так что один запрос покрывает переводы FROM любого из
     отслеживаемых кошельков одновременно."""
-    return [TRANSFER_TOPIC, ["0x" + w[2:].rjust(64, "0").lower() for w in AKE_WATCHED_WALLETS]]
+    return [TRANSFER_TOPIC, [_addr_topic(w) for w in AKE_WATCHED_WALLETS]]
 
 
-def get_transfer_logs(from_block: int, to_block: int) -> tuple:
+def _recipient_topics() -> list:
+    """Владелец, 2026-07-16 (AKE-расследование, задача #2): topics[2] --
+    ловит переводы TO отслеживаемых получателей, ОТ ЛЮБОГО отправителя
+    (topics[1]=None -- "любое значение" в этой позиции JSON-RPC). Отдельный
+    запрос от _wallet_topics() -- та фильтрует по FROM, эта по TO, разные
+    позиции topics, объединить в один список нельзя (AND между позициями,
+    не OR)."""
+    return [TRANSFER_TOPIC, None, [_addr_topic(w) for w in AKE_WATCHED_RECIPIENTS]]
+
+
+def get_transfer_logs(from_block: int, to_block: int, topics: list = None) -> tuple:
     """Transfer-логи AKE от отслеживаемых кошельков в диапазоне блоков, с
     fallback между провайдерами и авто-чанкингом под лимит диапазона каждого.
     Если ВСЕ провайдеры отказали для чанка -- честно пропускает его с
@@ -294,8 +327,13 @@ def get_transfer_logs(from_block: int, to_block: int) -> tuple:
     last_processed_block -- ПОСЛЕДНИЙ блок, реально покрытый успешным запросом
     (< from_block-1, если не покрыт вообще ни один) -- вызывающий код продвигает
     state ровно до этой границы, чтобы partial-success не приводил к повторной
-    обработке и дублированным алертам на следующем тике."""
-    topics = _wallet_topics()
+    обработке и дублированным алертам на следующем тике.
+
+    `topics` -- владелец, 2026-07-16 (задача #2): опционально принимает
+    готовый topics-массив (например _recipient_topics()) вместо дефолтного
+    _wallet_topics() -- та же функция обслуживает и sender-watch, и
+    recipient-watch запросы, вся chunking/fallback-логика не дублируется."""
+    topics = topics if topics is not None else _wallet_topics()
     all_logs = []
     dead_providers = set()
     last_processed_block = from_block - 1
@@ -375,6 +413,18 @@ def format_alert_text(event: dict) -> str:
     )
 
 
+def format_recipient_alert_text(event: dict) -> str:
+    """Владелец, 2026-07-16 (задача #2): отдельный текст для транша НА
+    отслеживаемый адрес-получатель (AKE_WATCHED_RECIPIENTS) -- "второй
+    цикл?" формулировка, честно с вопросом (гипотеза, не факт)."""
+    return (
+        f"🚨 AKE: транш на отслеживаемый адрес -- возможен второй цикл?\n"
+        f"{event['from']} -> {event['to']}: {event['amount']:,.0f} AKE "
+        f"(~${event['usd']:,.0f})\n"
+        f"Блок {event['block']}, tx {event['tx']}"
+    )
+
+
 async def check_ake_wallets(bot, send_system_fn=None, run_in_executor_fn=None) -> int:
     """Джоб (scheduler.add_job, interval POLL_INTERVAL_SEC): сканирует новые
     блоки с последнего прогона (ограничено MAX_BLOCKS_PER_TICK за раз -- остаток
@@ -423,34 +473,61 @@ async def check_ake_wallets(bot, send_system_fn=None, run_in_executor_fn=None) -
     to_block = min(latest, from_block + _effective_max_blocks_per_tick() - 1)
 
     logs, incomplete, last_processed_block = await run_in_executor_fn(get_transfer_logs, from_block, to_block)
+
+    # Владелец, 2026-07-16 (AKE-расследование, задача #2): отдельный запрос
+    # topics[2] -- ловит переводы TO отслеживаемых получателей (AKE_WATCHED_
+    # RECIPIENTS) от ЛЮБОГО отправителя, не только watched-кошельков. Тот же
+    # [from_block, to_block] диапазон, отдельный вызов -- topics[1]/topics[2]
+    # это AND между позициями в JSON-RPC, объединить в один запрос нельзя.
+    recipient_logs, r_incomplete, r_last_processed_block = [], False, from_block - 1
+    if AKE_WATCHED_RECIPIENTS:
+        recipient_logs, r_incomplete, r_last_processed_block = await run_in_executor_fn(
+            get_transfer_logs, from_block, to_block, _recipient_topics())
+
     price = await run_in_executor_fn(get_ake_price_usd)
     new_count = 0
 
-    for lg in logs:
+    # Дедуп по (tx, from, to, amount) -- перевод FROM watched-кошелька TO
+    # watched-получателя попал бы в ОБА запроса иначе (напр. 0x73d8 -> 0x6aba).
+    seen_keys = set()
+    for lg in logs + recipient_logs:
         ev = decode_transfer_log(lg)
+        key = (ev["tx"], ev["from"], ev["to"], ev["amount"])
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
         ev["usd"] = ev["amount"] * price if price > 0 else None
         ev["price_used"] = price
         ev["ts"] = time.time()
         _append_event(ev)
         new_count += 1
 
-        if ev["usd"] is not None and ev["usd"] >= ALERT_THRESHOLD_USD:
+        to_is_watched_recipient = ev["to"] in {w.lower() for w in AKE_WATCHED_RECIPIENTS}
+        if to_is_watched_recipient and ev["usd"] is not None and ev["usd"] >= RECIPIENT_ALERT_THRESHOLD_USD:
+            try:
+                await send_system_fn(bot, format_recipient_alert_text(ev), critical=True)
+            except Exception as e:
+                log.error(f"bsc_wallet_monitor: send_system (recipient) failed: {e}")
+        elif ev["usd"] is not None and ev["usd"] >= ALERT_THRESHOLD_USD:
             try:
                 await send_system_fn(bot, format_alert_text(ev), critical=True)
             except Exception as e:
                 log.error(f"bsc_wallet_monitor: send_system failed: {e}")
 
-    # Продвигаем указатель до РЕАЛЬНО обработанной границы (даже при incomplete --
-    # partial success не должен приводить к повторной обработке уже покрытых
-    # блоков и дублированным алертам на следующем тике).
-    if last_processed_block >= from_block - 1:
-        state["last_scanned_block"] = max(last_scanned, last_processed_block)
+    # Продвигаем указатель до РЕАЛЬНО обработанной границы -- МИНИМУМ из двух
+    # запросов (sender/recipient могли частично отказать в разных местах),
+    # не должно пропустить блок, который НЕ покрыт хотя бы одним из них.
+    combined_last_processed = min(last_processed_block, r_last_processed_block)
+    incomplete = incomplete or r_incomplete
+    if combined_last_processed >= from_block - 1:
+        state["last_scanned_block"] = max(last_scanned, combined_last_processed)
 
     if incomplete:
         # Владелец: "честный skip тика с log.error и [SYS]-уведомлением раз в
         # 15 мин (не молчать и не копить)".
         log.error(f"bsc_wallet_monitor: тик неполный (обработано до блока "
-                  f"{last_processed_block} из {from_block}-{latest}), все RPC-провайдеры отказали")
+                  f"{combined_last_processed} из {from_block}-{latest}), все RPC-провайдеры отказали")
         last_notify = state.get("last_source_down_notify_ts", 0)
         if time.time() - last_notify >= SOURCE_DOWN_NOTIFY_INTERVAL_SEC:
             try:

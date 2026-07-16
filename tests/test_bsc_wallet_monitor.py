@@ -212,7 +212,7 @@ def test_below_threshold_logs_shadow_but_no_alert(monkeypatch, tmp_path):
     bwm._save_state({"last_scanned_block": 999})
     monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
     monkeypatch.setattr(bwm, "get_transfer_logs",
-                         lambda a, b: ([_transfer_log(bwm.AKE_WATCHED_WALLETS[0], "0xdead", 100, block=1000)], False, b))
+                         lambda a, b, topics=None: ([_transfer_log(bwm.AKE_WATCHED_WALLETS[0], "0xdead", 100, block=1000)], False, b))
     monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 100 * 0.001 = $0.1, ниже порога
 
     sent = []
@@ -239,7 +239,7 @@ def test_synthetic_run_known_transfer_above_200k_triggers_critical_alert(monkeyp
 
     wallet = bwm.AKE_WATCHED_WALLETS[0]
     known_log = _transfer_log(wallet, "0x00000000000000000000000000000000000000ee", 300_000_000, block=1000, tx="0xknown200k")
-    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: ([known_log], False, b))
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b, topics=None: ([known_log], False, b))
     monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 300M * 0.001 = $300K
 
     sent = []
@@ -325,7 +325,7 @@ def test_check_ake_wallets_uses_run_in_executor_for_blocking_calls(monkeypatch, 
     monkeypatch.setattr(bwm, "get_latest_block",
                          _mk("get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0])))
     monkeypatch.setattr(bwm, "get_transfer_logs",
-                         _mk("get_transfer_logs", lambda a, b: ([], False, b)))
+                         _mk("get_transfer_logs", lambda a, b, topics=None: ([], False, b)))
     monkeypatch.setattr(bwm, "get_ake_price_usd",
                          _mk("get_ake_price_usd", lambda: 0.001))
 
@@ -347,7 +347,7 @@ def test_check_ake_wallets_bounds_catchup_to_max_blocks_per_tick(monkeypatch, tm
     monkeypatch.setattr(bwm, "get_latest_block", lambda: (latest, bwm.RPC_PROVIDERS[0]))
 
     captured_range = {}
-    def fake_transfer_logs(a, b):
+    def fake_transfer_logs(a, b, topics=None):
         captured_range["from"] = a
         captured_range["to"] = b
         return [], False, b
@@ -368,7 +368,7 @@ def test_check_ake_wallets_incomplete_advances_state_only_to_processed_boundary(
     _fresh_state_files(monkeypatch, tmp_path)
     bwm._save_state({"last_scanned_block": 999})
     monkeypatch.setattr(bwm, "get_latest_block", lambda: (1200, bwm.RPC_PROVIDERS[0]))
-    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: ([], True, 1050))  # incomplete=True, дошли до 1050
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b, topics=None: ([], True, 1050))  # incomplete=True, дошли до 1050
     monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)
 
     sent = []
@@ -388,7 +388,7 @@ def test_check_ake_wallets_down_notify_not_spammed_every_tick(monkeypatch, tmp_p
     _fresh_state_files(monkeypatch, tmp_path)
     bwm._save_state({"last_scanned_block": 999, "last_source_down_notify_ts": time.time()})
     monkeypatch.setattr(bwm, "get_latest_block", lambda: (1200, bwm.RPC_PROVIDERS[0]))
-    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b: ([], True, 999))
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b, topics=None: ([], True, 999))
     monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)
 
     sent = []
@@ -397,6 +397,124 @@ def test_check_ake_wallets_down_notify_not_spammed_every_tick(monkeypatch, tmp_p
 
     _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send))
     assert sent == []  # только что уведомляли -- в пределах интервала молчим
+
+
+# ── recipient-watch (владелец, 2026-07-16, задача #2) ───────────────────────
+
+def test_recipient_topics_watches_to_position_any_sender():
+    topics = bwm._recipient_topics()
+    assert topics[0] == bwm.TRANSFER_TOPIC
+    assert topics[1] is None  # любой отправитель
+    assert topics[2] == [bwm._addr_topic(w) for w in bwm.AKE_WATCHED_RECIPIENTS]
+
+
+def test_check_ake_wallets_recipient_transfer_above_threshold_triggers_second_cycle_alert(monkeypatch, tmp_path):
+    """Владелец: "если на 0x6aba пойдут суммы >$10K -- алерт critical
+    «второй цикл?»" -- отдельный, более чувствительный порог, чем общий
+    $200K. Отправитель ЛЮБОЙ (не обязательно watched-кошелёк)."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
+
+    recipient = bwm.AKE_WATCHED_RECIPIENTS[0]
+    ev_log = _transfer_log("0xfreshsender000000000000000000000000000e", recipient,
+                            15_000_000, block=1000, tx="0xsecondcycle")
+
+    def fake_get_transfer_logs(a, b, topics=None):
+        if topics is not None:  # recipient-запрос
+            return [ev_log], False, b
+        return [], False, b  # sender-запрос -- пусто
+
+    monkeypatch.setattr(bwm, "get_transfer_logs", fake_get_transfer_logs)
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 15M * 0.001 = $15K > $10K
+
+    sent = []
+    async def fake_send_system(bot, text, critical=False):
+        sent.append((text, critical))
+
+    n = _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send_system))
+    assert n == 1
+    assert len(sent) == 1
+    text, critical = sent[0]
+    assert critical is True
+    assert "второй цикл" in text.lower()
+    assert recipient.lower() in text.lower()
+
+
+def test_check_ake_wallets_recipient_transfer_below_threshold_logs_shadow_no_alert(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
+
+    recipient = bwm.AKE_WATCHED_RECIPIENTS[0]
+    ev_log = _transfer_log("0xfreshsender000000000000000000000000000e", recipient,
+                            5_000, block=1000, tx="0xsmall")
+
+    def fake_get_transfer_logs(a, b, topics=None):
+        if topics is not None:
+            return [ev_log], False, b
+        return [], False, b
+
+    monkeypatch.setattr(bwm, "get_transfer_logs", fake_get_transfer_logs)
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 5000 * 0.001 = $5 -- ниже $10K
+
+    sent = []
+    async def fake_send_system(bot, text, critical=False):
+        sent.append((text, critical))
+
+    n = _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send_system))
+    assert n == 1
+    assert sent == []
+    events = bwm._load_events()
+    assert len(events) == 1
+
+
+def test_check_ake_wallets_dedups_transfer_matching_both_sender_and_recipient_query(monkeypatch, tmp_path):
+    """0x73d8 (watched-кошелёк, sender) -> 0x6aba (watched-получатель) --
+    один и тот же лог вернётся ОБОИМИ запросами (sender-topics и
+    recipient-topics), должен посчитаться и алертиться РОВНО один раз, через
+    recipient-ветку ("второй цикл?"), не дважды."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1001, bwm.RPC_PROVIDERS[0]))
+
+    wallet = bwm.AKE_WATCHED_WALLETS[0]
+    recipient = bwm.AKE_WATCHED_RECIPIENTS[0]
+    ev_log = _transfer_log(wallet, recipient, 20_000_000, block=1000, tx="0xbothqueries")
+
+    monkeypatch.setattr(bwm, "get_transfer_logs", lambda a, b, topics=None: ([ev_log], False, b))
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)  # 20M * 0.001 = $20K
+
+    sent = []
+    async def fake_send_system(bot, text, critical=False):
+        sent.append((text, critical))
+
+    n = _run(bwm.check_ake_wallets(bot=None, send_system_fn=fake_send_system))
+    assert n == 1  # НЕ 2 -- дедуп по (tx, from, to, amount)
+    assert len(sent) == 1  # ровно один алерт
+    text, critical = sent[0]
+    assert "второй цикл" in text.lower()  # recipient-порог ниже -- он и сработал
+
+
+def test_check_ake_wallets_state_advances_to_min_of_both_queries(monkeypatch, tmp_path):
+    """Партиал-успех: sender-запрос дошёл до 1050, recipient-запрос -- только
+    до 1020 (разные провайдеры/отказы). state должен продвинуться до МЕНЬШЕГО
+    (1020), иначе следующий тик пропустит непокрытые блоки 1021-1050 для
+    recipient-мониторинга."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    bwm._save_state({"last_scanned_block": 999})
+    monkeypatch.setattr(bwm, "get_latest_block", lambda: (1200, bwm.RPC_PROVIDERS[0]))
+
+    def fake_get_transfer_logs(a, b, topics=None):
+        if topics is not None:
+            return [], False, 1020  # recipient-запрос -- дошёл только до 1020
+        return [], False, 1050  # sender-запрос -- дошёл до 1050
+    monkeypatch.setattr(bwm, "get_transfer_logs", fake_get_transfer_logs)
+    monkeypatch.setattr(bwm, "get_ake_price_usd", lambda: 0.001)
+
+    _run(bwm.check_ake_wallets(bot=None, send_system_fn=lambda *a, **k: None))
+    state = bwm._load_state()
+    assert state["last_scanned_block"] == 1020
 
 
 # ── _build_rpc_providers() (владелец, 2026-07-16: QuickNode primary) ───────
