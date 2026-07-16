@@ -293,6 +293,53 @@ def test_build_daily_digest_shows_down_sources(monkeypatch, tmp_path):
     assert text.count("_") % 2 == 0, "нечётное число '_' -- сломает parse_mode=\"Markdown\" в Telegram"
 
 
+def _empty_digest_deps(monkeypatch, tmp_path):
+    monkeypatch.setattr(sj, "_journal", {})
+    monkeypatch.setattr(daily_metrics, "shadow_engine_file", lambda: str(tmp_path / "nope.json"))
+    monkeypatch.setattr(daily_metrics.whale_radar, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.level_watch, "EVENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(daily_metrics.event_radar, "EVENTS_DIR", str(tmp_path / "event_radar_empty"))
+    monkeypatch.setattr(daily_metrics.security_log, "_events", [])
+
+
+def test_build_daily_digest_shows_quicknode_budget_honest_nd_when_no_data(monkeypatch, tmp_path):
+    """Владелец, 2026-07-16, бюджет-контроль QuickNode credits."""
+    _empty_digest_deps(monkeypatch, tmp_path)
+    bsc = daily_metrics.bsc_wallet_monitor
+    monkeypatch.setattr(bsc, "QUICKNODE_CALL_LOG_FILE", str(tmp_path / "quicknode_call_log.json"))
+    text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert "QuickNode бюджет" in text
+    assert "н/д" in text
+
+
+def test_build_daily_digest_shows_quicknode_budget_projection(monkeypatch, tmp_path):
+    _empty_digest_deps(monkeypatch, tmp_path)
+    bsc = daily_metrics.bsc_wallet_monitor
+    now = 1_000_000.0
+    monkeypatch.setattr(bsc, "QUICKNODE_CALL_LOG_FILE", str(tmp_path / "quicknode_call_log.json"))
+    monkeypatch.setattr(bsc, "_budget_throttled", False)
+    bsc._atomic_write_json(bsc.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": now - 3600, "calls": {"eth_getLogs": 10},
+    })
+    text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=now)
+    assert "QuickNode бюджет" in text
+    assert "прогноз/мес" in text
+    assert "использовано с рестарта" in text
+
+
+def test_build_daily_digest_shows_quicknode_over_budget_warning(monkeypatch, tmp_path):
+    _empty_digest_deps(monkeypatch, tmp_path)
+    bsc = daily_metrics.bsc_wallet_monitor
+    now = 1_000_000.0
+    monkeypatch.setattr(bsc, "QUICKNODE_CALL_LOG_FILE", str(tmp_path / "quicknode_call_log.json"))
+    monkeypatch.setattr(bsc, "_budget_throttled", False)
+    bsc._atomic_write_json(bsc.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": now - 3600, "calls": {"eth_getLogs": 100_000},
+    })
+    text = daily_metrics.build_daily_digest(_FakeBotModule(), now_ts=now)
+    assert "авто-сокращение" in text
+
+
 def test_build_daily_digest_shows_shadow_stats_breakdown(monkeypatch, tmp_path):
     now = 1_000_000.0
     shadow_file = tmp_path / "shadow_signals.json"

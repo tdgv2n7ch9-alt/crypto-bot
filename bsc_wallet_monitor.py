@@ -71,6 +71,21 @@ def _build_rpc_providers() -> list:
 RPC_PROVIDERS = _build_rpc_providers()
 RPC_ETH_CALL = "https://bsc-dataseed.binance.org"  # eth_call работает, eth_getLogs -- нет
 
+# Владелец, 2026-07-16, бюджет-контроль QuickNode credits -- проверено живьём
+# (https://www.quicknode.com/api-credits/bsc, "All methods*" = 20 credits):
+# eth_blockNumber/eth_getLogs/eth_call на BSC все под флэт-тарифом 20
+# credits/вызов (ни один не входит в исключения "Large Calls" x4 или
+# "Advanced APIs" x2 -- см. https://www.quicknode.com/api-credits). Точный
+# месячный лимит ИМЕННО тарифа этого аккаунта ("discover") публично не
+# сверен (маркетинговые страницы дают разные цифры для разных тиров, ни
+# одна явно не названа "discover") -- честно не гадаем, используем порог
+# тревоги, заданный владельцем напрямую (MONTHLY_CREDIT_BUDGET), а не
+# вычисленный из документации.
+QUICKNODE_CREDITS_PER_CALL = 20
+MONTHLY_CREDIT_BUDGET = 8_000_000  # владелец: "если прогноз >8M credits"
+REDUCED_MAX_BLOCKS_PER_TICK = 20  # владелец: "например, только последние 20 блоков"
+_BUDGET_MIN_SAMPLE_SEC = 300  # честный "н/д", пока не накопилось хотя бы 5 мин наблюдения
+
 POLL_INTERVAL_SEC = 60
 REQUEST_TIMEOUT_SEC = 10  # владелец, находка 2026-07-15: жёсткий потолок на КАЖДЫЙ
 # сетевой вызов -- см. критический регресс ниже (было до 15с без единого таймаут-бюджета)
@@ -137,7 +152,91 @@ def _append_event(event: dict) -> None:
     _atomic_write_json(EVENTS_FILE, events)
 
 
+QUICKNODE_CALL_LOG_FILE = os.path.join(_JOURNAL_DIR, "quicknode_call_log.json")
+
+
+def _load_call_log() -> dict:
+    try:
+        with open(QUICKNODE_CALL_LOG_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _record_quicknode_call(method: str) -> None:
+    """Владелец, 2026-07-16 (бюджет-контроль credits): считает вызовы ТОЛЬКО
+    к QuickNode (не к blastapi-фолбэку -- у него нет кредитного бюджета в
+    этом контексте). journal/quicknode_call_log.json -- тот же паттерн, что
+    EVENTS_FILE (эфемерный диск, счёт "с последнего рестарта процесса", не
+    маскируем это в отчёте, см. daily_metrics.py докстринг про тот же
+    класс ограничения для whale/level-watch событий)."""
+    log_data = _load_call_log()
+    if "process_start_ts" not in log_data:
+        log_data["process_start_ts"] = time.time()
+        log_data["calls"] = {}
+    calls = log_data.setdefault("calls", {})
+    calls[method] = calls.get(method, 0) + 1
+    _atomic_write_json(QUICKNODE_CALL_LOG_FILE, log_data)
+
+
+_budget_throttled = False  # module-level -- раз включённый throttle держится до рестарта
+# процесса (не мигает туда-обратно на пограничных значениях прогноза каждый тик)
+
+
+def quicknode_budget_report(now_ts: float = None) -> dict:
+    """Прогноз месячного расхода QuickNode credits по фактической скорости
+    вызовов с последнего рестарта процесса (экстраполяция, не факт за
+    календарный месяц -- честно помечено в отчёте). {"ok": False, "reason":
+    ...} до накопления _BUDGET_MIN_SAMPLE_SEC наблюдения -- не гадаем на
+    первых секундах жизни процесса."""
+    now = now_ts if now_ts is not None else time.time()
+    log_data = _load_call_log()
+    start_ts = log_data.get("process_start_ts")
+    if start_ts is None:
+        return {"ok": False, "reason": "ни одного вызова QuickNode ещё не было"}
+    elapsed_sec = now - start_ts
+    if elapsed_sec < _BUDGET_MIN_SAMPLE_SEC:
+        return {"ok": False, "reason": f"недостаточно данных с рестарта ({elapsed_sec:.0f}с < {_BUDGET_MIN_SAMPLE_SEC}с)"}
+    calls = log_data.get("calls", {})
+    total_calls = sum(calls.values())
+    credits_used = total_calls * QUICKNODE_CREDITS_PER_CALL
+    credits_per_day = credits_used / elapsed_sec * 86400
+    credits_per_month = credits_per_day * 30
+    return {
+        "ok": True,
+        "elapsed_hours": elapsed_sec / 3600,
+        "calls_by_method": dict(calls),
+        "credits_used_since_restart": credits_used,
+        "credits_per_day_projected": credits_per_day,
+        "credits_per_month_projected": credits_per_month,
+        "over_budget": credits_per_month > MONTHLY_CREDIT_BUDGET,
+        "throttled": _budget_throttled,
+    }
+
+
+def _effective_max_blocks_per_tick() -> int:
+    """Владелец, 2026-07-16: "если прогноз >8M credits -- сократить глубину
+    тика". Throttle включается один раз за жизнь процесса и держится (не
+    переключается туда-обратно на каждом тике вокруг порога) -- сработавшее
+    предупреждение остаётся видимым в вечернем брифе до следующего рестарта,
+    честно, а не молчит после случайного возврата прогноза под порог."""
+    global _budget_throttled
+    if _budget_throttled:
+        return REDUCED_MAX_BLOCKS_PER_TICK
+    report = quicknode_budget_report()
+    if report["ok"] and report["over_budget"]:
+        _budget_throttled = True
+        log.error(f"bsc_wallet_monitor: прогноз QuickNode credits/мес "
+                  f"{report['credits_per_month_projected']:,.0f} > бюджета "
+                  f"{MONTHLY_CREDIT_BUDGET:,.0f} -- сокращаю глубину тика до "
+                  f"{REDUCED_MAX_BLOCKS_PER_TICK} блоков")
+        return REDUCED_MAX_BLOCKS_PER_TICK
+    return MAX_BLOCKS_PER_TICK
+
+
 def _rpc_call(url: str, method: str, params: list, timeout: int = REQUEST_TIMEOUT_SEC) -> dict:
+    if url == os.environ.get("QUICKNODE_BSC_URL"):
+        _record_quicknode_call(method)
     r = requests.post(url, json={"jsonrpc": "2.0", "method": method, "params": params, "id": 1}, timeout=timeout)
     return r.json()
 
@@ -321,7 +420,7 @@ async def check_ake_wallets(bot, send_system_fn=None, run_in_executor_fn=None) -
     from_block = last_scanned + 1
     if from_block > latest:
         return 0
-    to_block = min(latest, from_block + MAX_BLOCKS_PER_TICK - 1)
+    to_block = min(latest, from_block + _effective_max_blocks_per_tick() - 1)
 
     logs, incomplete, last_processed_block = await run_in_executor_fn(get_transfer_logs, from_block, to_block)
     price = await run_in_executor_fn(get_ake_price_usd)

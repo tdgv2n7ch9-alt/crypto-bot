@@ -179,6 +179,8 @@ def test_price_fetch_failure_returns_zero_not_exception(monkeypatch):
 def _fresh_state_files(monkeypatch, tmp_path):
     monkeypatch.setattr(bwm, "STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setattr(bwm, "EVENTS_FILE", str(tmp_path / "events.json"))
+    monkeypatch.setattr(bwm, "QUICKNODE_CALL_LOG_FILE", str(tmp_path / "quicknode_call_log.json"))
+    monkeypatch.setattr(bwm, "_budget_throttled", False)
 
 
 def test_first_run_only_bookmarks_no_history_scan(monkeypatch, tmp_path):
@@ -419,3 +421,110 @@ def test_build_rpc_providers_falls_back_to_blastapi_only_when_unset(monkeypatch)
 def test_max_blocks_per_tick_is_50():
     """Владелец, 2026-07-16: возвращено на 50 после перехода на QuickNode."""
     assert bwm.MAX_BLOCKS_PER_TICK == 50
+
+
+# ── бюджет-контроль QuickNode credits (владелец, 2026-07-16) ───────────────
+
+def test_record_quicknode_call_only_counts_quicknode_url(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    monkeypatch.setenv("QUICKNODE_BSC_URL", "https://qn.test/abc")
+
+    def fake_post(url, json, timeout):
+        class _R:
+            def json(_self):
+                return {"result": "0x1"}
+        return _R()
+
+    monkeypatch.setattr(bwm.requests, "post", fake_post)
+    bwm._rpc_call("https://qn.test/abc", "eth_blockNumber", [])
+    bwm._rpc_call("https://bsc-mainnet.public.blastapi.io", "eth_blockNumber", [])  # не считается
+
+    log_data = bwm._load_call_log()
+    assert log_data["calls"] == {"eth_blockNumber": 1}
+
+
+def test_quicknode_budget_report_not_ok_before_min_sample(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    now = time.time()
+    bwm._atomic_write_json(bwm.QUICKNODE_CALL_LOG_FILE, {"process_start_ts": now, "calls": {"eth_getLogs": 5}})
+    report = bwm.quicknode_budget_report(now_ts=now + 60)  # 60с < _BUDGET_MIN_SAMPLE_SEC
+    assert report["ok"] is False
+
+
+def test_quicknode_budget_report_projects_monthly_credits(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    now = time.time()
+    start = now - 3600  # час назад
+    bwm._atomic_write_json(bwm.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": start,
+        "calls": {"eth_blockNumber": 60, "eth_getLogs": 120},
+    })
+    report = bwm.quicknode_budget_report(now_ts=now)
+    assert report["ok"] is True
+    total_calls = 180
+    expected_credits_used = total_calls * bwm.QUICKNODE_CREDITS_PER_CALL
+    assert report["credits_used_since_restart"] == expected_credits_used
+    expected_per_day = expected_credits_used / 3600 * 86400
+    assert abs(report["credits_per_day_projected"] - expected_per_day) < 1
+    assert abs(report["credits_per_month_projected"] - expected_per_day * 30) < 30
+
+
+def test_quicknode_budget_report_flags_over_budget(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    now = time.time()
+    start = now - 3600
+    # Огромный объём вызовов за час -> прогноз/мес заведомо выше 8M.
+    bwm._atomic_write_json(bwm.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": start,
+        "calls": {"eth_getLogs": 100_000},
+    })
+    report = bwm.quicknode_budget_report(now_ts=now)
+    assert report["ok"] is True
+    assert report["over_budget"] is True
+
+
+def test_quicknode_budget_report_under_budget_not_flagged(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    now = time.time()
+    start = now - 3600
+    bwm._atomic_write_json(bwm.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": start,
+        "calls": {"eth_getLogs": 10},
+    })
+    report = bwm.quicknode_budget_report(now_ts=now)
+    assert report["ok"] is True
+    assert report["over_budget"] is False
+
+
+def test_effective_max_blocks_per_tick_throttles_when_over_budget(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    now = time.time()
+    start = now - 3600
+    bwm._atomic_write_json(bwm.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": start,
+        "calls": {"eth_getLogs": 100_000},
+    })
+    monkeypatch.setattr(bwm.time, "time", lambda: now)
+    assert bwm._effective_max_blocks_per_tick() == bwm.REDUCED_MAX_BLOCKS_PER_TICK
+    assert bwm._budget_throttled is True
+
+
+def test_effective_max_blocks_per_tick_stays_throttled_once_triggered(monkeypatch, tmp_path):
+    """Владелец: сработавшее сокращение держится до рестарта, не мигает
+    туда-обратно на пограничных значениях прогноза каждый тик."""
+    _fresh_state_files(monkeypatch, tmp_path)
+    monkeypatch.setattr(bwm, "_budget_throttled", True)
+    assert bwm._effective_max_blocks_per_tick() == bwm.REDUCED_MAX_BLOCKS_PER_TICK
+
+
+def test_effective_max_blocks_per_tick_normal_when_under_budget(monkeypatch, tmp_path):
+    _fresh_state_files(monkeypatch, tmp_path)
+    now = time.time()
+    start = now - 3600
+    bwm._atomic_write_json(bwm.QUICKNODE_CALL_LOG_FILE, {
+        "process_start_ts": start,
+        "calls": {"eth_getLogs": 10},
+    })
+    monkeypatch.setattr(bwm.time, "time", lambda: now)
+    assert bwm._effective_max_blocks_per_tick() == bwm.MAX_BLOCKS_PER_TICK
+    assert bwm._budget_throttled is False

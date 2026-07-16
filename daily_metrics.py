@@ -25,6 +25,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+import bsc_wallet_monitor
 import event_radar
 import level_watch
 import security_log
@@ -253,6 +254,20 @@ def build_daily_digest(bot_module, now_ts: float = None) -> str:
         lines.append("  " + " · ".join(bad))
     else:
         lines.append("  Все источники в норме")
+
+    lines += ["", "💳 *QuickNode бюджет (AKE-поллер):*"]
+    qn = bsc_wallet_monitor.quicknode_budget_report(now_ts=now)
+    if not qn["ok"]:
+        lines.append(f"  н/д ({qn['reason']})")
+    else:
+        status_emoji = "🔴" if qn["over_budget"] else "🟢"
+        lines.append(f"  {status_emoji} прогноз/мес: {qn['credits_per_month_projected']:,.0f} credits "
+                      f"(бюджет {bsc_wallet_monitor.MONTHLY_CREDIT_BUDGET:,.0f})")
+        lines.append(f"  использовано с рестарта: {qn['credits_used_since_restart']:,.0f} "
+                      f"за {qn['elapsed_hours']:.1f}ч")
+        if qn["over_budget"]:
+            lines.append(f"  ⚠️ авто-сокращение глубины тика до {bsc_wallet_monitor.REDUCED_MAX_BLOCKS_PER_TICK} "
+                          f"блоков {'включено' if qn['throttled'] else 'сработает на следующем тике'}")
 
     sec = security_log.get_daily_summary(now_ts=now)
     lines += ["", "🔐 *Security-лог за сутки:*"]
