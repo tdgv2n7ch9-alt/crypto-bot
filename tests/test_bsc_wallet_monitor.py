@@ -403,7 +403,9 @@ def test_build_rpc_providers_uses_quicknode_as_primary_when_set(monkeypatch):
     monkeypatch.setenv("QUICKNODE_BSC_URL", "https://my-endpoint.quiknode.pro/abc123/")
     providers = bwm._build_rpc_providers()
     assert providers[0]["url"] == "https://my-endpoint.quiknode.pro/abc123/"
-    assert providers[0]["max_range"] == 50
+    # владелец, живая находка 2026-07-16: QuickNode discover-план -- код -32615
+    # "limited to a 5 range" на КАЖДОМ чанке при max_range=50 -- 5 подтверждён живьём.
+    assert providers[0]["max_range"] == 5
     assert providers[1]["url"] == "https://bsc-mainnet.public.blastapi.io"
 
 

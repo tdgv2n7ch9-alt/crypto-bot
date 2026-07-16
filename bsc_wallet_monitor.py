@@ -50,11 +50,18 @@ def _build_rpc_providers() -> list:
     выделенный платный эндпоинт в Railway Variables); blastapi -- всегда
     fallback. Функция, а не константа-на-импорте -- чтобы тесты могли
     monkeypatch'ить os.environ ДО вызова и получить предсказуемый список без
-    завязки на реальные Railway-переменные окружения процесса."""
+    завязки на реальные Railway-переменные окружения процесса.
+
+    max_range=5 -- живая находка сразу после первого деплоя (2026-07-16):
+    аккаунт на QuickNode discover-плане, eth_getLogs код -32615 "limited to
+    a 5 range" на КАЖДОМ чанке с изначально предполагавшимся max_range=50 --
+    тик всё равно докатывался (fallback на blastapi отрабатывал), но с
+    гарантированной лишней ошибкой на каждый 50-блочный чанк вместо чистого
+    успеха. 5 -- подтверждённый живьём потолок ЭТОГО плана, не догадка."""
     providers = []
     quicknode_url = os.environ.get("QUICKNODE_BSC_URL")
     if quicknode_url:
-        providers.append({"url": quicknode_url, "max_range": 50})
+        providers.append({"url": quicknode_url, "max_range": 5})
     else:
         log.error("bsc_wallet_monitor: QUICKNODE_BSC_URL не задан -- работаю только на fallback-провайдере")
     providers.append({"url": "https://bsc-mainnet.public.blastapi.io", "max_range": 10})
