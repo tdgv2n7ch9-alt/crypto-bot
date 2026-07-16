@@ -6753,6 +6753,14 @@ async def whale_monitor(bot: Bot):
     except:
         return
 
+    # Владелец, 2026-07-16 (внеочередной аудит блокирующих вызовов, Tier 1
+    # #1): _get_ls_ratio() -- синхронный requests.get к Bybit, БЕЗ кэша,
+    # вызывался напрямую для КАЖДОГО из 15 символов в _WHALE_WATCH подряд,
+    # без единой точки await -- тот же класс регресса, что check_supertrend_
+    # signals (см. фикс того же дня). _get_oi_change() тоже завёрнут для
+    # полноты -- его внутренний кэш (_OI_CG_TTL) обычно спасает, но на
+    # холодном/истёкшем кэше первый вызов в цикле тоже блокирует.
+    loop = asyncio.get_event_loop()
     alerts_sent = 0
     for sym in _WHALE_WATCH:
         try:
@@ -6767,8 +6775,8 @@ async def whale_monitor(bot: Bot):
             price_fresh = fd.get("price_fresh", "")
             if price <= 0: continue
 
-            oi = _get_oi_change(sym)
-            ls = _get_ls_ratio(sym)
+            oi = await loop.run_in_executor(None, _get_oi_change, sym)
+            ls = await loop.run_in_executor(None, _get_ls_ratio, sym)
 
             w = _analyze_whale_signal(sym, funding, oi, ls, price, price_fresh,
                                        fd.get("ch24h", 0), fd.get("ch7d", 0), fd.get("rank"), fd.get("vol", 0))
