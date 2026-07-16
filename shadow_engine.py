@@ -63,6 +63,7 @@ Multi-TF confluence на реальных промоушен-проверках 
 """
 import asyncio
 import base64
+import fcntl
 import hashlib
 import json
 import logging
@@ -690,6 +691,9 @@ def _unique_archive_path(from_date: str, to_date: str) -> str:
     return path
 
 
+ROTATE_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", ".shadow_rotate.lock")
+
+
 def _rotate_if_needed(now_ts: float = None) -> str:
     """П-Ротация (владелец, 2026-07-14) -- см. докстринг у ROTATION_SIZE_BYTES
     выше. Активный файл проверяется на размер (дешёвый os.path.getsize, без
@@ -698,7 +702,35 @@ def _rotate_if_needed(now_ts: float = None) -> str:
     записи. Возвращает путь нового архивного файла при успешной ротации,
     иначе "" (файл маленький / нечего архивировать в пределах keep-окна /
     ошибка -- залогирована, ротация НЕ блокирует уже выполненную запись,
-    просто откладывается до следующего вызова)."""
+    просто откладывается до следующего вызова).
+
+    Владелец, приёмка v130 (2026-07-16): живая находка -- в окне Railway
+    rolling-deploy старый и новый контейнер кратковременно ОБА живы на общем
+    диске (не выдумка -- shadow_engine.py собственный докстринг выше уже
+    честно фиксирует "Railway ephemeral, обнуляется при редеплое", но
+    наблюдалось иначе на практике: active-файл пережил несколько реальных
+    редеплоев подряд). Если оба процесса в этом окне почти одновременно
+    решают ротировать один и тот же большой активный файл, каждый читает
+    ОДИН И ТОТ ЖЕ снапшот через `_load_local()` ДО того, как другой успел
+    его обрезать -- оба архивируют одни и те же старые записи в РАЗНЫЕ
+    файлы (`_unique_archive_path` расходится по суффиксу, коллизии имени
+    не будет, но данные задублированы), и "выживает" `to_keep` только
+    того процесса, что записал `SHADOW_FILE` последним -- итог: несколько
+    архивных файлов с overlapping-содержимым, `duplicate_count` растёт
+    заново после каждой такой гонки. Файловый advisory-лок (`fcntl.flock`,
+    non-blocking) -- если лок занят, ротация просто откладывается до
+    следующего вызова (не блокирует уже выполненную запись, тот же принцип,
+    что и остальные "отложить, не терять" ветки этой функции)."""
+    lock_fd = None
+    try:
+        os.makedirs(os.path.dirname(ROTATE_LOCK_FILE), exist_ok=True)
+        lock_fd = os.open(ROTATE_LOCK_FILE, os.O_CREAT | os.O_RDWR)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        log.info("shadow_engine: ротация -- лок уже занят другим процессом, откладываю")
+        return ""
     try:
         if not os.path.exists(SHADOW_FILE):
             return ""
@@ -729,6 +761,12 @@ def _rotate_if_needed(now_ts: float = None) -> str:
     except Exception as e:
         log.error(f"shadow_engine: ротация упала ({e}) -- активный файл не тронут")
         return ""
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        os.close(lock_fd)
 
 
 def _load_pushed_archive_names() -> set:

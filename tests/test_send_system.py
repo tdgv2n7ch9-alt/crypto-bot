@@ -282,7 +282,11 @@ def test_daily_backup_success_no_alert(monkeypatch):
 
 # ── retrofit: _startup_integrity_check() uses send_system, non-critical ──
 
-def test_startup_integrity_check_uses_send_system_non_critical(monkeypatch):
+def test_startup_integrity_check_uses_send_system_non_critical(monkeypatch, tmp_path):
+    # Владелец, приёмка v130 (2026-07-16): STARTUP_NOTIFY_STATE_FILE изолируется
+    # от реального journal/ -- иначе повторный локальный прогон этого теста в
+    # течение 30 мин throttle'ится собственным же предыдущим запуском.
+    monkeypatch.setattr(bot, "STARTUP_NOTIFY_STATE_FILE", str(tmp_path / "last_startup_notify.json"))
     calls = []
 
     async def _fake_send_system(bot_arg, text, critical=False, **kw):

@@ -23,6 +23,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
     monkeypatch.setattr(se, "ARCHIVE_DIR", str(tmp_path / "archive"))
     monkeypatch.setattr(se, "ARCHIVE_MANIFEST", str(tmp_path / "archive" / ".pushed.json"))
+    monkeypatch.setattr(se, "ROTATE_LOCK_FILE", str(tmp_path / ".shadow_rotate.lock"))
 
 
 def _write_active(path: str, records: list):
@@ -110,6 +111,46 @@ def test_rotate_no_data_loss_total_records_preserved(monkeypatch, tmp_path):
     all_after = se.get_local_records()
     assert len(all_after) == len(records)
     assert {r["symbol"] for r in all_after} == {r["symbol"] for r in records}
+
+
+def test_rotate_skips_when_lock_already_held(monkeypatch, tmp_path):
+    """Владелец, приёмка v130 (2026-07-16): живая находка -- Railway
+    rolling-deploy оставляет старый и новый контейнер кратковременно живыми
+    на общем диске; если оба почти одновременно решают ротировать один и
+    тот же большой файл, каждый архивирует одни и те же старые записи в
+    РАЗНЫЕ файлы -- дубли. Лок должен предотвращать конкурентную ротацию:
+    если лок уже занят (эмулируем другим держателем), _rotate_if_needed()
+    отступает, ничего не архивирует, файл не трогает."""
+    import fcntl
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
+    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    now = time.time()
+    _write_active(se.SHADOW_FILE, [_rec("BTCUSDT", now - 10 * 86400)])
+
+    os.makedirs(os.path.dirname(se.ROTATE_LOCK_FILE), exist_ok=True)
+    holder_fd = os.open(se.ROTATE_LOCK_FILE, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(holder_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = se._rotate_if_needed(now_ts=now)
+        assert result == ""
+        assert not os.path.isdir(se.ARCHIVE_DIR)  # ничего не архивировано
+        with open(se.SHADOW_FILE) as f:
+            assert len(json.load(f)["records"]) == 1  # активный файл не тронут
+    finally:
+        fcntl.flock(holder_fd, fcntl.LOCK_UN)
+        os.close(holder_fd)
+
+
+def test_rotate_succeeds_after_lock_released(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
+    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    now = time.time()
+    _write_active(se.SHADOW_FILE, [_rec("BTCUSDT", now - 10 * 86400)])
+
+    result = se._rotate_if_needed(now_ts=now)
+    assert result != ""  # лок свободен -- ротация проходит нормально
 
 
 def test_unique_archive_path_avoids_collision(monkeypatch, tmp_path):
