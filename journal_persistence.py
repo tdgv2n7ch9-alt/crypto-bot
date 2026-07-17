@@ -45,6 +45,8 @@ SYNCED_FILES = [
     "journal/bsc_wallet_events.json",
     "journal/bsc_wallet_monitor_state.json",
     "journal/pump_radar_state.json",
+    "journal/onchain_watch_state.json",
+    "journal/onchain_watch_events.json",
 ]
 ZONE_ALERT_STATE_GLOB = "journal/zone_alert_state_*.json"  # динамический список символов
 SYNC_INTERVAL_SEC = 15 * 60  # владелец: "раз в 15 мин"

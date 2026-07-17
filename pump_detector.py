@@ -762,7 +762,12 @@ async def run_miniticker_stream(ctx: PumpContext):
     while True:
         ping_task = None
         try:
-            async with websockets.connect(BYBIT_WS_URL, ping_interval=20) as ws:
+            # Владелец, 2026-07-17: поднять допуск ожидания pong в keepalive --
+            # честно: библиотека websockets 12.0 уже даёт ping_timeout=20 по
+            # умолчанию (не 10, как предполагалось), явно поднимаю до 30 --
+            # даёт больше запаса сверх текущего дефолта на случай сетевых
+            # задержек между Railway и Bybit (см. реконнекты coarse 2026-07-17).
+            async with websockets.connect(BYBIT_WS_URL, ping_interval=20, ping_timeout=30) as ws:
                 print("Pump Radar (coarse): соединение установлено (Bybit)")
                 _coarse_connected = True
                 await _bybit_subscribe(ws, topics)
