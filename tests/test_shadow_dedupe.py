@@ -130,6 +130,24 @@ def test_build_backup_payload_includes_all_files_as_is(tmp_path):
     assert backup["files"]["shadow_signals_a.json"] == payload
 
 
+def test_build_backup_files_by_repo_path_one_entry_per_file(tmp_path):
+    """Владелец, фикс #267 (2026-07-17): вместо ОДНОГО объединённого блоба
+    (build_backup_payload) -- отдельный repo-путь на каждый исходный файл,
+    чтобы обойти лимит GitHub Git Data API git/blobs (живая находка: 51MB
+    объединённый бэкап вернул 422)."""
+    import json
+    f1 = tmp_path / "shadow_signals_a.json"
+    f2 = tmp_path / "shadow_signals_b.json"
+    p1 = {"schema_version": 1, "records": [_rec("AKEUSDT", 100.0)]}
+    p2 = {"schema_version": 1, "records": [_rec("BTCUSDT", 200.0)]}
+    f1.write_text(json.dumps(p1))
+    f2.write_text(json.dumps(p2))
+    out = sd.build_backup_files_by_repo_path([str(f1), str(f2)], "20260717")
+    assert out["journal/archive_backup_20260717/shadow_signals_a.json"] == p1
+    assert out["journal/archive_backup_20260717/shadow_signals_b.json"] == p2
+    assert len(out) == 2
+
+
 def test_apply_local_writes_new_contents(tmp_path):
     import json
     f1 = tmp_path / "shadow_signals_a.json"

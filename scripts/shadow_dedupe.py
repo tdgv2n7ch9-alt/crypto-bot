@@ -54,7 +54,6 @@ ARCHIVE_GLOB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
                              "journal", "archive", "shadow_signals_*.json")
 BACKUP_PATH_TEMPLATE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "journal", "backup_shadow_{date}.json")
-GITHUB_BACKUP_PATH_TEMPLATE = "journal/backup_shadow_{date}.json"
 
 
 def dedupe_and_sort(records: list, seen: set = None) -> tuple:
@@ -135,6 +134,30 @@ def build_backup_payload(files: list) -> dict:
             per_file[os.path.basename(path)] = json.load(f)
     return {"schema_version": 1, "backed_up_at": datetime.now(timezone.utc).isoformat(),
             "files": per_file}
+
+
+def build_backup_files_by_repo_path(files: list, date_str: str) -> dict:
+    """Владелец, 2026-07-17 (фикс задачи #267): отдельный repo-путь на КАЖДЫЙ
+    исходный архивный файл вместо ОДНОГО объединённого backup-блоба (см.
+    build_backup_payload, который остаётся для локального дискового бэкапа --
+    там лимита нет). github_multi_file_commit уже поддерживает произвольное
+    число файлов в одном атомарном tree/commit, так что атомарность бэкапа
+    не страдает.
+
+    Живая находка 2026-07-17: объединённый бэкап ВСЕХ archive-файлов сразу
+    (~29MB на диске, ~51MB после json.dumps/base64 в одном blob) упёрся в
+    лимит GitHub Git Data API `POST git/blobs` -- 422 "Sorry, your input was
+    too large to process", СИЛЬНО ниже 100MB, заявленных для `git push`.
+    Каждый исходный файл по отдельности -- не больше нескольких MB (сверено
+    живьём, крупнейший на 2026-07-17 -- 3.7MB), на порядок ниже проблемного
+    порога."""
+    out = {}
+    for path in files:
+        with open(path) as f:
+            content = json.load(f)
+        repo_path = f"journal/archive_backup_{date_str}/{os.path.basename(path)}"
+        out[repo_path] = content
+    return out
 
 
 def apply_local(new_contents: dict) -> None:
@@ -296,6 +319,11 @@ def main():
     with open(backup_local_path, "w") as f:
         json.dump(backup_payload, f, ensure_ascii=False, indent=2)
     print(f"\nБэкап оригиналов записан локально: {backup_local_path}")
+    # Владелец, 2026-07-17 (#267): отдельные repo-пути на GitHub, ОДИН
+    # объединённый backup_payload использован только для локального файла
+    # выше (диску лимит blob'ов не грозит) -- см. build_backup_files_by_repo_path
+    # докстринг про живую находку 422 "input was too large to process".
+    backup_files_by_repo_path = build_backup_files_by_repo_path(files, date_str)
 
     changed_contents = {p: c for p, c in new_contents.items()
                          if next(r["removed"] for r in reports if r["path"] == p) > 0}
@@ -310,11 +338,12 @@ def main():
               "прерываю, локальные файлы НЕ тронуты (без подтверждённого бэкапа в git не правим).")
         sys.exit(1)
 
-    backup_repo_path = GITHUB_BACKUP_PATH_TEMPLATE.format(date=date_str)
     backup_commit_sha = github_multi_file_commit(
-        {backup_repo_path: backup_payload},
-        f"shadow_dedupe: бэкап архива перед санацией ({date_str}), задача #245")
-    print(f"Бэкап синхронизирован в GitHub: коммит {backup_commit_sha[:10]}")
+        backup_files_by_repo_path,
+        f"shadow_dedupe: бэкап архива перед санацией ({date_str}), задача #245 -- "
+        f"{len(backup_files_by_repo_path)} отдельных файлов (фикс лимита git/blobs, #267)")
+    print(f"Бэкап синхронизирован в GitHub: коммит {backup_commit_sha[:10]} "
+          f"({len(backup_files_by_repo_path)} файлов)")
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files_by_repo_path = {}
