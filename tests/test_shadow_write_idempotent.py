@@ -27,6 +27,44 @@ def test_write_local_rejects_exact_duplicate(monkeypatch, tmp_path):
     assert len(data["records"]) == 1  # второй вызов НЕ добавил дубль
 
 
+def test_write_local_cross_process_race_no_duplicate(monkeypatch, tmp_path):
+    """Владелец, задача #273 (2026-07-17, живая находка P0/P1: 2812 дублей
+    после Railway rolling-deploy -- старый и новый контейнер кратковременно
+    оба живы на общем диске, каждый со своим независимым in-memory
+    _UID_INDEX). Симулирует "процесс B", чей индекс прогрет ДО того, как
+    "процесс A" записал ту же запись -- без file-stat проверки B решит
+    "uid новый" по своим устаревшим данным и допишет дубль."""
+    monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
+    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "_UID_INDEX", None)
+    monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
+    monkeypatch.setattr(se, "_UID_INDEX_FILE_STAT", None)
+
+    record = {"symbol": "AKEUSDT", "ts": 12345.6789, "direction": "short"}
+
+    # "Процесс B" прогревается ПЕРВЫМ, на пустом файле (файла ещё нет).
+    stale_stat = se._file_stat_key(se.SHADOW_FILE)  # None -- файла ещё нет
+    process_b_index = set()
+
+    # "Процесс A" пишет запись (обычный вызов -- прогревает, пишет, обновляет
+    # СВОИ глобальные _UID_INDEX/_UID_INDEX_FILE_STAT).
+    assert se._write_local(dict(record)) is True
+
+    # Возвращаем состояние глобалей к тому, что "видел" процесс B ДО записи A
+    # -- пустой индекс + устаревший (None) отпечаток файла.
+    se._UID_INDEX = process_b_index
+    se._UID_INDEX_FILE = se.SHADOW_FILE
+    se._UID_INDEX_FILE_STAT = stale_stat
+
+    # "Процесс B" пытается записать ТОТ ЖЕ uid, не зная о записи A.
+    assert se._write_local(dict(record)) is True
+
+    with open(se.SHADOW_FILE) as f:
+        import json
+        data = json.load(f)
+    assert len(data["records"]) == 1  # НЕ 2 -- file-stat проверка поймала гонку
+
+
 def test_write_local_allows_same_symbol_different_ts(monkeypatch, tmp_path):
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
     monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)

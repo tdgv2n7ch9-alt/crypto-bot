@@ -970,6 +970,18 @@ _UID_INDEX_FILE = None  # SHADOW_FILE, для которого прогрет _U
 # для одного пути SHADOW_FILE, молча используется после подмены пути (тесты
 # monkeypatch'ат SHADOW_FILE между кейсами; в проде путь не меняется в рантайме,
 # но дешёвая защита не помешает) -- ложные "дубли" из чужого файла.
+_UID_INDEX_FILE_STAT = None  # (mtime_ns, size) SHADOW_FILE на момент, когда ЭТОТ
+# процесс последний раз знал точное состояние файла (после прогрева или после
+# своей же записи) -- владелец, задача #273 (2026-07-17, живая находка P0/P1):
+# during Railway rolling-deploy старый и новый контейнер кратковременно оба
+# живы (см. _rotate_if_needed докстринг про тот же класс гонки) -- каждый
+# держит СВОЙ независимый _UID_INDEX в памяти, ничего не знающий о записях
+# другого процесса. In-memory индекс сам по себе (без этой проверки) не ловит
+# такую гонку -- оба процесса решают "uid новый" по своим устаревшим данным
+# и оба пишут его, порождая дубль на ровном месте после каждого редеплоя.
+
+WRITE_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "journal", ".shadow_write.lock")
 
 
 def _record_uid(rec: dict) -> str:
@@ -1002,51 +1014,95 @@ def _warm_uid_index() -> set:
     return {_record_uid(r) for r in get_local_records(include_archive=True)}
 
 
+def _file_stat_key(path: str):
+    """(mtime_ns, size) -- дешёвый отпечаток состояния файла без чтения
+    содержимого. None, если файла нет (используется как отдельное валидное
+    значение "файла ещё нет", отличное от любого реального отпечатка)."""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _write_local(record: dict) -> bool:
     """Владелец, задача #245 (2026-07-16): переход с O(n)-скана `_dedup_key`
     на O(1) проверку по in-memory `_UID_INDEX` (прогретому один раз, не на
     каждую запись). Монотонность НЕ обрывает запись -- если ts новой записи
     меньше последней в файле, запись всё равно пишется, но с полем
     `out_of_order=True` (владелец: "не терять данные"). Append-only: строки
-    не переписываются, только добавляются."""
-    global _UID_INDEX, _UID_INDEX_FILE
-    if _UID_INDEX is None or _UID_INDEX_FILE != SHADOW_FILE:
-        _UID_INDEX = _warm_uid_index()
-        _UID_INDEX_FILE = SHADOW_FILE
+    не переписываются, только добавляются.
 
-    uid = _record_uid(record)
-    if uid in _UID_INDEX:
-        log.info(f"shadow_engine: запись uid={uid[:12]} уже есть локально -- пропускаю дубль")
+    Владелец, задача #273 (2026-07-17, живая находка P0/P1): весь
+    load-check-append-write под `WRITE_LOCK_FILE` (blocking flock, не
+    NB -- дропнуть запись хуже, чем подождать) -- защита от гонки ДВУХ
+    ПРОЦЕССОВ (не только потоков) на общем эфемерном диске (Railway
+    rolling-deploy: старый и новый контейнер кратковременно оба живы, тот
+    же класс гонки, что и в `_rotate_if_needed`). Под локом сверяем
+    `_file_stat_key(SHADOW_FILE)` с тем, что было при последнем прогреве/
+    записи ЭТИМ процессом -- если файл менялся кем-то ещё (другой процесс
+    дописал запись, о которой наш in-memory индекс не знает), перегреваем
+    индекс ПЕРЕД проверкой uid. В обычном (одно-процессном) случае файл не
+    меняется между нашими же записями -- отпечаток совпадает, перегрева
+    не происходит, O(1)-путь #245 не страдает."""
+    global _UID_INDEX, _UID_INDEX_FILE, _UID_INDEX_FILE_STAT
+    lock_fd = None
+    try:
+        os.makedirs(os.path.dirname(WRITE_LOCK_FILE), exist_ok=True)
+        lock_fd = os.open(WRITE_LOCK_FILE, os.O_CREAT | os.O_RDWR)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        current_stat = _file_stat_key(SHADOW_FILE)
+        if (_UID_INDEX is None or _UID_INDEX_FILE != SHADOW_FILE
+                or _UID_INDEX_FILE_STAT != current_stat):
+            _UID_INDEX = _warm_uid_index()
+            _UID_INDEX_FILE = SHADOW_FILE
+            _UID_INDEX_FILE_STAT = current_stat
+
+        uid = _record_uid(record)
+        if uid in _UID_INDEX:
+            log.info(f"shadow_engine: запись uid={uid[:12]} уже есть локально -- пропускаю дубль")
+            return True
+
+        records = _load_local()
+        if records:
+            last_ts = records[-1].get("ts")
+            new_ts = record.get("ts")
+            if last_ts is not None and new_ts is not None and new_ts < last_ts:
+                record = {**record, "out_of_order": True}
+        records.append(record)
+        ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
+        if not ok:
+            return False
+        _UID_INDEX.add(uid)
+        _rotate_if_needed()  # локально, без сети -- см. докстринг _rotate_if_needed
+        # Владелец, P0 2026-07-17: раньше здесь стоял `_UID_INDEX = _warm_uid_index()`
+        # при archived -- полный синхронный перечит ВСЕХ archive-файлов (до дедупа
+        # этой же сессии -- 18439 записей/~29MB) на КАЖДУЮ ротацию. `_write_local`
+        # вызывается через run_in_executor, так что это не было классическим багом
+        # #240 (блокировка event loop напрямую) -- но CPU-bound парсинг+set-build
+        # такого объёма в потоке executor'а конкурирует за GIL с главным потоком
+        # (там же тикает asyncio event loop, coarse-websocket recv и т.д.), создавая
+        # секунды-паузы -- живьём поймано на watchdog-алертах bsc_wallet_monitor и
+        # coarse-реконнектах, синхронных с моментами ротации (09:39:58 ротация ->
+        # 09:40 алерт). Пересчёт был ИЗБЫТОЧНЫМ: `_UID_INDEX` уже инкрементально
+        # содержит uid этой записи (строка выше, `.add(uid)`) и всех предыдущих --
+        # ротация ФИЗИЧЕСКИ перемещает уже-проиндексированные записи из активного
+        # файла в архив, но НЕ меняет множество uid. Комментарий у _warm_uid_index()
+        # про "надо видеть архивные uid" -- про ХОЛОДНЫЙ СТАРТ процесса (см. её
+        # докстринг), не про ротацию внутри уже живущего процесса с тёплым индексом.
+        # Отпечаток файла (#273) обновляем ПОСЛЕ ротации -- она тоже меняет
+        # SHADOW_FILE (обрезает до to_keep), иначе следующая запись в этом же
+        # процессе увидит "чужое" изменение и перегреет индекс впустую.
+        _UID_INDEX_FILE_STAT = _file_stat_key(SHADOW_FILE)
         return True
-
-    records = _load_local()
-    if records:
-        last_ts = records[-1].get("ts")
-        new_ts = record.get("ts")
-        if last_ts is not None and new_ts is not None and new_ts < last_ts:
-            record = {**record, "out_of_order": True}
-    records.append(record)
-    ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
-    if not ok:
-        return False
-    _UID_INDEX.add(uid)
-    _rotate_if_needed()  # локально, без сети -- см. докстринг _rotate_if_needed
-    # Владелец, P0 2026-07-17: раньше здесь стоял `_UID_INDEX = _warm_uid_index()`
-    # при archived -- полный синхронный перечит ВСЕХ archive-файлов (до дедупа
-    # этой же сессии -- 18439 записей/~29MB) на КАЖДУЮ ротацию. `_write_local`
-    # вызывается через run_in_executor, так что это не было классическим багом
-    # #240 (блокировка event loop напрямую) -- но CPU-bound парсинг+set-build
-    # такого объёма в потоке executor'а конкурирует за GIL с главным потоком
-    # (там же тикает asyncio event loop, coarse-websocket recv и т.д.), создавая
-    # секунды-паузы -- живьём поймано на watchdog-алертах bsc_wallet_monitor и
-    # coarse-реконнектах, синхронных с моментами ротации (09:39:58 ротация ->
-    # 09:40 алерт). Пересчёт был ИЗБЫТОЧНЫМ: `_UID_INDEX` уже инкрементально
-    # содержит uid этой записи (строка выше, `.add(uid)`) и всех предыдущих --
-    # ротация ФИЗИЧЕСКИ перемещает уже-проиндексированные записи из активного
-    # файла в архив, но НЕ меняет множество uid. Комментарий у _warm_uid_index()
-    # про "надо видеть архивные uid" -- про ХОЛОДНЫЙ СТАРТ процесса (см. её
-    # докстринг), не про ротацию внутри уже живущего процесса с тёплым индексом.
-    return True
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            os.close(lock_fd)
 
 
 def integrity_report(records: list) -> dict:
