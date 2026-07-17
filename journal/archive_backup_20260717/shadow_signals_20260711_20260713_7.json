@@ -1,0 +1,3827 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "ts": 1783934268.7785623,
+      "symbol": "KITE",
+      "direction": "long",
+      "entry_lo": 0.13741833,
+      "entry_hi": 0.13853513,
+      "sl": 0.13398287,
+      "tp1": 0.14719,
+      "tp2": 0.16113,
+      "tp3": 0.166934,
+      "rr_tp1_live": 1.9,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.13464,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.1208,
+          "bars_ago": 13,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.09772999999999998
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.9 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.42,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 65,
+        "rocket_would_be": 65
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934272.595122,
+      "symbol": "DCR",
+      "direction": "long",
+      "entry_lo": 15.77,
+      "entry_hi": 15.77,
+      "sl": 15.2969,
+      "tp1": 16.0854,
+      "tp2": 16.2803172,
+      "tp3": 16.5957172,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 4.8440969985069335,
+        "oi_combo": "up_up",
+        "funding_rate": 0.01,
+        "ls_ratio": 1.0,
+        "d_oi": 6,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 6,
+        "rocket_old": 38,
+        "rocket_would_be": 44
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934276.284911,
+      "symbol": "VELVET",
+      "direction": "long",
+      "entry_lo": 0.59130172,
+      "entry_hi": 0.59607828,
+      "sl": 0.57651918,
+      "tp1": 0.60798665,
+      "tp2": 0.6092,
+      "tp3": 0.62179216,
+      "rr_tp1_live": 0.61,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 9,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.56962,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -1.07169
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.06631000000000009
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.61 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": -1.666290262437283,
+        "oi_combo": "up_down",
+        "funding_rate": 0.005,
+        "ls_ratio": 2.71,
+        "d_oi": 2,
+        "d_funding": 0,
+        "d_ls": -3,
+        "total_delta": -1,
+        "rocket_old": 55,
+        "rocket_would_be": 54
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934279.7957675,
+      "symbol": "H",
+      "direction": "long",
+      "entry_lo": 0.07,
+      "entry_hi": 0.07275,
+      "sl": 0.06825,
+      "tp1": 0.08061667,
+      "tp2": 0.0832776,
+      "tp3": 0.08576,
+      "rr_tp1_live": 1.75,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 5,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.07214,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -0.31149000000000004
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.060129999999999975
+        },
+        "triangle": {
+          "type": "symmetric"
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.75 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": -0.46368721023283493,
+        "oi_combo": "up_down",
+        "funding_rate": 0.016654,
+        "ls_ratio": 3.48,
+        "d_oi": 2,
+        "d_funding": 0,
+        "d_ls": -3,
+        "total_delta": -1,
+        "rocket_old": 49,
+        "rocket_would_be": 48
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934283.6423788,
+      "symbol": "BILL",
+      "direction": "long",
+      "entry_lo": 0.04903722,
+      "entry_hi": 0.04945714,
+      "sl": 0.04781129,
+      "tp1": 0.052685,
+      "tp2": 0.053235,
+      "tp3": 0.05421,
+      "rr_tp1_live": 1.96,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.048,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.05044,
+          0.05518
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.06648000000000001
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.033949999999999994
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.96 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=False,bear=True)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.26184801117647394,
+        "oi_combo": "up_up",
+        "funding_rate": 0.02760899999999999,
+        "ls_ratio": 0.89,
+        "d_oi": 6,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 6,
+        "rocket_old": 57,
+        "rocket_would_be": 63
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.05044,
+            0.05518
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934289.1038349,
+      "symbol": "SKR",
+      "direction": "long",
+      "entry_lo": 0.009159,
+      "entry_hi": 0.00923335,
+      "sl": 0.00893003,
+      "tp1": 0.0095562,
+      "tp2": 0.0099205,
+      "tp3": 0.010074,
+      "rr_tp1_live": 1.06,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.009223,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.009274,
+          "bars_ago": 2,
+          "volume_confirmed": true
+        }
+      },
+      "order_block_live": {
+        "bull": true,
+        "bull_zone": [
+          0.00919,
+          0.009212
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.009061,
+          0.009332
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.008323
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.06 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "order_block: live(bull=True,bear=False) vs methodology-тело(bull=False,bear=True)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 0.84,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 40,
+        "rocket_would_be": 40
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bear",
+        "body_close_type": "CHoCH_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "CHoCH — пробой вниз ПРОТИВ bias LONG, закрытие подтверждено — возможный разворот"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": true,
+          "bull_zone": [
+            0.00919,
+            0.009212
+          ],
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.009061,
+            0.009332
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934292.5894167,
+      "symbol": "BLUR",
+      "direction": "long",
+      "entry_lo": 0.017367,
+      "entry_hi": 0.018179,
+      "sl": 0.01693282,
+      "tp1": 0.01880675,
+      "tp2": 0.01932025,
+      "tp3": 0.02592,
+      "rr_tp1_live": 0.5,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 9,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.017551,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.018199,
+          0.018282
+        ]
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.018282,
+          0.01863
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.011314000000000003
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.014965000000000003
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.5 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.9699226950702279,
+        "oi_combo": "up_up",
+        "funding_rate": -0.136491,
+        "ls_ratio": 1.15,
+        "d_oi": 6,
+        "d_funding": 4,
+        "d_ls": 0,
+        "total_delta": 10,
+        "rocket_old": 72,
+        "rocket_would_be": 82
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bear",
+        "body_close_type": "CHoCH_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "CHoCH — пробой вниз ПРОТИВ bias LONG, закрытие подтверждено — возможный разворот"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.018199,
+            0.018282
+          ]
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.018282,
+            0.01863
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934296.888018,
+      "symbol": "STAR",
+      "direction": "long",
+      "entry_lo": 0.160353,
+      "entry_hi": 0.160353,
+      "sl": 0.15554241,
+      "tp1": 0.16356006,
+      "tp2": 0.16554202,
+      "tp3": 0.16874908,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.7902355323464835,
+        "oi_combo": "up_up",
+        "funding_rate": 0.051144,
+        "ls_ratio": 1.0,
+        "d_oi": 6,
+        "d_funding": -4,
+        "d_ls": 0,
+        "total_delta": 2,
+        "rocket_old": 30,
+        "rocket_would_be": 32
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934300.1187165,
+      "symbol": "IDOL",
+      "direction": "long",
+      "entry_lo": 0.0149711,
+      "entry_hi": 0.0149711,
+      "sl": 0.01452197,
+      "tp1": 0.01527052,
+      "tp2": 0.01545556,
+      "tp3": 0.01575499,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 3.683416541337772,
+        "oi_combo": "up_up",
+        "funding_rate": 0.055329,
+        "ls_ratio": 1.0,
+        "d_oi": 6,
+        "d_funding": -4,
+        "d_ls": 0,
+        "total_delta": 2,
+        "rocket_old": 33,
+        "rocket_would_be": 35
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934305.5569775,
+      "symbol": "ZRO",
+      "direction": "short",
+      "entry_lo": 0.88828106,
+      "entry_hi": 0.89509146,
+      "sl": 0.91746874,
+      "tp1": 0.83641667,
+      "tp2": 0.81693333,
+      "tp3": 0.79706,
+      "rr_tp1_live": 1.78,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 2,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.8579,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.93,
+          "bars_ago": 14,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.7608000000000001
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.78 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.69,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 3,
+        "total_delta": 3,
+        "rocket_old": 53,
+        "rocket_would_be": 56
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934309.2846143,
+      "symbol": "CASHCAT",
+      "direction": "short",
+      "entry_lo": 0.160007,
+      "entry_hi": 0.160007,
+      "sl": 0.16480721,
+      "tp1": 0.15680686,
+      "tp2": 0.15482917,
+      "tp3": 0.15162903,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 1.0034835358014331,
+        "oi_combo": "down_up",
+        "funding_rate": 0.03265503,
+        "ls_ratio": 1.0,
+        "d_oi": 6,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 6,
+        "rocket_old": 35,
+        "rocket_would_be": 41
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934313.9491737,
+      "symbol": "BTW",
+      "direction": "short",
+      "entry_lo": 0.05905,
+      "entry_hi": 0.06034,
+      "sl": 0.0618485,
+      "tp1": 0.05756,
+      "tp2": 0.056465,
+      "tp3": 0.050695,
+      "rr_tp1_live": 0.53,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 8,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.05869,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.06151,
+          "bars_ago": 17,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.22347000000000003
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.0489
+        },
+        "triangle": {
+          "type": "symmetric"
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.53 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.012882,
+        "ls_ratio": 2.2,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 3,
+        "total_delta": 3,
+        "rocket_old": 30,
+        "rocket_would_be": 33
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934323.1472862,
+      "symbol": "RIF",
+      "direction": "short",
+      "entry_lo": 0.118668,
+      "entry_hi": 0.118668,
+      "sl": 0.12222804,
+      "tp1": 0.11629464,
+      "tp2": 0.1148279,
+      "tp3": 0.11245454,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": -0.13414467148223544,
+        "oi_combo": "down_down",
+        "funding_rate": 0.005,
+        "ls_ratio": 1.0,
+        "d_oi": 2,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 2,
+        "rocket_old": 30,
+        "rocket_would_be": 32
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934331.2181354,
+      "symbol": "NEX",
+      "direction": "short",
+      "entry_lo": 1.81e-06,
+      "entry_hi": 1.81e-06,
+      "sl": 1.864e-06,
+      "tp1": 1.774e-06,
+      "tp2": 1.751e-06,
+      "tp3": 1.715e-06,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": -0.0175,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 30,
+        "rocket_would_be": 30
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934337.993342,
+      "symbol": "BAN",
+      "direction": "short",
+      "entry_lo": 0.06877692,
+      "entry_hi": 0.06932308,
+      "sl": 0.07105616,
+      "tp1": 0.06802,
+      "tp2": 0.065255,
+      "tp3": 0.063795,
+      "rr_tp1_live": 0.33,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.069,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.061669999999999975
+        },
+        "triangle": {
+          "type": "ascending"
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.33 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 36,
+        "rocket_would_be": 36
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934341.49808,
+      "type": "pump_reversal_shadow",
+      "symbol": "evaausdt",
+      "direction": "short",
+      "peak_price": 1.0804,
+      "last_price": 1.0133,
+      "retrace_pct": 6.21,
+      "volume_mult": 11.72,
+      "z_score": 3.17,
+      "funding_pct": 0.005,
+      "oi_usd": 12387420.09,
+      "oi_change_pct": 5.771929589074228,
+      "entry": 1.0133,
+      "sl": 1.096606,
+      "tp1": 0.8466880000000003,
+      "tp2": 0.7467208000000005,
+      "promoted_live": false,
+      "kz_quality": "D",
+      "dead_zone": true,
+      "pro_score_live": null,
+      "dead_zone_score_penalty": 10,
+      "pro_score_shadow_adjusted": null
+    },
+    {
+      "ts": 1783934344.0316546,
+      "symbol": "MAGMA",
+      "direction": "short",
+      "entry_lo": 0.36074428,
+      "entry_hi": 0.36342572,
+      "sl": 0.37251136,
+      "tp1": 0.31514667,
+      "tp2": 0.31134,
+      "tp3": 0.29407,
+      "rr_tp1_live": 3.88,
+      "shadow_rr_gate_pass": true,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": true,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 8,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.34427,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.38096,
+          "bars_ago": 12,
+          "volume_confirmed": true
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.012240000000000029
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.26434
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": -1.8702142348803594,
+        "oi_combo": "down_down",
+        "funding_rate": 0.005,
+        "ls_ratio": 1.24,
+        "d_oi": 2,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 2,
+        "rocket_old": 37,
+        "rocket_would_be": 39
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bull",
+        "body_close_type": "CHoCH_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "CHoCH — пробой вверх ПРОТИВ bias SHORT, закрытие подтверждено — возможный разворот"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934347.7463083,
+      "symbol": "PLUME",
+      "direction": "short",
+      "entry_lo": 0.009954,
+      "entry_hi": 0.010302,
+      "sl": 0.01055955,
+      "tp1": 0.00966888,
+      "tp2": 0.0093128,
+      "tp3": 0.008896,
+      "rr_tp1_live": 0.47,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 1,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.010059,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.009999,
+          "bars_ago": 5,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.009389000000000002
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.47 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": -0.6147093641866179,
+        "oi_combo": "down_down",
+        "funding_rate": 0.005,
+        "ls_ratio": 2.14,
+        "d_oi": 2,
+        "d_funding": 0,
+        "d_ls": 3,
+        "total_delta": 5,
+        "rocket_old": 56,
+        "rocket_would_be": 61
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934358.2628863,
+      "symbol": "BABYDOGE",
+      "direction": "short",
+      "entry_lo": 3.077e-10,
+      "entry_hi": 3.077e-10,
+      "sl": 3.169e-10,
+      "tp1": 3.016e-10,
+      "tp2": 2.978e-10,
+      "tp3": 2.916e-10,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 30,
+        "rocket_would_be": 30
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934363.4976313,
+      "symbol": "ALCH",
+      "direction": "short",
+      "entry_lo": 0.05366,
+      "entry_hi": 0.05467,
+      "sl": 0.05603675,
+      "tp1": 0.05261,
+      "tp2": 0.05120333,
+      "tp3": 0.04177625,
+      "rr_tp1_live": 0.44,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.05306,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.05366,
+          "bars_ago": 3,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.037919999999999995
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.055670000000000004
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.44 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.04,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 30,
+        "rocket_would_be": 30
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934367.4062977,
+      "symbol": "HUMA",
+      "direction": "short",
+      "entry_lo": 0.022276,
+      "entry_hi": 0.023603,
+      "sl": 0.02419307,
+      "tp1": 0.020959,
+      "tp2": 0.020618,
+      "tp3": 0.01269063,
+      "rr_tp1_live": 0.69,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 8,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.022365,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          0.022077,
+          0.022425
+        ],
+        "bear": true,
+        "bear_zone": [
+          0.022003,
+          0.022491
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.017227
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.017234000000000003
+        },
+        "triangle": {
+          "type": "ascending"
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.69 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=True,bear=True)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": -0.17927202837282752,
+        "oi_combo": "down_down",
+        "funding_rate": 0.005,
+        "ls_ratio": 0.9,
+        "d_oi": 2,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 2,
+        "rocket_old": 46,
+        "rocket_would_be": 48
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bull",
+        "body_close_type": "invalid_break_wick_only",
+        "disagree": true,
+        "downgraded_to_invalid": true,
+        "body_close_label": "Пробой вверх только тенью, без закрытия за уровнем 0.023187 -- по критерию \"Урок 2. Structure\" это SFP, не валидный слом структуры"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": true,
+          "bull_zone": [
+            0.022077,
+            0.022425
+          ],
+          "bear": true,
+          "bear_zone": [
+            0.022003,
+            0.022491
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934374.4217944,
+      "symbol": "AI",
+      "direction": "short",
+      "entry_lo": 7.953e-05,
+      "entry_hi": 7.983e-05,
+      "sl": 8.183e-05,
+      "tp1": 7.923e-05,
+      "tp2": 7.704e-05,
+      "tp3": 7.55e-05,
+      "rr_tp1_live": 0.13,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 5,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 7.969e-05,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": true,
+        "bull_zone": [
+          7.936e-05,
+          7.936e-05
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          7.905e-05,
+          7.936e-05
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 7.222e-05
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.13 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": -0.0849647,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": -4,
+        "d_ls": 0,
+        "total_delta": -4,
+        "rocket_old": 42,
+        "rocket_would_be": 38
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "структура не определена"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": true,
+          "bull_zone": [
+            7.936e-05,
+            7.936e-05
+          ],
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": true,
+          "bull_zone": [
+            7.905e-05,
+            7.936e-05
+          ],
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934464.1225822,
+      "symbol": "BDX",
+      "direction": "long",
+      "entry_lo": 0.090375,
+      "entry_hi": 0.090375,
+      "sl": 0.08766375,
+      "tp1": 0.0921825,
+      "tp2": 0.09329954,
+      "tp3": 0.09510703,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": -0.0002,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 35,
+        "rocket_would_be": 35
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934468.1441712,
+      "symbol": "KITE",
+      "direction": "long",
+      "entry_lo": 0.13742341,
+      "entry_hi": 0.13854277,
+      "sl": 0.13398783,
+      "tp1": 0.14719,
+      "tp2": 0.16113,
+      "tp3": 0.166934,
+      "rr_tp1_live": 1.9,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.13464,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.1208,
+          "bars_ago": 13,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.09772999999999998
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.9 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.42,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 65,
+        "rocket_would_be": 65
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934471.6555612,
+      "symbol": "DCR",
+      "direction": "long",
+      "entry_lo": 16.02,
+      "entry_hi": 16.02,
+      "sl": 15.5394,
+      "tp1": 16.3404,
+      "tp2": 16.5384072,
+      "tp3": 16.8588072,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.01,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 38,
+        "rocket_would_be": 38
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934475.5884144,
+      "symbol": "VELVET",
+      "direction": "long",
+      "entry_lo": 0.5912872,
+      "entry_hi": 0.5960928,
+      "sl": 0.57650502,
+      "tp1": 0.60805853,
+      "tp2": 0.6092,
+      "tp3": 0.62182828,
+      "rr_tp1_live": 0.61,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 9,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.56962,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -1.07169
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.06631000000000009
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.61 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 2.71,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": -3,
+        "total_delta": -3,
+        "rocket_old": 52,
+        "rocket_would_be": 49
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934482.2821157,
+      "symbol": "EIGEN",
+      "direction": "long",
+      "entry_lo": 0.23193569,
+      "entry_hi": 0.23386129,
+      "sl": 0.2261373,
+      "tp1": 0.243845,
+      "tp2": 0.24837,
+      "tp3": 0.25713,
+      "rr_tp1_live": 1.29,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.23885,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.23321,
+          "bars_ago": 13,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.2403,
+          0.24126
+        ]
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.24126,
+          0.24855
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.18875999999999998
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.29 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.61,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": -3,
+        "total_delta": -3,
+        "rocket_old": 85,
+        "rocket_would_be": 82
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "структура не определена"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.2403,
+            0.24126
+          ]
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.24126,
+            0.24855
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934485.8989317,
+      "symbol": "BILL",
+      "direction": "long",
+      "entry_lo": 0.04903591,
+      "entry_hi": 0.04945407,
+      "sl": 0.04781002,
+      "tp1": 0.052685,
+      "tp2": 0.053235,
+      "tp3": 0.05421,
+      "rr_tp1_live": 1.97,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.048,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          0.05044,
+          0.05518
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.06626
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.033949999999999994
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.97 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=False,bear=True)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.02760899999999999,
+        "ls_ratio": 0.89,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 57,
+        "rocket_would_be": 57
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bull",
+        "body_close_type": "BOS_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вверх по тренду, закрытие подтверждено (согласовано с bias LONG)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            0.05044,
+            0.05518
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934496.9200976,
+      "symbol": "SKR",
+      "direction": "long",
+      "entry_lo": 0.00915851,
+      "entry_hi": 0.00923274,
+      "sl": 0.00892955,
+      "tp1": 0.0095562,
+      "tp2": 0.0099205,
+      "tp3": 0.010074,
+      "rr_tp1_live": 1.07,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.009223,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.009274,
+          "bars_ago": 2,
+          "volume_confirmed": true
+        }
+      },
+      "order_block_live": {
+        "bull": true,
+        "bull_zone": [
+          0.00919,
+          0.009212
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          0.009074,
+          0.00919
+        ],
+        "bear": true,
+        "bear_zone": [
+          0.009061,
+          0.009332
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.008323
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.07 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "order_block: live(bull=True,bear=False) vs methodology-тело(bull=True,bear=True)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 0.84,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 35,
+        "rocket_would_be": 35
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bear",
+        "body_close_type": "CHoCH_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "CHoCH — пробой вниз ПРОТИВ bias LONG, закрытие подтверждено — возможный разворот"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": true,
+          "bull_zone": [
+            0.00919,
+            0.009212
+          ],
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": true,
+          "bull_zone": [
+            0.009074,
+            0.00919
+          ],
+          "bear": true,
+          "bear_zone": [
+            0.009061,
+            0.009332
+          ]
+        }
+      }
+    },
+    {
+      "ts": 1783934508.1542163,
+      "symbol": "BLUR",
+      "direction": "long",
+      "entry_lo": 0.017367,
+      "entry_hi": 0.017987,
+      "sl": 0.01693282,
+      "tp1": 0.01880675,
+      "tp2": 0.01932025,
+      "tp3": 0.02592,
+      "rr_tp1_live": 0.78,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 9,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 0.017551,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.011314000000000003
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.014965000000000003
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.78 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": -0.136491,
+        "ls_ratio": 1.15,
+        "d_oi": 0,
+        "d_funding": 4,
+        "d_ls": 0,
+        "total_delta": 4,
+        "rocket_old": 72,
+        "rocket_would_be": 76
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bear",
+        "body_close_type": "CHoCH_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "CHoCH — пробой вниз ПРОТИВ bias LONG, закрытие подтверждено — возможный разворот"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934513.2305377,
+      "symbol": "IDOL",
+      "direction": "long",
+      "entry_lo": 0.01495447,
+      "entry_hi": 0.01495447,
+      "sl": 0.01450584,
+      "tp1": 0.01525356,
+      "tp2": 0.0154384,
+      "tp3": 0.01573749,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.055329,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": -4,
+        "d_ls": 0,
+        "total_delta": -4,
+        "rocket_old": 33,
+        "rocket_would_be": 29
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934517.1933973,
+      "symbol": "ZRO",
+      "direction": "short",
+      "entry_lo": 0.88827868,
+      "entry_hi": 0.89508588,
+      "sl": 0.91746302,
+      "tp1": 0.83641667,
+      "tp2": 0.81693333,
+      "tp3": 0.79706,
+      "rr_tp1_live": 1.78,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 2,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.8579,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.93,
+          "bars_ago": 14,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.7608000000000001
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.78 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.69,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 3,
+        "total_delta": 3,
+        "rocket_old": 53,
+        "rocket_would_be": 56
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934526.1812372,
+      "symbol": "CASHCAT",
+      "direction": "short",
+      "entry_lo": 0.15821,
+      "entry_hi": 0.15821,
+      "sl": 0.1629563,
+      "tp1": 0.1550458,
+      "tp2": 0.15309032,
+      "tp3": 0.14992612,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.03265503,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 35,
+        "rocket_would_be": 35
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934530.6327493,
+      "symbol": "BTW",
+      "direction": "short",
+      "entry_lo": 0.05905,
+      "entry_hi": 0.06034,
+      "sl": 0.0618485,
+      "tp1": 0.05756,
+      "tp2": 0.056465,
+      "tp3": 0.050695,
+      "rr_tp1_live": 0.53,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 8,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.05869,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.06151,
+          "bars_ago": 17,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.22347000000000003
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.0489
+        },
+        "triangle": {
+          "type": "symmetric"
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.53 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.012882,
+        "ls_ratio": 2.2,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 3,
+        "total_delta": 3,
+        "rocket_old": 30,
+        "rocket_would_be": 33
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "BOS_bear",
+        "body_close_type": "BOS_bear",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "BOS — пробой структуры вниз по тренду, закрытие подтверждено (согласовано с bias SHORT)"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    },
+    {
+      "ts": 1783934533.8458054,
+      "symbol": "RIF",
+      "direction": "short",
+      "entry_lo": 0.117537,
+      "entry_hi": 0.117537,
+      "sl": 0.12106311,
+      "tp1": 0.11518626,
+      "tp2": 0.1137335,
+      "tp3": 0.11138276,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 30,
+        "rocket_would_be": 30
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934537.0356798,
+      "symbol": "NEX",
+      "direction": "short",
+      "entry_lo": 1.81e-06,
+      "entry_hi": 1.81e-06,
+      "sl": 1.864e-06,
+      "tp1": 1.774e-06,
+      "tp2": 1.751e-06,
+      "tp3": 1.715e-06,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": -0.0118,
+        "ls_ratio": 1.0,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 30,
+        "rocket_would_be": 30
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "н/д -- нет 4h-свечей"
+      },
+      "order_block_shadow": {
+        "error": "нет 4h-свечей"
+      }
+    },
+    {
+      "ts": 1783934547.7535362,
+      "symbol": "Q",
+      "direction": "short",
+      "entry_lo": 0.019066,
+      "entry_hi": 0.019161,
+      "sl": 0.01964002,
+      "tp1": 0.01877077,
+      "tp2": 0.0187245,
+      "tp3": 0.01826789,
+      "rr_tp1_live": 0.51,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "breaker",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bear",
+        "nymidnight_price": 0.019178,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.020478,
+          "bars_ago": 18,
+          "volume_confirmed": true
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.013895999999999999
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.016946000000000003
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 0.51 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": 0.005,
+        "ls_ratio": 1.69,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 3,
+        "total_delta": 3,
+        "rocket_old": 36,
+        "rocket_would_be": 39
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": "CHoCH_bull",
+        "body_close_type": "CHoCH_bull",
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "CHoCH — пробой вверх ПРОТИВ bias SHORT, закрытие подтверждено — возможный разворот"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        }
+      }
+    }
+  ]
+}
