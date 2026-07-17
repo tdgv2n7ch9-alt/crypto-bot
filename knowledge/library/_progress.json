@@ -27,9 +27,10 @@
       "batch": null
     },
     "11. Риск-менеджмент.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 3,
+      "note": "Демо TradingView Long/Short Position tool -- риск% -> размер позиции по R:R, уже 1-в-1 реализовано в bot.calc_position_size(). Новых правил нет."
     },
     "12_Практическии__модуль_Демо_торговля.md": {
       "status": "pending",
@@ -292,9 +293,10 @@
       "batch": 2
     },
     "6. Ликвидность.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 3,
+      "note": "Базовая теория EQH/EQL/sweep/compression -- полностью дублирует METHODOLOGY_CORE.md §5 (включая нарратив \"стопы ритейла как выходная ликвидность крупного капитала\"). Новых правил нет."
     },
     "6.md": {
       "status": "done",
@@ -302,9 +304,10 @@
       "batch": 2
     },
     "7. Работа с уровнями Фибоначчи.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 3,
+      "note": "Premium/Discount (0.5-фильтр коррекции) + OTE 62-79% -- полностью дублирует METHODOLOGY_CORE.md §4 (Premium/Discount) и OTE-раздел (там уже точнее, 0.705/0.79). Новых правил нет."
     },
     "8. Торговые инструменты_ Base.md": {
       "status": "pending",
@@ -362,9 +365,10 @@
       "batch": null
     },
     "FVG 1.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 3,
+      "note": "FVG/imbalance базовая теория + Fulfill(FF)/0.5 заполнение через Fib-сетку -- дублирует METHODOLOGY_CORE.md §4 (глубина заполнения имбаланса/R:R). Новых правил нет."
     },
     "FVG 2.md": {
       "status": "done",
@@ -382,14 +386,16 @@
       "batch": 2
     },
     "Fibonacci 2.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 4,
+      "note": "Прочитано в пакете 4 (METHODOLOGY_CORE.md §15, ночная сессия #2) до создания этого трекера -- короткие клипы, подтверждают уже задокументированные правила §4/§9, новых фактов не добавляют, отдельный library_file не заводился."
     },
     "Fibonacci 3.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 4,
+      "note": "Прочитано в пакете 4 (METHODOLOGY_CORE.md §15, ночная сессия #2) до создания этого трекера -- короткие клипы, подтверждают уже задокументированные правила §4/§9, новых фактов не добавляют, отдельный library_file не заводился."
     },
     "Forex position size.md": {
       "status": "pending",
@@ -802,7 +808,7 @@
       "batch": 2
     }
   },
-  "done_count": 39,
-  "last_batch": 2,
+  "done_count": 45,
+  "last_batch": 3,
   "last_updated": "2026-07-17"
 }
