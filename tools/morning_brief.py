@@ -227,6 +227,35 @@ def library_progress_section() -> list:
     return lines
 
 
+def night_mute_section() -> list:
+    """Владелец, 2026-07-17 (утренний пакет п.5): ночной mute класса [SYS]-
+    watchdog/reconnect (00:00-08:00) не должен превращаться в "молчаливую
+    потерю сигнала" -- то, что было приглушено, всё равно должно быть
+    видно владельцу утром, просто НЕ пуш-уведомлением ночью. Честное
+    чтение bot.NIGHT_MUTE_LOG_PATH (пишется в реальном времени живым
+    процессом bot.py, не пересчёт) -- файл может отсутствовать (мьютов
+    не было эту ночь, либо процесс ни разу не перезапускался в окне) --
+    честное "0 событий", не выдумываем."""
+    lines = ["", "## Ночной mute (00:00-08:00)", ""]
+    try:
+        import json
+        with open(bot.NIGHT_MUTE_LOG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        events = data.get("events", [])
+        if not events:
+            lines.append("Приглушённых алертов не было.")
+            return lines
+        by_kind = {}
+        for ev in events:
+            by_kind.setdefault(ev.get("kind", "unspecified"), []).append(ev)
+        lines.append(f"Приглушено за ночь: {len(events)}.")
+        for kind, evs in sorted(by_kind.items()):
+            lines.append(f"  - {kind}: {len(evs)}")
+    except (OSError, ValueError):
+        lines.append("Приглушённых алертов не было (файл лога отсутствует).")
+    return lines
+
+
 def top_findings_section() -> list:
     """3) Топ-3 находки ночи (библиотека/он-чейн/rug-скан) -- одна строка
     на источник, живой пересчёт где возможно, иначе последняя запись
@@ -272,6 +301,7 @@ def build_morning_brief(now_ts: float = None) -> str:
     lines += shadow_table_section()
     lines += closed_outcomes_section()
     lines += library_progress_section()
+    lines += night_mute_section()
     lines += top_findings_section()
     lines += open_questions_section()
     return "\n".join(lines) + "\n"

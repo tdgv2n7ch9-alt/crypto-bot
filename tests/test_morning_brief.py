@@ -122,6 +122,38 @@ def test_library_progress_section_honest_na_on_corrupt_json(monkeypatch, tmp_pat
     assert "н/д" in text
 
 
+# ── night_mute_section() -- ночной mute [SYS]-watchdog/reconnect (владелец, утро п.5) ──
+
+def test_night_mute_section_reports_counts_by_kind(monkeypatch, tmp_path):
+    import json
+    log_file = tmp_path / "night_mute_log.json"
+    log_file.write_text(json.dumps({"date": "2026-07-17", "events": [
+        {"ts": 1, "kind": "watchdog_heartbeat", "detail": "a"},
+        {"ts": 2, "kind": "watchdog_heartbeat", "detail": "b"},
+        {"ts": 3, "kind": "pump_radar_reconnect", "detail": "c"},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(mb.bot, "NIGHT_MUTE_LOG_PATH", str(log_file))
+    text = "\n".join(mb.night_mute_section())
+    assert "3" in text
+    assert "watchdog_heartbeat: 2" in text
+    assert "pump_radar_reconnect: 1" in text
+
+
+def test_night_mute_section_honest_when_no_events(monkeypatch, tmp_path):
+    import json
+    log_file = tmp_path / "night_mute_log.json"
+    log_file.write_text(json.dumps({"date": "2026-07-17", "events": []}), encoding="utf-8")
+    monkeypatch.setattr(mb.bot, "NIGHT_MUTE_LOG_PATH", str(log_file))
+    text = "\n".join(mb.night_mute_section())
+    assert "не было" in text
+
+
+def test_night_mute_section_honest_when_file_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(mb.bot, "NIGHT_MUTE_LOG_PATH", str(tmp_path / "does_not_exist.json"))
+    text = "\n".join(mb.night_mute_section())
+    assert "не было" in text
+
+
 # ── _latest_evolution_finding() ──
 
 def test_latest_evolution_finding_picks_last_dated_heading(monkeypatch, tmp_path):

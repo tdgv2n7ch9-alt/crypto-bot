@@ -210,6 +210,11 @@ def test_watchdog_job_stale_alert_is_critical(monkeypatch):
         calls.append({"text": text, "critical": critical})
 
     monkeypatch.setattr(bot, "send_system", _fake_send_system)
+    # Владелец, 2026-07-17 (ночной mute п.5): run_watchdog() теперь сам
+    # проверяет _is_night_mute_window() ДО вызова send_system() -- без
+    # явного мока этот тест был бы чувствителен к реальному часу запуска
+    # pytest (флейки, если прогнать между 00:00 и 08:00 по TZ проекта).
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
     bot._job_alerted_stale.clear()
     monkeypatch.setattr(bot, "_job_expected_interval_sec", {"testjob": 60})
     monkeypatch.setattr(bot, "_job_heartbeats", {})
@@ -219,6 +224,192 @@ def test_watchdog_job_stale_alert_is_critical(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["critical"] is True
     assert "testjob" in calls[0]["text"]
+
+
+# ── ночной mute класса [SYS]-watchdog/reconnect (владелец, 2026-07-17, утро п.5) ──
+
+def test_watchdog_stale_alert_muted_during_night_window(monkeypatch, tmp_path):
+    """В окне [00:00,08:00) heartbeat-stale алерт НЕ отправляется, но
+    _job_alerted_stale НЕ помечается -- следующий тик должен перепроверить
+    заново (не потерять сигнал молча навсегда)."""
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append({"text": text, "critical": critical})
+
+    monkeypatch.setattr(bot, "send_system", _fake_send_system)
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: True)
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(tmp_path / "night_mute_log.json"))
+    bot._job_alerted_stale.clear()
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {"testjob": 60})
+    monkeypatch.setattr(bot, "_job_heartbeats", {})
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+    _run(bot.run_watchdog(MagicMock()))
+    assert calls == []  # ничего не отправлено
+    assert "testjob" not in bot._job_alerted_stale  # не помечено -- перепроверится снова
+
+
+def test_watchdog_stale_alert_fires_after_window_ends_if_still_stale(monkeypatch, tmp_path):
+    """Симуляция: ночью замьючено (не помечено), следующий тик уже ПОСЛЕ
+    08:00 -- та же самая непрошедшая проблема должна алертнуть немедленно,
+    не потеряться."""
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append({"text": text, "critical": critical})
+
+    monkeypatch.setattr(bot, "send_system", _fake_send_system)
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(tmp_path / "night_mute_log.json"))
+    bot._job_alerted_stale.clear()
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {"testjob": 60})
+    monkeypatch.setattr(bot, "_job_heartbeats", {})
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+
+    # Тик 1 -- ночь, муто
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: True)
+    _run(bot.run_watchdog(MagicMock()))
+    assert calls == []
+
+    # Тик 2 -- уже утро, проблема всё ещё жива
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    _run(bot.run_watchdog(MagicMock()))
+    assert len(calls) == 1
+    assert calls[0]["critical"] is True
+
+
+def test_watchdog_stale_alert_not_muted_outside_night_window(monkeypatch, tmp_path):
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append({"text": text, "critical": critical})
+
+    monkeypatch.setattr(bot, "send_system", _fake_send_system)
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(tmp_path / "night_mute_log.json"))
+    bot._job_alerted_stale.clear()
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {"testjob": 60})
+    monkeypatch.setattr(bot, "_job_heartbeats", {})
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+    _run(bot.run_watchdog(MagicMock()))
+    assert len(calls) == 1
+    assert "testjob" in bot._job_alerted_stale
+
+
+# ── _is_night_mute_window() ──────────────────────────────────────────────
+
+def test_is_night_mute_window_true_at_midnight():
+    import datetime as _dt
+    now = _dt.datetime(2026, 7, 17, 0, 0, tzinfo=bot.TZ)
+    assert bot._is_night_mute_window(now) is True
+
+
+def test_is_night_mute_window_true_just_before_8am():
+    import datetime as _dt
+    now = _dt.datetime(2026, 7, 17, 7, 59, tzinfo=bot.TZ)
+    assert bot._is_night_mute_window(now) is True
+
+
+def test_is_night_mute_window_false_at_8am_exactly():
+    import datetime as _dt
+    now = _dt.datetime(2026, 7, 17, 8, 0, tzinfo=bot.TZ)
+    assert bot._is_night_mute_window(now) is False
+
+
+def test_is_night_mute_window_false_at_noon():
+    import datetime as _dt
+    now = _dt.datetime(2026, 7, 17, 12, 0, tzinfo=bot.TZ)
+    assert bot._is_night_mute_window(now) is False
+
+
+def test_is_night_mute_window_false_just_before_midnight():
+    import datetime as _dt
+    now = _dt.datetime(2026, 7, 17, 23, 59, tzinfo=bot.TZ)
+    assert bot._is_night_mute_window(now) is False
+
+
+# ── send_system() night_mutable ──────────────────────────────────────────
+
+def test_send_system_night_mutable_suppressed_in_window(monkeypatch, tmp_path):
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: True)
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(tmp_path / "night_mute_log.json"))
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+    _run(bot.send_system(fake_bot, "coarse переподключён", night_mutable=True,
+                          night_mute_kind="pump_radar_reconnect"))
+    fake_bot.send_message.assert_not_called()
+
+
+def test_send_system_night_mutable_sent_outside_window(monkeypatch, tmp_path):
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(tmp_path / "night_mute_log.json"))
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+    _run(bot.send_system(fake_bot, "coarse переподключён", night_mutable=True,
+                          night_mute_kind="pump_radar_reconnect"))
+    fake_bot.send_message.assert_called_once()
+
+
+def test_send_system_non_night_mutable_alert_ignores_night_window(monkeypatch, tmp_path):
+    """Алерты БЕЗ night_mutable=True (например, shadow data-loss) не должны
+    замьючиваться ночью, даже если сейчас ночное окно -- владелец explicit:
+    "critical-алерты не трогать" (в смысле "прочие критические алерты класс
+    не задет этим изменением")."""
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: True)
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+    _run(bot.send_system(fake_bot, "shadow-поток не пишет 17ч", critical=True))
+    fake_bot.send_message.assert_called_once()
+
+
+def test_send_system_night_mute_records_event(monkeypatch, tmp_path):
+    log_path = tmp_path / "night_mute_log.json"
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: True)
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(log_path))
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+    _run(bot.send_system(fake_bot, "coarse переподключён (реконнект #3)",
+                          night_mutable=True, night_mute_kind="pump_radar_reconnect"))
+    assert log_path.exists()
+    import json
+    data = json.loads(log_path.read_text())
+    assert len(data["events"]) == 1
+    assert data["events"][0]["kind"] == "pump_radar_reconnect"
+
+
+def test_record_night_mute_resets_on_new_day(monkeypatch, tmp_path):
+    log_path = tmp_path / "night_mute_log.json"
+    monkeypatch.setattr(bot, "NIGHT_MUTE_LOG_PATH", str(log_path))
+    log_path.write_text('{"date": "2020-01-01", "events": [{"ts": 1, "kind": "old", "detail": ""}]}')
+    bot._record_night_mute("watchdog_heartbeat", "testjob: 15 мин")
+    import json
+    data = json.loads(log_path.read_text())
+    assert len(data["events"]) == 1  # старый день отброшен, не накопился
+    assert data["events"][0]["kind"] == "watchdog_heartbeat"
+
+
+def test_notify_owner_reconnect_passes_night_mutable(monkeypatch):
+    """pump_detector._notify_owner() пробрасывает night_mutable/night_mute_
+    kind в bot.send_system() без искажений."""
+    import pump_detector as _pd
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, night_mutable=False,
+                                 night_mute_kind="", **kw):
+        calls.append({"night_mutable": night_mutable, "night_mute_kind": night_mute_kind})
+
+    monkeypatch.setattr(bot, "send_system", _fake_send_system)
+
+    class _FakeCtx:
+        def __init__(self):
+            self.bot = MagicMock()
+
+    _run(_pd._notify_owner(_FakeCtx(), "coarse переподключён", night_mutable=True,
+                            night_mute_kind="pump_radar_reconnect"))
+    assert calls[0]["night_mutable"] is True
+    assert calls[0]["night_mute_kind"] == "pump_radar_reconnect"
 
 
 def test_watchdog_source_failure_alert_is_not_critical(monkeypatch):

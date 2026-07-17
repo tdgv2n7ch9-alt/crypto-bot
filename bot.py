@@ -158,6 +158,54 @@ BOT_VERSION = "v130"         # обновлять при каждом комми
 SYSTEM_MESSAGE_PREFIX = "🛠 [SYS] "
 
 
+# Владелец, 2026-07-17 (утренний пакет п.5): ночной mute класса
+# [SYS]-watchdog/reconnect -- известный, часто уже диагностированный класс
+# шума (heartbeat-флап фоновой задачи, WS-реконнект памп-радара), который
+# не должен будить владельца по ночам (пример: 6 будящих сообщений за
+# ночь 04:24-07:54 по одному и тому же known-bug get_all_coins). НЕ
+# затрагивает `critical=True` (потеря данных/бот молчит) -- владелец
+# явно разделил "известный некритичный шум" и "критично, будить всегда".
+NIGHT_MUTE_START_HOUR = 0
+NIGHT_MUTE_END_HOUR = 8
+NIGHT_MUTE_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "night_mute_log.json")
+
+
+def _is_night_mute_window(now: datetime = None) -> bool:
+    """[00:00, 08:00) по TZ проекта (Europe/Istanbul == UTC+3, тот же пояс,
+    что used everywhere as "MSK"/"UTC+3" в комментариях)."""
+    now = now if now is not None else datetime.now(TZ)
+    return NIGHT_MUTE_START_HOUR <= now.hour < NIGHT_MUTE_END_HOUR
+
+
+def _record_night_mute(kind: str, detail: str = ""):
+    """Best-effort счётчик замьюченных ночью алертов -- для утреннего брифа
+    (владелец должен ВИДЕТЬ, что было приглушено, не просто не получить
+    пуш и не узнать вообще). Файл per-day, пересоздаётся на смену даты --
+    не растёт бесконечно."""
+    import json  # bot.py намеренно не держит `json` в модульном неймспейсе
+    # (только локальный `import json as _json` в одной функции ниже по
+    # файлу) -- баг найден живьём тестами (NameError), локальный импорт
+    # здесь, тот же паттерн, что уже используется в остальном файле.
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    try:
+        if os.path.exists(NIGHT_MUTE_LOG_PATH):
+            with open(NIGHT_MUTE_LOG_PATH) as f:
+                data = json.load(f)
+        else:
+            data = {}
+        if data.get("date") != today:
+            data = {"date": today, "events": []}
+        data.setdefault("events", []).append(
+            {"ts": time.time(), "kind": kind, "detail": detail[:200]})
+        tmp = f"{NIGHT_MUTE_LOG_PATH}.tmp{os.getpid()}"
+        os.makedirs(os.path.dirname(NIGHT_MUTE_LOG_PATH), exist_ok=True)
+        with open(tmp, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, NIGHT_MUTE_LOG_PATH)
+    except Exception as e:
+        log.error(f"_record_night_mute: не удалось записать ({e})")
+
+
 def _system_channel_chat_id():
     """None, пока владелец не прислал chat_id новой группы (этап подготовки).
     Невалидное значение переменной окружения -- честно None, не роняем
@@ -172,7 +220,8 @@ def _system_channel_chat_id():
         return None
 
 
-async def send_system(bot: Bot, text: str, critical: bool = False, **kwargs) -> None:
+async def send_system(bot: Bot, text: str, critical: bool = False,
+                       night_mutable: bool = False, night_mute_kind: str = "", **kwargs) -> None:
     """Единая точка отправки системных/инфраструктурных сообщений (владелец,
     П-Каналы). Добавляет `SYSTEM_MESSAGE_PREFIX` автоматически -- вызывающая
     сторона НЕ должна дублировать префикс в своём тексте.
@@ -187,9 +236,31 @@ async def send_system(bot: Bot, text: str, critical: bool = False, **kwargs) -> 
         не должно потеряться, если владелец сейчас смотрит только основной
         чат.
 
+    Ночной mute (владелец, 2026-07-17, утренний пакет п.5): `night_mutable=
+    True` + [00:00,08:00) TZ проекта -> отправка ПРОПУСКАЕТСЯ, событие
+    логируется + пишется в NIGHT_MUTE_LOG_PATH для утреннего брифа.
+    `night_mutable` и `critical` -- НЕЗАВИСИМЫЕ флаги, не пересекаются:
+    `critical` управляет РОУТИНГОМ, когда сообщение реально отправляется
+    (оба чата вместо одного), `night_mutable` управляет ТЕМ, отправляется
+    ли оно вообще ночью. Специально НЕ делаю "critical всегда важнее" --
+    ровно тот алерт, который владелец просит мьютить (watchdog heartbeat-
+    stale, "6 будящих сообщений за ночь"), в коде уже помечен
+    `critical=True` по СМЫСЛУ "не потерять при разделении на 2 канала",
+    а не по смыслу "будить всегда, даже по известному багу". Безопасность
+    достигается на уровне ВЫЗЫВАЮЩЕГО кода: `night_mutable=True` передан
+    ТОЛЬКО в двух конкретных местах (watchdog heartbeat-stale, pump_
+    detector reconnect) -- остальные критические алерты (shadow data-loss,
+    "Радар без данных") этот флаг не получают и никогда не мьютятся.
+
     Сбой отправки в ОДИН из чатов не должен ронять отправку в другой --
     каждый bot.send_message() в своём try/except (тот же принцип
     отказоустойчивости, что везде в проекте, ошибки -- через log.error())."""
+    if night_mutable and _is_night_mute_window():
+        log.info(f"send_system: ночной mute ({night_mute_kind or 'unspecified'}) -- "
+                  f"не отправлено: {text[:150]}")
+        _record_night_mute(night_mute_kind or "unspecified", text)
+        return
+
     owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
     system_id = _system_channel_chat_id()
     prefixed_text = f"{SYSTEM_MESSAGE_PREFIX}{text}"
@@ -851,10 +922,22 @@ async def run_watchdog(bot: Bot):
         hb = _job_heartbeats.get(name)
         age = (now - hb["ts"]) if hb else (now - _PROCESS_START_TS)
         if age > expected * 2 and name not in _job_alerted_stale:
+            # Владелец, 2026-07-17 (утренний пакет п.5): _job_alerted_stale
+            # помечается ТОЛЬКО если реально отправили (не в ночном mute-
+            # окне) -- если замьютили, следующий тик run_watchdog (через
+            # WATCHDOG_INTERVAL_MIN) снова увидит "не отмечен, не
+            # заалерчен" и перепроверит окно заново. Как только пересечём
+            # 08:00, а проблема всё ещё жива -- алерт уйдёт немедленно на
+            # первом же тике после границы, не потеряется молча.
+            if _is_night_mute_window():
+                log.info(f"run_watchdog: ночной mute -- «{name}» не отмечалась "
+                          f"{age/60:.0f} мин, алерт не отправлен")
+                _record_night_mute("watchdog_heartbeat", f"{name}: {age/60:.0f} мин")
+                continue
             _job_alerted_stale.add(name)
             try:
                 # П-Каналы (владелец): "бот молчит" -- фоновая задача не тикает --
-                # критично, дублируем в оба чата.
+                # критично, дублируем в оба чата (вне ночного mute-окна).
                 await send_system(
                     bot,
                     f"Watchdog: фоновая задача «{name}» не отмечалась {age/60:.0f} мин "

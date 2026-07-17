@@ -710,17 +710,22 @@ def _scenario_lines(kind: str, oi_change_pct: float, rug_warn: bool) -> list:
             "⏳ Наблюдаю за откатом до 30 минут..."]
 
 
-async def _notify_owner(ctx: PumpContext, text: str, critical: bool = False):
+async def _notify_owner(ctx: PumpContext, text: str, critical: bool = False,
+                         night_mutable: bool = False, night_mute_kind: str = ""):
     """П-Каналы (владелец, 2026-07-15): системные уведомления Pump Radar
     (реконнект/старт/потеря данных) идут через bot.send_system() -- тот же
     единый роутинг/префикс 🛠 [SYS], что все остальные системные сообщения.
     Ленивый импорт bot.py -- pump_detector.py не импортируется на уровне
     модуля bot.py (только внутри _start_pump_detector()), обратный импорт
     здесь безопасен по времени вызова (оба модуля уже полностью загружены
-    к первому реальному вызову этой функции)."""
+    к первому реальному вызову этой функции).
+
+    `night_mutable`/`night_mute_kind` -- владелец, 2026-07-17 (утренний
+    пакет п.5), прозрачный passthrough к send_system()'s ночному mute."""
     try:
         import bot as _bot_module
-        await _bot_module.send_system(ctx.bot, text, critical=critical)
+        await _bot_module.send_system(ctx.bot, text, critical=critical,
+                                       night_mutable=night_mutable, night_mute_kind=night_mute_kind)
     except Exception as e:
         log.error(f"Pump Radar: не удалось отправить owner-уведомление: {e}")
 
@@ -775,8 +780,13 @@ async def run_miniticker_stream(ctx: PumpContext):
                         now_notify = time.time()
                         if now_notify - _last_reconnect_notify_ts >= COARSE_RECONNECT_NOTIFY_COOLDOWN_SEC:
                             _last_reconnect_notify_ts = now_notify
+                            # Владелец, 2026-07-17 (утренний пакет п.5): WS-
+                            # реконнект памп-радара -- известный некритичный
+                            # шум (соединение само восстанавливается через
+                            # 5с), не должен будить владельца ночью.
                             await _notify_owner(
-                                ctx, f"coarse переподключён (реконнект #{_coarse_reconnect_count})")
+                                ctx, f"coarse переподключён (реконнект #{_coarse_reconnect_count})",
+                                night_mutable=True, night_mute_kind="pump_radar_reconnect")
                         break
 
                     try:
