@@ -134,6 +134,7 @@ import course_content
 import methodology_content
 import bsc_wallet_monitor
 import bank_setup_monitor
+import onchain_watch
 import ake_setup_monitor
 import zone_alert_monitor
 import journal_persistence
@@ -13915,6 +13916,7 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["exit_tracker"] = signal_loop.EXIT_TRACKER_INTERVAL_MIN * 60
     _job_expected_interval_sec["bsc_wallet_monitor"] = bsc_wallet_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["bank_setup_monitor"] = bank_setup_monitor.POLL_INTERVAL_SEC
+    _job_expected_interval_sec["onchain_watch"] = onchain_watch.POLL_INTERVAL_SEC
     _job_expected_interval_sec["ake_setup_monitor"] = ake_setup_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["zone_alert_monitor"] = zone_alert_monitor.POLL_INTERVAL_SEC
 
@@ -14064,6 +14066,14 @@ async def _start_pump_detector(app):
         _heartbeat_wrapper("bank_setup_monitor", bank_setup_monitor.check_bank_setup),
         "interval",
         seconds=bank_setup_monitor.POLL_INTERVAL_SEC,
+        args=[app.bot],
+    )
+    # Владелец, 2026-07-17: разлок BANK сегодня -- мониторинг получателей ->
+    # биржевые депозиты. См. onchain_watch.py докстринг.
+    scheduler.add_job(
+        _heartbeat_wrapper("onchain_watch", onchain_watch.check_bank_unlock),
+        "interval",
+        seconds=onchain_watch.POLL_INTERVAL_SEC,
         args=[app.bot],
     )
     # СРОЧНЫЙ наряд владельца, 2026-07-15 -- владелец В ПОЗИЦИИ шорт AKE, единый

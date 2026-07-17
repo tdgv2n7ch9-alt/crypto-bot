@@ -330,11 +330,19 @@ def _recipient_topics() -> list:
     return [TRANSFER_TOPIC, None, [_addr_topic(w) for w in AKE_WATCHED_RECIPIENTS]]
 
 
-def get_transfer_logs(from_block: int, to_block: int, topics: list = None) -> tuple:
-    """Transfer-логи AKE от отслеживаемых кошельков в диапазоне блоков, с
-    fallback между провайдерами и авто-чанкингом под лимит диапазона каждого.
-    Если ВСЕ провайдеры отказали для чанка -- честно пропускает его с
-    log.error(), не падает и не выдумывает данные за пропущенный диапазон.
+def get_transfer_logs(from_block: int, to_block: int, topics: list = None, contract: str = None) -> tuple:
+    """Transfer-логи AKE (или другого BEP20-контракта, см. `contract`) от
+    отслеживаемых кошельков в диапазоне блоков, с fallback между провайдерами
+    и авто-чанкингом под лимит диапазона каждого. Если ВСЕ провайдеры
+    отказали для чанка -- честно пропускает его с log.error(), не падает и
+    не выдумывает данные за пропущенный диапазон.
+
+    `contract` -- владелец, 2026-07-17 (onchain_watch.py/BANK): опциональный
+    параметр, по умолчанию AKE_CONTRACT (сохраняет старое поведение для всех
+    существующих вызовов) -- позволяет onchain_watch.py переиспользовать этот
+    же chunking/fallback/dead-provider код и ОБЩИЙ QuickNode credit-бюджет
+    (_record_quicknode_call считает через _rpc_call, один счётчик на все
+    контракты) вместо дублирования ~60 строк логики ради другого адреса.
 
     Владелец, критический регресс 2026-07-15 (bsc_wallet_monitor не отмечался
     5+ мин, "Радар без данных" одновременно): 1rpc.io поймал usage-лимит (-32001)
@@ -357,6 +365,7 @@ def get_transfer_logs(from_block: int, to_block: int, topics: list = None) -> tu
     _wallet_topics() -- та же функция обслуживает и sender-watch, и
     recipient-watch запросы, вся chunking/fallback-логика не дублируется."""
     topics = topics if topics is not None else _wallet_topics()
+    contract = contract if contract is not None else AKE_CONTRACT
     all_logs = []
     dead_providers = set()
     last_processed_block = from_block - 1
@@ -370,7 +379,7 @@ def get_transfer_logs(from_block: int, to_block: int, topics: list = None) -> tu
             try:
                 d = _rpc_call(prov["url"], "eth_getLogs", [{
                     "fromBlock": hex(b), "toBlock": hex(end),
-                    "address": AKE_CONTRACT, "topics": topics,
+                    "address": contract, "topics": topics,
                 }])
                 if "result" in d:
                     all_logs.extend(d["result"])
