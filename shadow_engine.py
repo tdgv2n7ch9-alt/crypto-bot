@@ -1180,11 +1180,11 @@ async def log_shadow_async(symbol: str, result: dict, bot_module, live_journal_i
     except Exception as e:
         log.error(f"shadow_engine.log_shadow_async: compute failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    loop = asyncio.get_event_loop()
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
@@ -1269,14 +1269,14 @@ async def log_send_scheduled_shadow_async(symbol: str, a: dict, bot_module,
     # Пакет 11 М2 (ТЗ Блок 4 -- Order Block, ранее полностью отсутствовал в
     # real_full_analysis(), см. ENGINE_UNIFICATION.md §4): аналогично, переносится.
     record["order_block_shadow"] = a.get("order_block_shadow")
-    ok_local = _write_local(record)
+    loop = asyncio.get_event_loop()
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         log.error(f"shadow_engine.log_send_scheduled_shadow_async: _write_local FAILED for {symbol}")
         return False
     global _last_send_scheduled_write_ts
     _last_send_scheduled_write_ts = time.time()
     try:
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed (локальная запись уже сохранена): {e}")
@@ -1357,11 +1357,11 @@ async def log_pump_reversal_shadow_async(symbol: str, watch: dict, funding, oi_u
     except Exception as e:
         log.error(f"shadow_engine.log_pump_reversal_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    loop = asyncio.get_event_loop()
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed for pump_reversal ({symbol}): {e}")
@@ -1424,11 +1424,11 @@ async def log_ema_stack_shadow_async(symbol: str, ema_stack_shadow: dict,
     except Exception as e:
         log.error(f"shadow_engine.log_ema_stack_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    loop = asyncio.get_event_loop()
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed for ema_stack_shadow ({symbol}): {e}")
@@ -1510,11 +1510,11 @@ async def log_auto_ema_stack_shadow_async(symbol: str, a: dict, promoted_live: b
     except Exception as e:
         log.error(f"shadow_engine.log_auto_ema_stack_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    loop = asyncio.get_event_loop()
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed for auto_ema_stack_shadow ({symbol}): {e}")
@@ -1590,7 +1590,7 @@ async def log_auto_derivatives_shadow_async(symbol: str, a: dict, promoted_live:
     except Exception as e:
         log.error(f"shadow_engine.log_auto_derivatives_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
@@ -1690,7 +1690,7 @@ async def log_auto_options_shadow_async(symbol: str, a: dict, promoted_live: boo
     except Exception as e:
         log.error(f"shadow_engine.log_auto_options_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
@@ -1771,7 +1771,7 @@ async def log_auto_liquidation_shadow_async(symbol: str, a: dict, promoted_live:
     except Exception as e:
         log.error(f"shadow_engine.log_auto_liquidation_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
@@ -1832,7 +1832,7 @@ async def log_auto_onchain_shadow_async(symbol: str, a: dict, promoted_live: boo
     except Exception as e:
         log.error(f"shadow_engine.log_auto_onchain_shadow_async: build failed for {symbol}: {e}")
         return False
-    ok_local = _write_local(record)
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
@@ -1919,11 +1919,11 @@ async def log_ls_contrarian_shadow_async(symbol: str, ls: float, funding: float,
         return False
     if not record["is_extreme"]:
         return False
-    ok_local = _write_local(record)
+    loop = asyncio.get_event_loop()
+    ok_local = await loop.run_in_executor(None, _write_local, record)
     if not ok_local:
         return False
     try:
-        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _sync_to_github_sync, record)
     except Exception as e:
         log.error(f"shadow_engine: GitHub sync failed for ls_contrarian_shadow ({symbol}): {e}")
