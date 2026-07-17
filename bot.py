@@ -14183,9 +14183,6 @@ def main():
     log.info(f"[MENU-V2] MENU_V2_ENABLED={MENU_V2_ENABLED}")
     app.run_polling(drop_pending_updates=True)
 
-if __name__ == "__main__":
-    main()
-
 _macro_cache={}
 _macro_ts=0.0
 _opts_cache={}
@@ -14469,3 +14466,17 @@ def get_institutional_summary():
     elif sc<=45: ov='MODERATE BEARISH'
     else: ov='NEUTRAL'
     return {'ok':True,'score':sc,'overall':ov,'signals':sig,'warnings':wrn,'macro':macro,'options':opts,'liquidations':liqs}# deploy trigger: 2026-07-14T18:19:05+0300 (owner-authorized recovery -- build 2a68170b stuck BUILDING >14min, 'failed to fetch snapshot' loop across Metal builders)
+
+# #290-critical (владелец, 2026-07-18 ночь): if __name__=="__main__" ПЕРЕМЕЩЁН
+# сюда, в самый конец файла -- раньше стоял на строке ~14186, ДО 10 функций
+# (get_macro_data/get_options_data/get_perp_spot_premium/get_liq_data/
+# get_onchain_snapshot_cached/get_usdt_mcap/get_stablecoin_dominance/
+# get_institutional_summary/_parse_deribit_option_name/compute_max_pain).
+# main() блокирует навсегда (app.run_polling) -- код МОДУЛЬНОГО уровня после
+# него никогда не выполнялся в живом процессе (python bot.py, CMD в
+# Dockerfile/railway.json), эти 10 функций НИКОГДА не попадали в globals(),
+# каждый вызов был гарантированным NameError (живое доказательство:
+# "[LIMITKI] liq {symbol}: name 'get_liq_data' is not defined", railway logs).
+# Только перемещение кода, ни одна функция не изменена.
+if __name__ == "__main__":
+    main()
