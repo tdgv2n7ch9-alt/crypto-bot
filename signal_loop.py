@@ -315,18 +315,26 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk, bot_m
         InlineKeyboardButton("🔍 Полный анализ", callback_data=f"full_{symbol}"),
         InlineKeyboardButton("👁 Следить", callback_data=f"sigloop_watch_{symbol}"),
     ]])
+    sent_msg = None
     try:
         if chart:
-            await tg_bot.send_photo(chat_id, photo=chart, caption=text, parse_mode="HTML", reply_markup=kb)
+            sent_msg = await tg_bot.send_photo(chat_id, photo=chart, caption=text, parse_mode="HTML", reply_markup=kb)
         else:
-            await tg_bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
+            sent_msg = await tg_bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
         _log(f"{symbol}: send with HTML failed ({e}), retrying plain")
         try:
-            await tg_bot.send_message(chat_id, text, reply_markup=kb)
+            sent_msg = await tg_bot.send_message(chat_id, text, reply_markup=kb)
         except Exception as e2:
             _log(f"{symbol}: send_alert failed entirely: {e2}")
             return
+
+    # Владелец, 2026-07-17, задача #272 -- message_id исходной карточки, чтобы
+    # последующие алерты ("вход активен") могли дать кликабельную ссылку назад.
+    # sent_msg может быть None, если ОБЕ попытки отправки упали (return выше уже
+    # отработал бы в этом случае) -- getattr с default защищает от AttributeError
+    # на всякий редкий случай (напр. мок в тестах возвращает не Message).
+    origin_msg_id = getattr(sent_msg, "message_id", None)
 
     e_lo, e_hi = ((b11["entry3"], b11["entry1"]) if direction == "long"
                  else (b11["entry1"], b11["entry3"]))
@@ -345,6 +353,7 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk, bot_m
             rr=b11["rr_tp1"], rocket_score=result["block12_rocket"]["score"],
             ema_stack=result.get("ema_ctx"), sweep=result.get("sweep_4h") or result.get("sweep_1h"),
             levels_source="structure", grade=None, degraded_data=degraded_data,
+            origin_msg_id=origin_msg_id, origin_chat_id=chat_id,
         )
     except Exception as e:
         _log(f"{symbol}: journal log failed: {e}")
@@ -377,7 +386,7 @@ async def _send_alert(tg_bot, chat_id, symbol, result, reasons, meme_risk, bot_m
         "entered": False, "entered_price": None,
         "tp1_hit": False, "tp2_hit": False, "closed": False,
         "structure_warned": False, "journal_id": journal_id,
-        "created_ts": time.time(),
+        "created_ts": time.time(), "origin_msg_id": origin_msg_id,
     }
     _log(f"{symbol}: alert sent ({direction}), journal_id={journal_id}, alert_id={alert_id}")
 
@@ -474,7 +483,15 @@ async def run_exit_tracker(bot, tg_bot):
             if _touches_zone(price, st["entry_lo"], st["entry_hi"]):
                 st["entered"] = True
                 st["entered_price"] = price
-                await _notify(tg_bot, chat_id, f"📍 <b>{sym_e}</b>: вход активен (<code>{price}</code>)")
+                text = f"📍 <b>{sym_e}</b>: вход активен (<code>{price}</code>)"
+                # Владелец, 2026-07-17, задача #272 -- ссылка на исходную карточку
+                # сигнала. origin_msg_id отсутствует у сигналов до этой фичи (или
+                # если сама отправка карточки упала) -- тогда просто без ссылки,
+                # без падения (п.5 спецификации).
+                link = signal_journal.telegram_message_link(chat_id, st.get("origin_msg_id"))
+                if link:
+                    text += f' → <a href="{link}">Сигнал</a>'
+                await _notify(tg_bot, chat_id, text)
             elif now - st["created_ts"] > PRE_ENTRY_EXPIRE_SEC:
                 st["closed"] = True  # тихо -- как PENDING_EXPIRE в signal_journal, без алерта
             continue

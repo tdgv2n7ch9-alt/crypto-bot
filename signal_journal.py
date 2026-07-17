@@ -376,12 +376,25 @@ def _rotate_old_records() -> int:
     return archived_count
 
 
+def telegram_message_link(chat_id, message_id) -> str:
+    """https://t.me/c/<internal_id>/<message_id> -- ссылка на конкретное сообщение в
+    приватном чате/канале. internal_id = chat_id БЕЗ префикса -100 (владелец,
+    2026-07-17, задача #272 "кликабельные алерты входа"). Возвращает None, если
+    chat_id или message_id отсутствует -- вызывающая сторона обязана обработать это
+    как "ссылки нет" (не падать), см. п.5 задачи #272 (старые сигналы без origin_msg_id)."""
+    if chat_id is None or message_id is None:
+        return None
+    s = str(chat_id)
+    s = s[4:] if s.startswith("-100") else s.lstrip("-")
+    return f"https://t.me/c/{s}/{message_id}"
+
+
 def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
                entry_lo: float, entry_hi: float, sl: float,
                tp1: float = None, tp2: float = None, tp3: float = None,
                rr: float = None, rocket_score=None,
                ema_stack=None, sweep=None, levels_source=None, grade=None,
-               degraded_data=None) -> int:
+               degraded_data=None, origin_msg_id=None, origin_chat_id=None) -> int:
     """Логирует новый сигнал, статус PENDING. direction: "long"/"short". Для скалярного
     входа (не зоны) передать одно и то же значение в entry_lo и entry_hi. Только
     наблюдение — вызывается ПОСЛЕ уже принятого решения сгенерировать сигнал, не влияет
@@ -403,7 +416,13 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
     источников данных, которые были недоступны/устарели на момент сигнала (напр.
     ["cmc", "yahoo_finance"], см. bot._data_quality_flags(), ROADMAP П3). НЕ блокирует
     сигнал -- только помечает для последующего анализа, влияет ли деградация качества
-    данных на win rate (сравнить по этому полю в /journal, аналогично by_source)."""
+    данных на win rate (сравнить по этому полю в /journal, аналогично by_source).
+
+    origin_msg_id/origin_chat_id: id исходного Telegram-сообщения с карточкой сигнала
+    (владелец, 2026-07-17, задача #272) -- позволяет последующим алертам ("вход
+    активен" и т.п.) собрать кликабельную ссылку обратно на карточку через
+    telegram_message_link(). None/None для сигналов, где message_id не был получен
+    (ошибка отправки) -- ссылка тогда просто не строится, не падает."""
     global _next_id, _dirty
     rec_id = _next_id
     _next_id += 1
@@ -419,6 +438,7 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
         "rr": rr, "rocket_score": rocket_score,
         "ema_stack": ema_stack, "sweep": sweep, "levels_source": levels_source, "grade": grade,
         "degraded_data": degraded_data or None,
+        "origin_msg_id": origin_msg_id, "origin_chat_id": origin_chat_id,
         "price_at_signal": price_at_signal,
         "status": "PENDING",
         "entered_ts": None, "entered_price": None,

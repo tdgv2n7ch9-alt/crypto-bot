@@ -4,6 +4,51 @@
 import signal_journal as sj
 
 
+# ── telegram_message_link / log_signal origin fields ──────────────────────────
+# Владелец, 2026-07-17, задача #272 -- кликабельные алерты входа.
+
+def test_telegram_message_link_strips_minus100_prefix():
+    assert sj.telegram_message_link(-1001234567890, 42) == "https://t.me/c/1234567890/42"
+
+
+def test_telegram_message_link_strips_bare_minus_prefix():
+    # групповой (не supergroup) chat_id без -100 -- на практике owner_id/DM положительный,
+    # но функция не должна падать/давать мусор и на этом формате
+    assert sj.telegram_message_link(-123456, 42) == "https://t.me/c/123456/42"
+
+
+def test_telegram_message_link_positive_chat_id_unchanged():
+    assert sj.telegram_message_link(7009350191, 100) == "https://t.me/c/7009350191/100"
+
+
+def test_telegram_message_link_none_when_chat_id_missing():
+    assert sj.telegram_message_link(None, 42) is None
+
+
+def test_telegram_message_link_none_when_message_id_missing():
+    assert sj.telegram_message_link(-1001234567890, None) is None
+
+
+def test_log_signal_stores_origin_msg_id(monkeypatch):
+    monkeypatch.setattr(sj, "_save", lambda: None)
+    rid = sj.log_signal("signal_loop", "ETHUSDT", "long", 1800.0,
+                         entry_lo=1790.0, entry_hi=1810.0, sl=1750.0,
+                         origin_msg_id=555, origin_chat_id=-1001234567890)
+    rec = sj._journal[rid]
+    assert rec["origin_msg_id"] == 555
+    assert rec["origin_chat_id"] == -1001234567890
+
+
+def test_log_signal_origin_msg_id_defaults_to_none(monkeypatch):
+    # старые сигналы / сигналы без успешной отправки -- не падает, просто None
+    monkeypatch.setattr(sj, "_save", lambda: None)
+    rid = sj.log_signal("signal_loop", "ETHUSDT", "long", 1800.0,
+                         entry_lo=1790.0, entry_hi=1810.0, sl=1750.0)
+    rec = sj._journal[rid]
+    assert rec["origin_msg_id"] is None
+    assert rec["origin_chat_id"] is None
+
+
 def test_touches_entry_long_inside_zone():
     assert sj._touches_entry(105, 100, 110) is True
 

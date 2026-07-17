@@ -855,7 +855,11 @@ async def _level_watch_task(bot: Bot, owner_id: int):
     подтягивает GitHub-версию поверх той, что была закоммичена этим самым деплоем
     (владелец мог обновить зоны через /zones_set ПОСЛЕ последнего git push)."""
     async def _send(oid, text):
-        await bot.send_message(oid, text)
+        # parse_mode="HTML" + возврат Message -- владелец, 2026-07-17, задача #272
+        # (кликабельная ссылка "→ Первый алерт по зоне" между повторными алертами
+        # по одной зоне; level_watch.format_level_alert() уже экранирует html.escape()
+        # все owner-редактируемые поля note/source/updated перед вставкой).
+        return await bot.send_message(oid, text, parse_mode="HTML")
 
     try:
         synced = await level_watch.startup_sync()

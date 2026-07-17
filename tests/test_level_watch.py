@@ -105,6 +105,31 @@ def test_format_level_alert_includes_liq_line_when_provided():
     assert "🗺 Ликвидации рядом: тест" in text
 
 
+# ── origin_link (владелец, 2026-07-17, задача #272 -- кликабельные алерты) ────
+
+def test_format_level_alert_no_link_by_default():
+    z = _zone(side="LONG", lo=100.0, hi=110.0)
+    text = lw.format_level_alert("ETHUSDT", z, 105.0, "in_zone")
+    assert "<a href" not in text
+
+
+def test_format_level_alert_includes_origin_link_when_provided():
+    z = _zone(side="LONG", lo=100.0, hi=110.0)
+    text = lw.format_level_alert("ETHUSDT", z, 105.0, "in_zone",
+                                  origin_link="https://t.me/c/7009350191/123")
+    assert '<a href="https://t.me/c/7009350191/123">Первый алерт по зоне</a>' in text
+
+
+def test_format_level_alert_escapes_html_special_chars_in_note():
+    # note -- owner-редактируемый текст через /zones_set; parse_mode теперь HTML
+    # (нужен для origin_link), значит "<"/">"/"&" в заметке обязаны экранироваться,
+    # иначе либо ломают разметку сообщения, либо (хуже) инжектят произвольный тег.
+    z = _zone(side="LONG", lo=100.0, hi=110.0, note="SL < 100 & TP > 120")
+    text = lw.format_level_alert("ETHUSDT", z, 105.0, "in_zone")
+    assert "SL < 100 & TP > 120" not in text  # сырой текст не должен пройти как есть
+    assert "SL &lt; 100 &amp; TP &gt; 120" in text
+
+
 # ── find_liquidation_clusters_near_zone / format_liquidation_cluster_line ─────
 # Владелец 2026-07-12: "кластеры рядом (±1%) в первом же алерте; если heatmap-слой
 # для альтов ещё не покрывает эти символы -- честно «н/д»".
@@ -225,6 +250,35 @@ def test_cooldown_independent_per_symbol():
     assert state.should_alert("BTCUSDT", z, "in_zone", now=10_000_000.0) is True
 
 
+# ── LevelWatchState origin_msg_id (владелец, 2026-07-17, задача #272) ─────────
+
+def test_origin_msg_id_none_before_first_set():
+    state = lw.LevelWatchState()
+    assert state.origin_msg_id("ETHUSDT", _zone()) is None
+
+
+def test_origin_msg_id_set_then_read():
+    state = lw.LevelWatchState()
+    z = _zone()
+    state.set_origin_msg_id_if_absent("ETHUSDT", z, 555)
+    assert state.origin_msg_id("ETHUSDT", z) == 555
+
+
+def test_origin_msg_id_does_not_overwrite_existing():
+    state = lw.LevelWatchState()
+    z = _zone()
+    state.set_origin_msg_id_if_absent("ETHUSDT", z, 555)
+    state.set_origin_msg_id_if_absent("ETHUSDT", z, 999)
+    assert state.origin_msg_id("ETHUSDT", z) == 555
+
+
+def test_origin_msg_id_ignores_none():
+    state = lw.LevelWatchState()
+    z = _zone()
+    state.set_origin_msg_id_if_absent("ETHUSDT", z, None)
+    assert state.origin_msg_id("ETHUSDT", z) is None
+
+
 # ── check_and_alert (комбинация scan + cooldown + отправка) ──────────────────
 
 def test_check_and_alert_sends_and_respects_cooldown():
@@ -244,6 +298,32 @@ def test_check_and_alert_sends_and_respects_cooldown():
     asyncio.run(run())
     assert len(sent_log) == 1
     assert sent_log[0][0] == 42
+
+
+def test_check_and_alert_second_alert_links_back_to_first():
+    # владелец, 2026-07-17, задача #272 -- первый алерт по зоне без ссылки, второй
+    # (после кулдауна, та же зона) -- со ссылкой на message_id первого.
+    class _FakeMsg:
+        def __init__(self, message_id):
+            self.message_id = message_id
+
+    state = lw.LevelWatchState()
+    zones = [_zone(lo=100.0, hi=110.0)]
+    calls = {"n": 0}
+
+    async def _fake_send(owner_id, text):
+        calls["n"] += 1
+        return _FakeMsg(700 + calls["n"])
+
+    async def run():
+        t1 = await lw.check_and_alert(_fake_send, 42, state, "ETHUSDT", 105.0, zones, now=10_000_000.0)
+        t2 = await lw.check_and_alert(_fake_send, 42, state, "ETHUSDT", 105.0, zones,
+                                       now=10_000_000.0 + lw.COOLDOWN_SEC + 1)
+        return t1, t2
+
+    t1, t2 = asyncio.run(run())
+    assert "<a href" not in t1[0]
+    assert '<a href="https://t.me/c/42/701">Первый алерт по зоне</a>' in t2[0]
 
 
 def test_check_and_alert_no_bot_send_still_returns_text():

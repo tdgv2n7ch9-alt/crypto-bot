@@ -36,6 +36,7 @@ startup_sync() при старте процесса подтягивает GitHu
 """
 import asyncio
 import base64
+import html
 import json
 import os
 import time
@@ -312,24 +313,32 @@ def format_liquidation_cluster_line(symbol: str, zone: dict, get_liq_data_fn=Non
 
 def format_level_alert(symbol: str, zone: dict, price: float, state: str,
                         source: str = None, updated: str = None,
-                        liq_line: str = None) -> str:
+                        liq_line: str = None, origin_link: str = None) -> str:
     """Сторона, зона, цена, % до зоны, дата разметки — как в задаче. `liq_line` --
     опциональная строка про ликвидационные кластеры рядом (см.
-    format_liquidation_cluster_line), владелец 2026-07-12."""
+    format_liquidation_cluster_line), владелец 2026-07-12. `origin_link` -- ссылка
+    на ПЕРВЫЙ алерт по этой же зоне (владелец, 2026-07-17, задача #272), None -- это
+    первый алерт по зоне, ссылки ещё нет.
+
+    Отправляется с parse_mode="HTML" (нужен для <a href> в origin_link) -- `note`/
+    `source`/`updated` приходят из watch_zones.json (owner-редактируемый текст через
+    /zones_set), поэтому экранируются html.escape() перед вставкой, чтобы случайный
+    `<`/`>`/`&` в заметке не ломал разметку сообщения."""
     side = zone["side"]
     lo, hi = zone["lo"], zone["hi"]
     dist = distance_pct(price, zone)
     header = "🎯 ЦЕНА В ЗОНЕ" if state == "in_zone" else "📍 Подходит к зоне"
     note = zone.get("note")
-    note_line = f"\n{note}" if note else ""
-    src_bits = [b for b in (source, updated) if b]
+    note_line = f"\n{html.escape(note)}" if note else ""
+    src_bits = [html.escape(b) for b in (source, updated) if b]
     src_line = " / ".join(src_bits) if src_bits else "?"
     liq_block = f"\n{liq_line}" if liq_line else ""
+    link_block = f'\n→ <a href="{origin_link}">Первый алерт по зоне</a>' if origin_link else ""
     return (
-        f"{header} — {symbol} {side}\n"
+        f"{header} — {html.escape(symbol)} {html.escape(side)}\n"
         f"Зона: {lo}–{hi}{note_line}\n"
         f"Цена: {price:.2f}  ·  до зоны: {dist:.2f}%\n"
-        f"Разметка: {src_line}{liq_block}"
+        f"Разметка: {src_line}{liq_block}{link_block}"
     )
 
 
@@ -340,6 +349,10 @@ class LevelWatchState:
 
     def __init__(self):
         self._cooldowns = {}  # (symbol, lo, hi, alert_type) -> last_alert_ts
+        self._origin_msg = {}  # (symbol, lo, hi) -> message_id ПЕРВОГО алерта по зоне
+        # (владелец, 2026-07-17, задача #272) -- живёт вместе с процессом, как и
+        # _cooldowns; не персистится между рестартами, тот же принцип (кулдаун тоже
+        # не переживает редеплой) -- honest trade-off, не блокер для фичи.
 
     def should_alert(self, symbol: str, zone: dict, alert_type: str, now: float = None) -> bool:
         now = now if now is not None else time.time()
@@ -349,6 +362,16 @@ class LevelWatchState:
             return False
         self._cooldowns[key] = now
         return True
+
+    def origin_msg_id(self, symbol: str, zone: dict):
+        return self._origin_msg.get((symbol, zone["lo"], zone["hi"]))
+
+    def set_origin_msg_id_if_absent(self, symbol: str, zone: dict, message_id) -> None:
+        if message_id is None:
+            return
+        key = (symbol, zone["lo"], zone["hi"])
+        if key not in self._origin_msg:
+            self._origin_msg[key] = message_id
 
 
 def scan_zones(price: float, zones: list, approach_pct: float = APPROACH_PCT) -> list:
@@ -377,8 +400,12 @@ async def check_and_alert(bot_send, owner_id, state: LevelWatchState, symbol: st
         if not state.should_alert(symbol, zone, zstate, now=now):
             continue
         liq_line = format_liquidation_cluster_line(symbol, zone, get_liq_data_fn)
+        # Владелец, 2026-07-17, задача #272 -- если по этой зоне уже был отправлен
+        # алерт раньше (напр. "approaching" перед этим "in_zone"), дать ссылку
+        # обратно на него. Первый алерт по зоне -- без ссылки (не на что ссылаться).
+        origin_link = signal_journal.telegram_message_link(owner_id, state.origin_msg_id(symbol, zone))
         text = format_level_alert(symbol, zone, price, zstate, source=source,
-                                   updated=updated, liq_line=liq_line)
+                                   updated=updated, liq_line=liq_line, origin_link=origin_link)
         sent.append(text)
         append_event({
             "ts": now if now is not None else time.time(), "symbol": symbol.upper(),
@@ -387,7 +414,8 @@ async def check_and_alert(bot_send, owner_id, state: LevelWatchState, symbol: st
         })
         if bot_send is not None:
             try:
-                await bot_send(owner_id, text)
+                msg = await bot_send(owner_id, text)
+                state.set_origin_msg_id_if_absent(symbol, zone, getattr(msg, "message_id", None))
             except Exception as e:
                 print(f"level_watch: alert send failed for {symbol}: {e}")
     return sent
