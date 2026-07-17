@@ -1,10 +1,14 @@
 """
-pytest для ta_extra.smc_setup_type_body_close_variant() -- Пакет 11 М1, A/B тело-vs-фитиль
-(владелец "да"): shadow-only альтернатива smc_setup_type() с гейтом на закрытие свечи за
-уровнем (находка METHODOLOGY_CORE.md §1 -- конфликт "Урок 2. Structure.pdf" vs
-Инструктора B, уже реализованного в живом smc_setup_type()). Тесты фиксируют оба случая:
-где оба варианта СОГЛАСНЫ (закрытие за уровнем реально было) и где они РАСХОДЯТСЯ (пробой
-только тенью).
+pytest для ta_extra.smc_setup_type()/smc_setup_type_wick_only()/
+smc_setup_type_body_close_variant() -- Пакет 11 М1, A/B тело-vs-фитиль.
+
+Владелец, 2026-07-17: patch05_bpr (body-close) промотирован в live -- гейт
+пройден честно (min 20 closed outcomes, live/patch05_bpr closed=23,
+ready=True). smc_setup_type() -- теперь ЖИВАЯ body-close-логика (см.
+test_promotion_smc_setup_type_now_matches_body_close_variant ниже -- лок
+регресса на сам факт промоушена). smc_setup_type_wick_only() -- прежняя
+живая логика (Инструктор B, тень/экстремум), сохранена для продолжающегося
+A/B-измерения, больше НЕ вызывается из живого пути напрямую.
 """
 import os
 import sys
@@ -41,19 +45,29 @@ _UPTREND_WICK_ONLY = [
 ]
 
 
+def test_promotion_smc_setup_type_now_matches_body_close_variant():
+    """Лок регресса на промоушен 2026-07-17: живая smc_setup_type() должна давать
+    ИДЕНТИЧНЫЙ результат smc_setup_type_body_close_variant() на любых свечах --
+    если кто-то случайно откатит промоушен (вернёт wick-only тело в smc_setup_type),
+    этот тест упадёт."""
+    for candles, bias in ((_UPTREND_CLOSE_CONFIRMED, "long"), (_UPTREND_WICK_ONLY, "long"),
+                          (_UPTREND_CLOSE_CONFIRMED, None), (_UPTREND_CLOSE_CONFIRMED, "short")):
+        assert te.smc_setup_type(candles, bias) == te.smc_setup_type_body_close_variant(candles, bias)
+
+
 def test_close_confirmed_break_both_variants_agree_bos():
-    old = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, "long")
-    new = te.smc_setup_type_body_close_variant(_UPTREND_CLOSE_CONFIRMED, "long")
+    old = te.smc_setup_type_wick_only(_UPTREND_CLOSE_CONFIRMED, "long")
+    new = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, "long")
     assert old["type"] == "BOS_bull"
     assert new["type"] == "BOS_bull"
     assert new["aligned"] is True
 
 
 def test_wick_only_break_variants_disagree():
-    """Ключевой A/B-кейс: тело/фитиль расходятся -- старый движок видит BOS, новый
-    (body-close) видит невалидный пробой."""
-    old = te.smc_setup_type(_UPTREND_WICK_ONLY, "long")
-    new = te.smc_setup_type_body_close_variant(_UPTREND_WICK_ONLY, "long")
+    """Ключевой A/B-кейс: тело/фитиль расходятся -- старый (wick-only) движок видел
+    BOS, живая (промотированная body-close) логика видит невалидный пробой."""
+    old = te.smc_setup_type_wick_only(_UPTREND_WICK_ONLY, "long")
+    new = te.smc_setup_type(_UPTREND_WICK_ONLY, "long")
     assert old["type"] == "BOS_bull"
     assert new["type"] == "invalid_break_wick_only"
     assert new["aligned"] is None
@@ -72,8 +86,8 @@ def test_wick_only_variant_still_registers_range_correctly():
         _c(100, 107, 99, 106), _c(106, 115.05, 105, 113), _c(105, 106, 100, 102),
         _c(102, 103, 96, 98), _c(98, 99, 93, 95),
     ]
-    old = te.smc_setup_type(flat, "long")
-    new = te.smc_setup_type_body_close_variant(flat, "long")
+    old = te.smc_setup_type_wick_only(flat, "long")
+    new = te.smc_setup_type(flat, "long")
     assert old["type"] == new["type"] == "range"
 
 
@@ -84,8 +98,8 @@ def test_insufficient_swing_points_returns_none_type():
 
 
 def test_no_bias_direction_labels_break_without_bos_choch():
-    old = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, None)
-    new = te.smc_setup_type_body_close_variant(_UPTREND_CLOSE_CONFIRMED, None)
+    old = te.smc_setup_type_wick_only(_UPTREND_CLOSE_CONFIRMED, None)
+    new = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, None)
     assert old["type"] == "break_up"
     assert new["type"] == "break_up"
     assert new["aligned"] is None
@@ -94,13 +108,13 @@ def test_no_bias_direction_labels_break_without_bos_choch():
 def test_choch_against_bias_still_requires_close_confirmation():
     """bias=short на аптренд-пробой вверх -- CHoCH (против bias), и body-close-гейт
     применяется одинаково, независимо от направления bias."""
-    old = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, "short")
-    new = te.smc_setup_type_body_close_variant(_UPTREND_CLOSE_CONFIRMED, "short")
+    old = te.smc_setup_type_wick_only(_UPTREND_CLOSE_CONFIRMED, "short")
+    new = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, "short")
     assert old["type"] == "CHoCH_bull"
     assert new["type"] == "CHoCH_bull"
     assert new["aligned"] is False
 
-    old_wick = te.smc_setup_type(_UPTREND_WICK_ONLY, "short")
-    new_wick = te.smc_setup_type_body_close_variant(_UPTREND_WICK_ONLY, "short")
+    old_wick = te.smc_setup_type_wick_only(_UPTREND_WICK_ONLY, "short")
+    new_wick = te.smc_setup_type(_UPTREND_WICK_ONLY, "short")
     assert old_wick["type"] == "CHoCH_bull"
     assert new_wick["type"] == "invalid_break_wick_only"

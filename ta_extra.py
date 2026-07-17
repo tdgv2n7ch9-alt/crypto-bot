@@ -813,8 +813,16 @@ def elliott_wave_heuristic(closes_1d: list, rsi_1d: float) -> dict:
     return out
 
 
-def smc_setup_type(candles_4h: list, bias_direction: str = None) -> dict:
-    """Блок 3 ТЗ: BOS (пробой по тренду) / CHoCH (смена характера) / range (равные хаи/лои),
+def smc_setup_type_wick_only(candles_4h: list, bias_direction: str = None) -> dict:
+    """Блок 3 ТЗ, УСТАРЕВШИЙ вариант (Инструктор B, тень/экстремум без проверки
+    закрытия) -- владелец, 2026-07-17: patch05_bpr (body-close, см.
+    smc_setup_type_body_close_variant() ниже) промотирован в live после честного
+    прохождения shadow-гейта (min 20 closed outcomes, live/patch05_bpr closed=23,
+    ready=True) -- `smc_setup_type()` теперь ЭТА (body-close) логика, не эта
+    wick-only. Функция сохранена под новым именем ТОЛЬКО для A/B shadow-сравнения
+    (см. bot.py `wick_variant`) -- больше НЕ вызывается из живого пути напрямую.
+
+    BOS (пробой по тренду) / CHoCH (смена характера) / range (равные хаи/лои),
     по фрактальным swing-точкам 4h.
 
     ВАЖНО (см. историю бага v110->v111): bias_direction (блок 1 — Multi-TF bias, тот же
@@ -870,24 +878,41 @@ def smc_setup_type(candles_4h: list, bias_direction: str = None) -> dict:
     return out
 
 
+def smc_setup_type(candles_4h: list, bias_direction: str = None) -> dict:
+    """Блок 3 ТЗ, ЖИВАЯ версия (владелец, 2026-07-17): patch05_bpr промотирован из
+    shadow в live -- критерий валидности слома структуры теперь требует ЗАКРЫТИЯ
+    свечи за уровнем (body-close), не просто пробоя тенью (см.
+    smc_setup_type_body_close_variant() ниже, чья логика теперь ЗДЕСЬ). Гейт
+    пройден честно: min 20 closed outcomes, live/patch05_bpr closed=23, ready=True
+    (integrity_report duplicate_count=0 перед подсчётом). Прежняя wick-only логика
+    сохранена под smc_setup_type_wick_only() -- используется только для
+    продолжающегося A/B shadow-сравнения (bot.py `wick_variant`), в живом пути
+    больше не участвует."""
+    return smc_setup_type_body_close_variant(candles_4h, bias_direction)
+
+
 def smc_setup_type_body_close_variant(candles_4h: list, bias_direction: str = None) -> dict:
-    """A/B-вариант smc_setup_type() -- Пакет 11 М1 (владелец "да" на A/B тело-vs-фитиль).
+    """Владелец, 2026-07-17: ЭТА логика теперь и есть живая smc_setup_type() (см.
+    выше) -- функция сохранена под старым именем для обратной совместимости
+    существующих вызовов A/B-измерения, поведение идентично smc_setup_type().
 
-    Находка ночного цикла (knowledge/METHODOLOGY_CORE.md §1): два источника расходятся
-    в критерии валидности слома структуры. Инструктор B (уже реализован в
-    smc_setup_type() выше и во всём боевом движке -- _find_fractals/swing_points
-    сравнивают только high/low, без проверки close) считает пробой ТЕНЬЮ достаточным.
-    "Урок 2. Structure.pdf" (cryptomannn.com) заявляет обратное: пробой без ЗАКРЫТИЯ
-    свечи за уровнем -- это SFP (снятие ликвидности), не валидный слом.
+    Находка ночного цикла (knowledge/METHODOLOGY_CORE.md §1), которая привела к
+    промоушену: два источника расходились в критерии валидности слома структуры.
+    Инструктор B (прежняя живая логика, теперь smc_setup_type_wick_only() --
+    _find_fractals/swing_points сравнивают только high/low, без проверки close)
+    считал пробой ТЕНЬЮ достаточным. "Урок 2. Structure.pdf" (cryptomannn.com)
+    заявляет обратное: пробой без ЗАКРЫТИЯ свечи за уровнем -- это SFP (снятие
+    ликвидности), не валидный слом.
 
-    Та же логика swing-точек/range/HH-LL, что и smc_setup_type(), плюс один
-    дополнительный гейт: среди свечей МЕЖДУ предпоследним и последним swing-экстремумом
-    (включительно по последнему) должна быть хотя бы одна, ЗАКРЫВШАЯСЯ за уровнем
+    Та же логика swing-точек/range/HH-LL, что и smc_setup_type_wick_only(), плюс
+    один дополнительный гейт: среди свечей МЕЖДУ предпоследним и последним
+    swing-экстремумом (включительно по последнему) должна быть хотя бы одна,
+    ЗАКРЫВШАЯСЯ за уровнем
     предпоследнего экстремума. Если нет -- пробой понижается до
     "invalid_break_wick_only" вместо BOS/CHoCH/break_up/break_down.
 
-    Shadow-only: НЕ вызывается из живого пути, не участвует в rocket/скоринге/гейтах --
-    только измерение расхождения для отчёта владельцу (см. shadow_engine.py)."""
+    Живая, промотирована 2026-07-17 (см. smc_setup_type() выше) -- участвует в
+    rocket/скоринге/гейтах через smc_setup_type()."""
     out = {"type": None, "label": "структура не определена", "aligned": None}
     highs, lows = swing_points(candles_4h)
     if len(highs) < 3 or len(lows) < 3:

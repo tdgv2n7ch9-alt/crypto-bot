@@ -10662,20 +10662,21 @@ def real_full_analysis(coin: dict) -> dict:
     except Exception as e:
         structural_primitives_shadow = {"error": str(e)}
 
-    # --- Пакет 11 М1 (владелец "да" -- A/B тело-vs-фитиль, НЕ live) -----------------
-    # Находка ночного цикла (knowledge/METHODOLOGY_CORE.md §1): "Урок 2. Structure.pdf"
-    # (cryptomannn.com) требует ЗАКРЫТИЯ свечи за уровнем для валидного слома структуры,
-    # иначе это SFP -- прямо противоречит уже реализованному в боте критерию (Инструктор
-    # B, только тень/экстремум, см. smc_setup_type() выше). Считает ОБА варианта на тех
-    # же 4h-свечах (переиспользует c4h_shadow/bias_dir, без новых сетевых вызовов) и
-    # логирует расхождение -- SHADOW ONLY, ta_extra.smc_setup_type() (боевая) не тронута.
-    # Не зависит от переменных предыдущего блока (тот блок может упасть независимо --
-    # см. его собственный try/except) -- пересчитывает c4h/bias и обе версии здесь же,
-    # это чистые функции без сети, повторный вызов дёшев.
+    # --- Пакет 11 М1 (владелец "да" -- A/B тело-vs-фитиль) ---------------------------
+    # Владелец, 2026-07-17: patch05_bpr (body-close) промотирован в live -- гейт
+    # пройден честно (min 20 closed outcomes, live/patch05_bpr closed=23, ready=True).
+    # ta_extra.smc_setup_type() теперь САМА body-close-логика; здесь -- wick_variant
+    # через smc_setup_type_wick_only() (прежняя живая логика, Инструктор B, только
+    # тень/экстремум) для ПРОДОЛЖАЮЩЕГОСЯ A/B-измерения (теперь пишет расхождение
+    # между старой wick-only и НОВОЙ живой логикой, а не "shadow vs live"). Считает
+    # ОБА варианта на тех же 4h-свечах (переиспользует c4h_shadow/bias_dir, без новых
+    # сетевых вызовов). Не зависит от переменных предыдущего блока (тот блок может
+    # упасть независимо -- см. его собственный try/except) -- пересчитывает c4h/bias
+    # и обе версии здесь же, это чистые функции без сети, повторный вызов дёшев.
     try:
         c4h_bc = ta.get("candles_4h", []) if ta["ok"] else []
         bias_bc = "long" if is_long else "short"
-        wick_variant = (ta_extra.smc_setup_type(c4h_bc, bias_bc) if c4h_bc
+        wick_variant = (ta_extra.smc_setup_type_wick_only(c4h_bc, bias_bc) if c4h_bc
                          else {"type": None, "label": "н/д -- нет 4h-свечей", "aligned": None})
         body_variant = (ta_extra.smc_setup_type_body_close_variant(c4h_bc, bias_bc) if c4h_bc
                          else {"type": None, "label": "н/д -- нет 4h-свечей", "aligned": None})
