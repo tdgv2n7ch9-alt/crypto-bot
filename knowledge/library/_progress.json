@@ -310,14 +310,16 @@
       "note": "Premium/Discount (0.5-фильтр коррекции) + OTE 62-79% -- полностью дублирует METHODOLOGY_CORE.md §4 (Premium/Discount) и OTE-раздел (там уже точнее, 0.705/0.79). Новых правил нет."
     },
     "8. Торговые инструменты_ Base.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 5,
+      "note": "Imbalance/Fulfill дублирует §4, НО новый примитив: внутренняя vs внешняя ликвидность (0 в коде) + терминологический конфликт SFP-валидации (тело vs тень) с §5.1, зафиксирован как открытый вопрос §25."
     },
     "9. Торговые инструменты Advanced.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 5,
+      "note": "Order Block/Breaker/POI -- дублирует §2/§3. Новых правил нет."
     },
     "BPR.md": {
       "status": "done",
@@ -810,7 +812,7 @@
       "batch": 2
     }
   },
-  "done_count": 47,
-  "last_batch": 4,
+  "done_count": 49,
+  "last_batch": 5,
   "last_updated": "2026-07-18"
 }
