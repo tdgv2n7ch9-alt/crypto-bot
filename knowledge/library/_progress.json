@@ -401,9 +401,10 @@
       "note": "Прочитано в пакете 4 (METHODOLOGY_CORE.md §15, ночная сессия #2) до создания этого трекера -- короткие клипы, подтверждают уже задокументированные правила §4/§9, новых фактов не добавляют, отдельный library_file не заводился."
     },
     "Forex position size.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 5,
+      "note": "myfxbook position-size калькулятор, форекс-специфика (пипсы/лоты) -- низкая релевантность крипто-боту, 0 новых правил."
     },
     "Lesson _2 _ Продолжение.md": {
       "status": "pending",
@@ -481,9 +482,10 @@
       "batch": 1
     },
     "Trading view.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 5,
+      "note": "Чистый UI-тур TradingView (интерфейс, не методика) -- 0 торговых правил. Нет прямого соответствия модулю бота."
     },
     "conference 1.md": {
       "status": "pending",
@@ -812,7 +814,7 @@
       "batch": 2
     }
   },
-  "done_count": 49,
+  "done_count": 51,
   "last_batch": 5,
   "last_updated": "2026-07-18"
 }
