@@ -13210,3 +13210,55 @@ Path).
 (нет причины -- боевой код не менялся). Если аномалия повторится на
 СЛЕДУЮЩЕМ пуше (особенно затрагивающем Watch Paths) -- расследовать
 `tools/deploy_watch_check.py` глубже, это не сделано сегодня.
+
+## Утренний пакет 2026-07-17, п.1+п.2: get_all_coins-фикс + EVENT-RADAR parse_mode + restore-путь shadow
+
+Владелец: ночная серия watchdog 04:24-07:54 строго раз в час подтвердила
+root cause (hourly cache-expiry get_all_coins()) -- деплоить фикс.
+
+**п.1 -- get_all_coins() в run_in_executor**:
+- `send_scheduled()` (`bot.py:6942-6945`): `coins = get_all_coins()` ->
+  `coins = await loop.run_in_executor(None, get_all_coins)`, `loop`
+  поднят до вызова (единственное место, где он раньше создавался позже,
+  внутри цикла по кандидатам -- теперь раньше, для этого вызова).
+- `event_radar_monitor()` (`bot.py:6862`): та же правка --
+  `tracked_symbols = {c["symbol"] for c in get_all_coins()}` ->
+  `await loop.run_in_executor(None, get_all_coins)` (уже существующий
+  `loop` из соседнего фикса `poll_and_get_alerts`, Tier 1 #2 вчера --
+  просто не был распространён на эту строку той же функции при первом
+  фиксе).
+- `whale_monitor()` (`bot.py` ~6802, `get_all_coins()` внутри per-symbol
+  цикла на rug-строку) -- НЕ тронут, владелец не называл этот путь в
+  утреннем пакете (событийный, не по расписанию, ниже приоритет,
+  зафиксирован вчера ночью как отдельная находка для будущего пакета).
+
+**Патч EVENT-RADAR parse_mode**: применён `patches/event_radar_parse_
+mode.diff` -- `bot.send_message(owner_id, text, parse_mode="Markdown",
+disable_web_page_preview=True)` с фоллбеком без parse_mode на 400
+(невалидный Markdown во внешнем title объявления).
+
+**п.2 -- restore-путь GitHub->диск для shadow-файла/архива**
+(`shadow_engine.py`): новые функции `restore_shadow_file_sync()`
+(использует уже существующий `_github_get_shadow_sync()` с blob-
+фоллбеком для >1MB), `_github_list_archive_names_sync()`,
+`_github_get_json_file_sync()` (тот же >1MB-фоллбек, для архивных
+файлов), `restore_archive_sync()`, `restore_all_from_github_sync()` --
+точка входа. Восстанавливает ТОЛЬКО отсутствующие локально файлы, не
+перезаписывает живущий процесс -- тот же принцип, что
+`journal_persistence.restore_file_sync()`. Вызов добавлен в
+`_start_pump_detector()` (`bot.py`) РЯДОМ и СРАЗУ ПОСЛЕ существующего
+`journal_persistence.restore_all_sync()` -- та же позиция в функции
+(до первого тика любого монитора/AUTO-скана, которые могли бы создать
+пустой файл раньше restore), best-effort/fail-soft (try/except вокруг
+каждого шага, ничего не бросает наружу).
+
+**Тесты**: новый файл `tests/test_shadow_restore.py`, 11 тестов --
+no-op при существующем локальном файле, восстановление при отсутствии,
+no-op при пустом GitHub, фильтр листинга архива, skip существующих +
+restore недостающих, устойчивость к сбою ОДНОГО файла из нескольких,
+устойчивость `restore_all_from_github_sync()` к исключению в любой из
+двух под-функций (fail-soft). `py_compile bot.py shadow_engine.py
+tests/test_shadow_restore.py` -- чисто. Полный `pytest`: **1649
+passed, 1 skipped** (было 1638 -- +11 новых, без регрессий).
+
+DoD (деплой ниже, живая проверка после):

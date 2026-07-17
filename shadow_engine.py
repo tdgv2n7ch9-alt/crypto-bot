@@ -830,6 +830,137 @@ def _push_pending_archives_sync() -> dict:
     return result
 
 
+# Владелец, 2026-07-16/17 (найдено при карте путей записи/восстановления
+# архива, утренний пакет п.2): ни активный shadow-файл, ни архив НЕ имели
+# restore-направления GitHub -> диск на старте -- в отличие от
+# journal_persistence.py для остальных journal-файлов (bank/ake/zone_alert
+# state, см. её докстринг "Область действия -- НЕ journal/shadow_signals.json
+# ... трогать не нужно", то есть этот файл сознательно исключён оттуда,
+# считая, что у него "уже есть собственный механизм" -- механизм для ЗАПИСИ
+# (_write_local/_sync_to_github_sync) действительно есть, но для ВОССТАНОВЛЕНИЯ
+# при потере диска -- не было). Наблюдавшаяся пока живучесть контейнера
+# между редеплоями (см. докстринг _rotate_if_needed выше) -- везение
+# инфраструктуры, не гарантия: на честном чистом диске исторические
+# shadow-записи стали бы молча невидимы для get_local_records()/min_outcomes-
+# гейтов без единой ошибки в логе. Restore -- ТОЛЬКО если локального файла/
+# директории ещё нет (свежий редеплой), не перезаписывает уже живущий на
+# диске активный процесс -- тот же принцип, что journal_persistence.
+# restore_file_sync().
+
+def _github_list_archive_names_sync() -> list:
+    """Имена файлов journal/archive/*.json на GitHub -- нужно узнать, ЧТО
+    восстанавливать, когда локальной ARCHIVE_DIR ещё нет вообще (свежий
+    диск, локального списка для сравнения нет)."""
+    if not signal_journal._github_configured():
+        return []
+    try:
+        r = requests.get(f"{signal_journal._github_api_base()}/contents/{GITHUB_ARCHIVE_DIR}",
+                          headers=signal_journal._github_headers(), timeout=15)
+        if r.status_code == 404:
+            return []
+        r.raise_for_status()
+        return [item["name"] for item in r.json()
+                if item.get("type") == "file" and item["name"].startswith("shadow_signals_")
+                and item["name"].endswith(".json")]
+    except Exception as e:
+        log.error(f"shadow_engine: list {GITHUB_ARCHIVE_DIR} failed: {e}")
+        return []
+
+
+def _github_get_json_file_sync(repo_path: str):
+    """GET repo_path из GitHub с фоллбеком на Git Blobs API для файлов >1MB
+    (Contents API отдаёт encoding='none'/пустой content выше этого порога --
+    та же находка, что уже задокументирована в _github_get_shadow_sync()).
+    Возвращает распарсенный JSON либо None при отсутствии/ошибке."""
+    if not signal_journal._github_configured():
+        return None
+    try:
+        r = requests.get(f"{signal_journal._github_api_base()}/contents/{repo_path}",
+                          headers=signal_journal._github_headers(), timeout=15)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        data = r.json()
+        if data.get("encoding") == "none":
+            blob_r = requests.get(f"{signal_journal._github_api_base()}/git/blobs/{data['sha']}",
+                                   headers=signal_journal._github_headers(), timeout=25)
+            blob_r.raise_for_status()
+            content = base64.b64decode(blob_r.json()["content"]).decode()
+        else:
+            content = base64.b64decode(data["content"]).decode()
+        return json.loads(content)
+    except Exception as e:
+        log.error(f"shadow_engine: GET {repo_path} failed: {e}")
+        return None
+
+
+def restore_shadow_file_sync() -> bool:
+    """Если локального SHADOW_FILE НЕТ -- восстанавливает из GitHub (через
+    уже существующий _github_get_shadow_sync(), который умеет >1MB-файлы).
+    Если файл уже существует -- не трогает (тот же принцип, что
+    journal_persistence.restore_file_sync()). True, если реально
+    восстановил."""
+    if os.path.exists(SHADOW_FILE):
+        return False
+    records, _sha = _github_get_shadow_sync()
+    if not records:
+        return False
+    ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
+    if ok:
+        log.info(f"shadow_engine: восстановлен {GITHUB_SHADOW_PATH} из GitHub "
+                 f"({len(records)} записей)")
+    return ok
+
+
+def restore_archive_sync() -> dict:
+    """Восстанавливает journal/archive/*.json из GitHub -- ТОЛЬКО файлы,
+    которых ещё нет локально (не перезаписывает существующие -- архивные
+    файлы иммутабельны после создания, см. _push_pending_archives_sync()).
+    Безопасно вызывать и когда ARCHIVE_DIR уже полная (быстрый no-op на
+    каждое уже существующее имя) -- не только на "директории вообще нет".
+    Возвращает {"attempted": int, "restored": int} для startup-отчёта."""
+    result = {"attempted": 0, "restored": 0}
+    names = _github_list_archive_names_sync()
+    if not names:
+        return result
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    for name in names:
+        local_path = os.path.join(ARCHIVE_DIR, name)
+        if os.path.exists(local_path):
+            continue
+        result["attempted"] += 1
+        payload = _github_get_json_file_sync(f"{GITHUB_ARCHIVE_DIR}/{name}")
+        if payload is None:
+            log.error(f"shadow_engine: restore архива {name} не удался (GET)")
+            continue
+        if _atomic_write_json(local_path, payload):
+            result["restored"] += 1
+            log.info(f"shadow_engine: восстановлен архив {name} из GitHub")
+        else:
+            log.error(f"shadow_engine: restore архива {name} -- локальная запись не удалась")
+    return result
+
+
+def restore_all_from_github_sync() -> dict:
+    """Точка входа для старта процесса (см. bot._startup_integrity_check,
+    вызывать через run_in_executor -- сетевые вызовы). Восстанавливает
+    активный файл (если отсутствует) + весь недостающий архив. Best-effort,
+    ничего не бросает наружу -- отсутствие GITHUB_TOKEN/сетевой сбой просто
+    оставляет диск как есть (тот же fail-soft принцип, что и остальной
+    startup-restore в проекте)."""
+    shadow_restored = False
+    try:
+        shadow_restored = restore_shadow_file_sync()
+    except Exception as e:
+        log.error(f"shadow_engine: restore_shadow_file_sync упал: {e}")
+    archive_result = {"attempted": 0, "restored": 0}
+    try:
+        archive_result = restore_archive_sync()
+    except Exception as e:
+        log.error(f"shadow_engine: restore_archive_sync упал: {e}")
+    return {"shadow_restored": shadow_restored, **archive_result}
+
+
 _UID_INDEX = None  # None = не прогрет; set() после прогрева -- владелец, задача
 # #245 (санация shadow-журнала, 2026-07-16): in-memory индекс uid'ов активного
 # файла, прогревается ОДИН раз лениво при первом _write_local() (и заново

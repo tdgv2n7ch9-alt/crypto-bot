@@ -6859,7 +6859,6 @@ async def event_radar_monitor(bot: Bot):
         watch_zones_symbols = {k for k in level_watch.load_watch_zones().keys()
                                 if k not in ("updated", "source")}
         watch_symbols = set(WATCHLIST_ZONES.keys()) | watch_zones_symbols
-        tracked_symbols = {c["symbol"] for c in get_all_coins()}
         # Владелец, 2026-07-16 (внеочередной аудит блокирующих вызовов,
         # Tier 1 #2): poll_and_get_alerts() внутри дёргает Bybit+Binance
         # announcement-эндпоинты синхронно (requests.get) -- вызывался
@@ -6867,6 +6866,11 @@ async def event_radar_monitor(bot: Bot):
         # без run_in_executor -- тот же класс регресса, что check_supertrend_
         # signals/whale_monitor (см. фиксы того же дня).
         loop = asyncio.get_event_loop()
+        # Владелец, 2026-07-17 (утренний пакет п.1): get_all_coins() тоже
+        # синхронный на cache-miss (см. докстринг фикса в send_scheduled) --
+        # эта строка стояла НЕ обёрнутой прямо здесь же, в той же функции,
+        # что уже частично фиксилась вчера -- пропущена при первом фиксе.
+        tracked_symbols = {c["symbol"] for c in await loop.run_in_executor(None, get_all_coins)}
         alerts = await loop.run_in_executor(
             None, lambda: event_radar.poll_and_get_alerts(
                 watch_symbols=watch_symbols, tracked_symbols=tracked_symbols))
@@ -6884,7 +6888,17 @@ async def event_radar_monitor(bot: Bot):
                 log.error(f"[EVENT-RADAR] inbox routing: {e}")
             continue
         try:
-            await bot.send_message(owner_id, text, disable_web_page_preview=True)
+            # Владелец, 2026-07-16 (ночная очередь п.5): format_event_alert()
+            # строит текст Markdown-синтаксисом (*bold*, `code`) -- без
+            # parse_mode Telegram показывал их как сырые символы буквально
+            # в сообщении. Фоллбек без parse_mode на случай, если title
+            # объявления (внешний текст биржи) содержит непарные
+            # Markdown-спецсимволы и ломает парсинг целиком.
+            try:
+                await bot.send_message(owner_id, text, parse_mode="Markdown",
+                                       disable_web_page_preview=True)
+            except Exception:
+                await bot.send_message(owner_id, text, disable_web_page_preview=True)
             await asyncio.sleep(1)
         except Exception as e:
             log.error(f"[EVENT-RADAR] send owner: {e}")
@@ -6940,7 +6954,20 @@ async def send_scheduled(bot: Bot):
     log.info(f"[AUTO] автосигналы {now_utc3()}")
 
     try:
-        coins = get_all_coins()
+        # Владелец, 2026-07-17 (утренний пакет п.1, разбор 18:44-алерта
+        # предыдущей ночью): get_all_coins() -- синхронный вызов с
+        # собственным TTL-кэшем, в норме (cache hit) микросекунды, НО на
+        # cache-miss дёргает _fetch_coingecko_markets() (3 последовательных
+        # requests.get) с retry+circuit-breaker -- на CoinGecko rate-limit
+        # это крутится синхронно ПРЯМО В EVENT LOOP до 90+ секунд, блокируя
+        # ВСЕ остальные job'ы планировщика разом (подтверждено логами:
+        # тотальная тишина ВСЕХ heartbeat'ов, не только bsc_wallet_monitor).
+        # Интермиттентность (только на cache-miss) объясняет, почему баг не
+        # поймал исходный аудит блокирующих вызовов (grep на requests.get
+        # не видит вызов через кэш-обёртку). Тот же паттерн run_in_executor,
+        # что уже применён для real_full_analysis() внутри цикла ниже.
+        loop = asyncio.get_event_loop()
+        coins = await loop.run_in_executor(None, get_all_coins)
         if not coins:
             log.error("[AUTO] нет данных по монетам")
             _last_auto_scan["status"] = "ошибка: нет данных по монетам"
@@ -13689,6 +13716,26 @@ async def _start_pump_detector(app):
             log.info(f"journal_persistence: восстановлено при старте: {restore_result['restored']}")
     except Exception as e:
         log.error(f"journal_persistence: restore_all_sync упал при старте: {e}")
+
+    # Владелец, 2026-07-17 (утренний пакет п.2, найдено при карте путей
+    # архива вчера ночью): journal_persistence.py ЯВНО исключает
+    # journal/shadow_signals.json из своего restore ("уже есть собственный
+    # механизм" -- механизм для ЗАПИСИ, не для восстановления при потере
+    # диска). Ни активный shadow-файл, ни архив не имели пути GitHub -> диск
+    # -- на честном чистом редеплое (в отличие от наблюдавшейся пока
+    # аномальной живучести диска, см. докстринг shadow_engine._rotate_if_
+    # needed) исторические shadow-записи стали бы молча невидимы для
+    # get_local_records()/min_outcomes-гейтов. Та же позиция в функции, что
+    # и restore выше -- ДО первого тика send_scheduled/AUTO, которые пишут
+    # в SHADOW_FILE первыми и создали бы пустой файл раньше restore.
+    try:
+        shadow_restore = await loop.run_in_executor(None, shadow_engine.restore_all_from_github_sync)
+        if shadow_restore["shadow_restored"] or shadow_restore["restored"]:
+            log.info(f"shadow_engine: восстановлено при старте -- активный файл: "
+                      f"{shadow_restore['shadow_restored']}, архив: "
+                      f"{shadow_restore['restored']}/{shadow_restore['attempted']}")
+    except Exception as e:
+        log.error(f"shadow_engine: restore_all_from_github_sync упал при старте: {e}")
 
     try:
         if load_state_from_disk():
