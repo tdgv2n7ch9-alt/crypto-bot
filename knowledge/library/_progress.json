@@ -355,9 +355,10 @@
       "batch": null
     },
     "Conference 26.02.23 Dova Lazarus. 1.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 4,
+      "note": "Живой Q&A форекс-разбор, низкое качество транскрипции. XLD-темплейт не идентифицирован однозначно. Главная ценность -- перекрёстная находка: inducement_swept живой в shadow-записях, расходится с §18.5 (smc_inducement мёртвый плейсхолдер) -- требует переверки кода."
     },
     "Conference 26.02.23 Dova Lazarus..md": {
       "status": "pending",
@@ -618,9 +619,10 @@
       "batch": 2
     },
     "ЕНТРИ ТАИ_ПС 4блок.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 4,
+      "note": "Два варианта входа (агрессивный/подтверждённый) -- дословно дублирует METHODOLOGY_CORE.md строки 700-709 (Урок 8). Новых правил нет."
     },
     "Ликвидность 2.md": {
       "status": "done",
@@ -808,7 +810,7 @@
       "batch": 2
     }
   },
-  "done_count": 45,
-  "last_batch": 3,
-  "last_updated": "2026-07-17"
+  "done_count": 47,
+  "last_batch": 4,
+  "last_updated": "2026-07-18"
 }
