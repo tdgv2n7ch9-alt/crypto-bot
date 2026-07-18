@@ -17160,3 +17160,34 @@ skipped**, без регрессий.
 Дальше -- пункт (3): батчи по оставшимся находкам repo-wide аудита
 (reader.py + card_format.py в архив, comments/internal docs с
 сохранением смысла уроков, тесты).
+
+## 2026-07-18 -- Пункт (3), Батч А: reader.py снят с эксплуатации + card_format.py в архив
+
+СЕЙЧАС ДЕЛАЮ: батч А закрыт. СЛЕДУЮЩИЙ: батч Б (комментарии в bot.py/
+ta_extra.py/fa_engine.py/card_v2.py).
+
+**Reader снят решением владельца** ("Reader снят решением 18.07"):
+`launchctl unload com.bestrade.reader.plist` -- джоба выгружена, PID
+53613 подтверждён завершённым. Сам `.plist` (содержит `BOT_TOKEN`/
+`TG_API_HASH` -- секреты) перемещён ВНЕ репозитория в
+`~/crypto-bot-secrets-backup/`, НЕ в git -- не запустится повторно при
+следующей загрузке системы (`RunAtLoad=true`/`KeepAlive=true` были в
+плисте, поэтому просто `unload` было недостаточно для постоянного
+решения -- физическое перемещение файла необходимо).
+
+**Архивировано** (`git mv`, не удалено): `reader.py`, `card_format.py`
+(мёртвый код, замена -- `card_v2.py`, Пакет 13), `tools/telethon_
+reauth.py`/`telethon_reauth_temp.py` (не нужны без reader.py), тесты
+`tests/test_reader_parsing.py`/`test_card_format.py` -> `archive/`.
+Новый `archive/README.md` объясняет каждый файл.
+
+**Побочный фикс**: добавлен `pytest.ini` (`testpaths = tests`) --
+без него `pytest` без аргументов начинал собирать `archive/test_*.py`
+тоже (архивные тесты падали бы на `import reader`/`import card_format`,
+т.к. эти модули больше не на стандартном пути) -- честно, раньше эта
+дыра просто не проявлялась, т.к. `tests/` был единственной директорией
+с `test_*.py` в репозитории.
+
+**DoD**: `py_compile` по всем `.py` (кроме `.claude/worktrees/`) --
+чисто. Полный `pytest` -- **1705 passed, 1 skipped** (было 1749, -44 --
+ровно тесты архивированных файлов, ушедшие из сборки).
