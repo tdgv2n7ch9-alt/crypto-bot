@@ -15366,3 +15366,33 @@ OKX, не мок): `{'ok': False, ..., 'error': "Index doesn't exist.",
   circuit breaker (несколько "429 после ретрая" подряд) -- то есть
   ровно сценарий, который #285 чинит (всплеск CG-вызовов НЕ роняет
   несвязанные задачи), воспроизведён живьём и прошёл чисто.
+
+### п.2 (флаги Фазы B) -- ЗАКРЫТ, задеплоено, живая верификация пройдена
+
+СЕЙЧАС ДЕЛАЮ: п.2 закрыт. СЛЕДУЮЩИЙ: п.3 (#286 дедуп active/archive).
+
+- **Код**: `shadow_engine.py` -- `DERIV_AUTO_SHADOW_ENABLED`,
+  `OPTIONS_AUTO_SHADOW_ENABLED`, `LIQUIDATION_AUTO_SHADOW_ENABLED`,
+  `ONCHAIN_AUTO_SHADOW_ENABLED` -> `True`. Регресс-локи в 4 тестовых
+  файлах (`test_auto_{derivatives,options,liquidation,onchain}_shadow.py`)
+  переименованы/обновлены с "disabled_by_default_is_true" на
+  "enabled_after_phase_b_go_is_true" -- теперь ловят случайный откат
+  True->False так же строго, как раньше ловили обратное.
+- **py_compile**: чисто. **pytest**: 1706 passed, 1 skipped, без
+  регрессий.
+- **Деплой**: `tools/deploy.sh` -- commit `bade67f8`, deployment id
+  `56f4bdc2-9137-4ca0-9237-eb0b0bc241cd`, статус **SUCCESS**.
+- **Живая верификация**: "Application started" чисто, ни одного нового
+  traceback после рестарта (единственный traceback в логах -- CoinGecko
+  429 `HTTPError`, штатно перехвачен `try/except`+`log.error`, ДО
+  рестарта нового контейнера, не регрессия). Прямое чтение
+  `journal/shadow_signals.json` через `railway ssh` (не `railway run` --
+  правило CLAUDE.md) подтвердило реальную запись новых типов:
+  `auto_derivatives_shadow`=11, `auto_options_shadow`=11,
+  `auto_liquidation_shadow`=10, `auto_onchain_shadow`=10 (всего 3894
+  записей в файле). Живьём подтверждено, что все 4 канала данных Фазы B
+  реально пишутся, не только флаг переключён.
+- **Побочная находка (не в объёме п.2)**: GitHub-422 подтверждён живьём
+  прямо в этом окне (`shadow_signals.json` "too large to be processed"),
+  тот же диагноз, что в дизайне -- ждёт п.5 очереди, best-effort push,
+  локальная запись цела, потери данных нет.
