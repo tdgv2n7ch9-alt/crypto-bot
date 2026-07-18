@@ -3147,7 +3147,7 @@ def welcome_text_v2(bot_module) -> str:
     return (
         f"👋 *BEST TRADE {BOT_VERSION}*\n"
         f"{SEP}\n"
-        f"SMC/ICT · Order Blocks · FVG · BOS · Wyckoff · AMD\n"
+        f"Order Blocks · FVG · BOS · Wyckoff · AMD\n"
         f"Источники: {src_line}\n"
         f"Автосигналы каждые 30 мин · Риск 1-3% депозита · SL обязателен\n"
         f"Не финсовет.\n"
@@ -3507,7 +3507,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🚀 *BEST TRADE {BOT_VERSION}* — твой крипто-аналитик\n"
         f"{SEP}\n\n"
         f"🧠 *Методология:*\n"
-        f"  • SMC/ICT · Order Blocks · FVG · BOS\n"
+        f"  • Order Blocks · FVG · BOS\n"
         f"  • EMA 20/50/200 · RSI · MACD · Supertrend\n"
         f"  • Wyckoff · AMD · Power of Three\n"
         f"  • Multi-TF Confluence · Killzone\n\n"
@@ -3961,7 +3961,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "🌊 ЛИКВИДНОСТЬ",
             "  BTC.D "+str(round(btc_dom,1))+"% — "+liq,"",
             "📈 ФАЗА РЫНКА","  "+phase,"",
-            "⏰ ICT KILLZONE","  "+kz,"",
+            "⏰ КИЛЛЗОНА СЕССИИ","  "+kz,"",
             "🔥 ТОП 24H","  Рост:"
         ]+ll+["  Падение:"]+sl+["",
             "📅 ТОП 7D","  Рост:"
@@ -5067,7 +5067,7 @@ def _metod_topic_list_kb(offset: int = 0):
 
 async def _mv2_render_metod(q, offset: int = 0):
     sections = methodology_content.load_methodology_sections()
-    text = (f"🎓 *МЕТОДОЛОГИЯ*\n\nСвод правил методики (SMC/ICT) -- "
+    text = (f"🎓 *МЕТОДОЛОГИЯ*\n\nСвод правил авторской методологии -- "
             f"{len(sections)} тем, из `knowledge/METHODOLOGY_CORE.md`.")
     kb = _metod_topic_list_kb(offset)
     await q.edit_message_text(text, parse_mode="Markdown", reply_markup=_mv2_back_kb(kb, back_to="mv2_obuchenie"))
@@ -5314,7 +5314,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"🚀 *BEST TRADE {BOT_VERSION}*\n"
                 f"_{now_utc3()}_\n"
                 f"{SEP}\n\n"
-                f"🧠 SMC · ICT · Wyckoff · AMD · Multi-TF\n"
+                f"🧠 SMC · Wyckoff · AMD · Multi-TF\n"
                 f"📡 On-chain · 🐋 Whale Radar\n\n"
                 f"👇 *Выбери раздел:*",
                 parse_mode="Markdown", reply_markup=main_kb()
@@ -5391,7 +5391,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             " или используй команду `/full SYMBOL`.\n\n"
             "📋 *Блоки анализа:*\n"
             "Multi-TF bias · Elliott Wave · SMC-сетап (BOS/CHoCH/range) · POI · "
-            "Чеклист K-LVL/ICT · Ликвидность/ловушки · OI/Funding/L-S · Killzone · "
+            "Чеклист N/6 · Ликвидность/ловушки · OI/Funding/L-S · Killzone · "
             "Фаза рынка · Мемкоин-фильтр · План сделки · Rocket Score · Вердикт",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([

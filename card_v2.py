@@ -241,6 +241,36 @@ def format_capital_block(capital_table: dict, zone_capacity_usd: float = None) -
     return lines
 
 
+# ── Блок «риск оператора + L/S» (канон #292 этап а, владелец 2026-07-18) ──
+
+def format_operator_risk_block(oi_text: str, funding_label: str, ls_ratio: float,
+                                ls_text: str) -> list:
+    """Канонический блок карточки (см. `knowledge/TELEGRAM_PRODUCT_V2_DESIGN.md`
+    §2, «риск оператора + L/S»). ЧИСТОЕ форматирование уже посчитанных данных --
+    те же значения (`oi_text`/`funding_label`/`ls_ratio`/`ls_text`), что
+    `fa_engine._oi_matrix()`/block7_oi уже отдаёт для Rocket Score факторов
+    (`fa_engine.py:255-258`) -- новой формулы/гейта здесь нет, только вывод
+    того же самого текста отдельным блоком по канону владельца."""
+    lines = ["⚠️ *РИСК ОПЕРАТОРА*", "", f"  {oi_text}"]
+    if funding_label:
+        lines.append(f"  Funding: {funding_label}")
+    lines.append(f"  L/S {ls_ratio:.2f}: {ls_text}")
+    return lines
+
+
+# ── Блок «Почему» одной строкой (канон #292 этап а) ───────────────────────
+
+def format_why_line(verdict_label: str, top_factor_label: str = None) -> str:
+    """Одна строка «Почему» по канону владельца -- берёт САМЫЙ сильный «за»-
+    фактор Rocket Score (`split_pros_cons()["pros"][0]`, уже отсортирован по
+    убыванию delta вызывающей стороной) и вердикт (`compute_verdict()["label"]`,
+    уже посчитан) -- не придумывает новую метрику, только склеивает два уже
+    готовых значения в одну строку."""
+    if top_factor_label:
+        return f"💬 *Почему*: {top_factor_label} → {verdict_label}"
+    return f"💬 *Почему*: {verdict_label}"
+
+
 # ── Блок 7: ТАЙМИНГ ───────────────────────────────────────────────────────
 
 def format_timing(killzone_active: bool, killzone_name: str, next_killzone_name: str,
@@ -280,6 +310,44 @@ def assemble_card_v2(traffic_light: str, symbol: str, direction: str,
         context_lines,
         capital_lines,
         timing_lines,
+    ]
+    out = []
+    for i, sec in enumerate(sections):
+        if i > 0:
+            out.append(SEP)
+        out.extend(sec)
+    return "\n".join(out)
+
+
+def assemble_card_v2_canon(traffic_light: str, symbol: str, direction: str,
+                            phase_label: str, pd_label: str,
+                            what_to_do_lines: list, operator_risk_lines: list,
+                            checklist_lines: list, why_line: str) -> str:
+    """#292 этап (а), канон-карточка -- буквальный порядок из ТЗ владельца
+    (`TELEGRAM_PRODUCT_V2_DESIGN.md` §2, «дословно»):
+    [направление·тикер·фаза·PD] / риск-план DCA-SL-TP-RR / риск оператора+L/S /
+    чеклист N/6 / «Почему» одной строкой / [кнопки].
+
+    НЕ заменяет `assemble_card_v2()` (7-блочный «расширенный» формат остаётся
+    доступен отдельно) -- это ВТОРОЙ, альтернативный рендер той же карточки
+    для превью владельцу (design-doc буквально приводит короткий 6-строчный
+    шаблон, но честно неясно, заменяет ли он контекст/капитал/тайминг или
+    добавляется к ним -- см. §2 "Служебные блоки убрать..." -- разрешение
+    неоднозначности оставлено владельцу через сравнение обоих рендеров в
+    превью, не угадывается здесь). Кнопки -- забота вызывающей стороны
+    (Telegram `InlineKeyboardMarkup`), не текстовый блок.
+
+    checklist_lines -- ТОЛЬКО чеклист (без "Сила сетапа X/100"-шапки) --
+    вызывающая сторона передаёт `format_strength_block(...)[1:]` (первая
+    строка -- вердикт/скор, канон её не требует отдельным блоком, он уже
+    неявно есть в `why_line`)."""
+    header = f"{traffic_light} — {symbol} {direction} · {phase_label} · {pd_label}"
+    sections = [
+        [header],
+        what_to_do_lines,
+        operator_risk_lines,
+        checklist_lines,
+        [why_line],
     ]
     out = []
     for i, sec in enumerate(sections):
