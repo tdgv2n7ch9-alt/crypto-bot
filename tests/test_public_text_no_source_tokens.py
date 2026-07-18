@@ -34,6 +34,7 @@ zagovor/вероятност + 2 channel ID -- см. полный repo-wide ау
 import re
 
 import card_v2 as cv
+import fa_engine
 import glossary
 
 FORBIDDEN_TOKENS = re.compile(
@@ -105,6 +106,31 @@ def test_format_capital_block_clean():
 
 def test_glossary_full_text_clean():
     _assert_clean("glossary.format_glossary_text", glossary.format_glossary_text())
+
+
+def test_render_full_analysis_card_clean():
+    """Regression-guard: render_full_analysis_card() рендерил "Чеклист K-LVL/
+    ICT" буквально в /full и /coin карточки (живая находка repo-wide аудита
+    2026-07-18, исправлено в fa_engine.py -- см. PROGRESS.md)."""
+    result = {
+        "ok": True, "symbol": "BTC", "price": 61500.0, "rank": 1,
+        "price_fresh": "", "ch1h": 0, "ch24h": 0, "ch7d": 0,
+        "block1_bias": {"bias": "NEUTRAL", "tf_agreement": "н/д", "detail": []},
+        "block2_elliott": {"label": "н/д"},
+        "block3_smc": {"label": "н/д"},
+        "block4_poi": {"poi": []},
+        "block5_checklist": {"score": 4, "items": [("Тренд старшего ТФ (1D)", True)]},
+        "block6_liquidity": {},
+        "block7_oi": {"ok": False, "error": "нет данных"},
+        "block8_killzone": {"kz": {"active": {}}, "session_note": ""},
+        "block9_phase": {"symbol_phase": {}, "btc_phase": {}},
+        "block10_meme_risk": {"flagged": False},
+        "block11_trade_plan": {"has_setup": False, "reason": "нет данных", "wait_for": "н/д"},
+        "block12_rocket": {"score": 62, "factors": [("Чеклист 4/6", 5)]},
+        "block13_verdict": {"text": "н/д"},
+    }
+    card = fa_engine.render_full_analysis_card(result)
+    _assert_clean("render_full_analysis_card", card)
 
 
 def test_format_timing_clean():

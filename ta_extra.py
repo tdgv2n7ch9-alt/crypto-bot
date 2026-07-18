@@ -284,7 +284,7 @@ def old_style_ema_trend(closes: list, ema_fast: int = 20, ema_slow: int = 50) ->
 
 def ema_stack_score_delta(ema_ctx: dict, direction: str) -> int:
     """+8 если 4h-стек по направлению сигнала, -8 если против, 0 если смешанный/н\\д.
-    4h выбран как основной ТФ для скоринга (старший ТФ = контекст в SMC/ICT методологии
+    4h выбран как основной ТФ для скоринга (старший ТФ = контекст в SMC методологии
     этого бота), 1h показывается в карточке текстом, но не участвует в скоринге отдельно."""
     if not ema_ctx:
         return 0
@@ -1063,7 +1063,7 @@ def wyckoff_phase_heuristic(closes_1d: list, price: float, vols_1d: list = None)
     return out
 
 
-# ── K-LVL: усиленные уровни (методика K-LVL/ICT) ────────────────────────────
+# ── K-LVL: усиленные уровни (авторская методика) ────────────────────────────
 
 KLVL_MIN_CRITERIA = 2             # зона становится K-LVL при выполнении >= этого числа критериев
 KLVL_MIN_TOUCHES = 3              # критерий (а): 3+ касания
@@ -1482,7 +1482,7 @@ def detect_order_block(candles: list, price: float) -> dict:
     Строит ОБЕ геометрии Order Block на ОДНИХ И ТЕХ ЖЕ 4H-свечах для честного
     сравнения:
       - "live" -- точное зеркало инлайн-кода `pro_analysis()` (`bot.py`,
-        функция `pro_analysis`, блок "ICT ORDER BLOCK"): bull zone
+        функция `pro_analysis`, блок "ORDER BLOCK"): bull zone
         (candle["open"], candle["high"]), bear zone (candle["low"],
         candle["open"]) -- микс тела и фитиля. Это КОПИЯ формулы для
         тестируемости, не рефакторинг живого пути -- живой инлайн-код в
@@ -1554,7 +1554,7 @@ def detect_order_block(candles: list, price: float) -> dict:
 #   - real_full_analysis_TZ_reconstructed.md (реконструкция 13 блоков по fa_engine.py)
 #   - knowledge/_ocr/trading_guide_4_.txt, раздел "Торговые сетапы" (AMD/
 #     SH-BOS-RTO/Sweep/Cypher -- строки ~195-270)
-#   - knowledge/KNOWLEDGE_INDEX.md, "Kira ICT Trading Analysis.pdf" (6-пунктовый
+#   - knowledge/KNOWLEDGE_INDEX.md, авторская методология (PDF-конспект, 6-пунктовый
 #     чек-лист входа, OI-матрица)
 #   - knowledge/METHODOLOGY_CORE.md (killzone/DCA/общие правила)
 # Честно помечено в PROGRESS.md как синтез, не находка оригинального файла.
@@ -1713,7 +1713,7 @@ def build_13block_verdict(candles_1h: list, candles_4h: list, candles_1d: list,
     новых сетевых вызовов", тот же принцип).
 
     13 блоков: 1 bias, 2 Elliott 1D+4H, 3 тип сетапа, 4 POI/зоны, 5 чек-лист
-    Kira|ICT, 6 ликвидность/sweep, 7 OI-матрица, 8 killzone/сессия
+    авторская методология, 6 ликвидность/sweep, 7 OI-матрица, 8 killzone/сессия
     (get_killzone_status() -- единый источник, см. ENGINE_UNIFICATION.md, НЕ
     четвёртое определение часов), 9 фаза рынка, 10 DCA 50/30/20, 11 TP1/2/3+R:R,
     12 SL за структурой (+2-3%, SR_SL_BUFFER_PCT), 13 итоговый вердикт.
@@ -1746,7 +1746,7 @@ def build_13block_verdict(candles_1h: list, candles_4h: list, candles_1d: list,
     zones = find_sr_zones(candles_1h, candles_4h, candles_1d, price, ema_ctx=ema_ctx)
     out["block4_zones"] = zones
 
-    # Блок 5: чек-лист Kira|ICT (6 пунктов) -- см. Kira ICT Trading Analysis.pdf
+    # Блок 5: чек-лист (6 пунктов) -- см. авторская методология (PDF-конспект)
     # (KNOWLEDGE_INDEX.md: "6-пунктовый чек-лист входа"), те же пункты, что уже
     # реализованы в fa_engine.py Block 5 (независимая, но методологически
     # идентичная реализация здесь -- без импорта fa_engine, ta_extra остаётся

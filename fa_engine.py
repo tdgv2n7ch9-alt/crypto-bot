@@ -117,7 +117,7 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     b3 = _safe("Блок 3 (SMC setup)", ta_extra.smc_setup_type, c4h, direction)
     result["block3_smc"] = b3
 
-    # ── Блок 4: POI (+ K-LVL по методике K-LVL/ICT, см. ta_extra.classify_klvl_zones) ──
+    # ── Блок 4: POI (+ K-LVL по авторской методике, см. ta_extra.classify_klvl_zones) ──
     def _poi():
         poi = []
         classified_by_side = {"below": [], "above": []}  # для трейд-плана (блок 11) -- полный
@@ -163,7 +163,7 @@ def build_full_analysis(symbol: str, coin: dict = None) -> dict:
     b6 = _safe("Блок 6 (Ликвидность/ловушки)", _liquidity)
     result["block6_liquidity"] = b6
 
-    # ── Блок 5: чеклист K-LVL/ICT (X/6) ──
+    # ── Блок 5: чеклист (X/6) ──
     def _checklist():
         items = []
 
@@ -623,9 +623,9 @@ def render_full_analysis_card(result: dict) -> str:
         parts.append(f"🧲 Equal highs/lows (магниты стопов): {eq_s}")
     parts.append("")
 
-    # 4. Чеклист K-LVL/ICT
+    # 4. Чеклист
     b5 = result.get("block5_checklist", {})
-    parts.append(f"✅ *Чеклист K-LVL/ICT: {b5.get('score','?')}/6*")
+    parts.append(f"✅ *Чеклист: {b5.get('score','?')}/6*")
     for name, ok in b5.get("items", []):
         parts.append(f"  {'✅' if ok else '❌'} {name}")
     parts.append("")

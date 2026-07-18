@@ -10,7 +10,7 @@ level_watch.py: dependency injection, вызывающая сторона (bot.p
 
 Источники данных, которые сюда ПОДАЮТСЯ готовыми (см. разведку Пакета 13,
 PROGRESS.md):
-  - чек-лист K-LVL/ICT: fa_engine._checklist() -> result["block5_checklist"]
+  - чек-лист (K-LVL): fa_engine._checklist() -> result["block5_checklist"]
     {"items": [(name, bool), ...], "score": int 0-6}
   - Rocket Score: fa_engine -> result["block12_rocket"]
     {"score": int 0-100, "factors": [(label, delta), ...]}  -- ИСТОЧНИК

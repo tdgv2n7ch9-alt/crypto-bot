@@ -2725,7 +2725,7 @@ WATCHLIST_ZONES = {
         "bias":  "LONG",
     },
     "BTC": {
-        "long":  [61840.9, 62285.0],  # синхронизировано с journal/watch_zones.json BTCUSDT LONG (Королев 13.07),
+        "long":  [61840.9, 62285.0],  # синхронизировано с journal/watch_zones.json BTCUSDT LONG (tier_a 13.07),
                                        # см. PROGRESS.md -- WATCHLIST_ZONES и watch_zones.json две отдельные
                                        # системы, эта строка была stale (62000-63000) на живом прогоне 13.07
         "note":  "  $62K =  .  $70K+",
@@ -3860,7 +3860,7 @@ async def cmd_market(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif abs(btc_ch7d)<3: phase="↔ БОКОВИК / АККУМУЛЯЦИЯ"
         else: phase="🔄 КОРРЕКЦИЯ"
 
-        # === ICT Killzone ===
+        # === Киллзона сессии ===
         now_h=(datetime.datetime.utcnow().hour+3)%24
         if 2<=now_h<10: kz="🌙 Азия (02-10) — низкая волатильность"
         elif 10<=now_h<18: kz="🇬🇧 Лондон (10-18) — задаёт направление"
@@ -8095,7 +8095,7 @@ def confluence_matrix(a: dict, pa: dict, coin: dict,
         (a.get("supertrend_bull") is (True if is_long else False),  7,  "Supertrend "),
         (a.get("macd_bullish") if is_long else a.get("macd_bearish"), 6, "MACD "),
         ((a.get("rsi_4h",50)<35) if is_long else (a.get("rsi_4h",50)>65), 8, "RSI  "),
-        (pa.get("ict_ob_bull") if is_long else pa.get("ict_ob_bear"), 10, "ICT Order Block "),
+        (pa.get("ict_ob_bull") if is_long else pa.get("ict_ob_bear"), 10, "Order Block "),
         (pa.get("ict_liquidity_sweep"),                             9,  "Liq Sweep "),
         ((pa.get("ict_fvg_bull") if is_long else pa.get("ict_fvg_bear")), 7, "FVG "),
         (pa.get("smc_bos") == ("bull" if is_long else "bear"),     8,  "BOS "),
@@ -9238,11 +9238,11 @@ def format_position_size(ps: dict, is_long: bool = True) -> str:
 
 
 # 
-# ICT KILLZONES     
+# КИЛЛЗОНЫ СЕССИЙ
 # 
 
 def get_killzone_status() -> dict:
-    """ICT Killzones -- расписание по UTC+3 (Стамбул).
+    """Киллзоны сессий -- расписание по UTC+3 (Стамбул).
 
     ОБНОВЛЕНО 2026-07-11 (владелец): часы Asia/London Open/NY Open заменены на
     METHODOLOGY_CORE.md §8 (источник: "Урок 5. Время и киллзоны.mp4" [1662s-1902s]).
@@ -9387,7 +9387,7 @@ def get_killzone_status_shadow() -> dict:
 
 
 def killzone_label() -> str:
-    """Текущая ICT-сессия одной строкой, для строк вида '⏰ {label}'"""
+    """Текущая сессия (киллзона) одной строкой, для строк вида '⏰ {label}'"""
     kz = get_killzone_status()
     active = kz["active"]
     nxt    = kz["next"]
@@ -9552,13 +9552,13 @@ async def cmd_game(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # 
 # PRO ANALYSIS   
-# SMC / ICT / Wyckoff / Elliott / Multi-TF / OI / Funding
+# SMC / Wyckoff / Elliott / Multi-TF / OI / Funding
 # 
 
 def pro_analysis(symbol: str, coin: dict) -> dict:
     """
        -.
-    : SMC/ICT, Wyckoff, Elliott Wave (.), 
+    : SMC, Wyckoff, Elliott Wave (.), 
     Multi-TF confluence, OI, Funding, Volume Profile, 
     Market Structure, Liquidity Sweep detection.
     
@@ -9582,14 +9582,14 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         "pro_score": 0,        # 0-100
         "direction": "neutral", # long / short / neutral
         "confidence": 0,        # 0-100 
-        "setup_type": None,     # ICT / Wyckoff / SMC / Elliott / Breakout
+        "setup_type": None,     # Order Block / Wyckoff / SMC / Elliott / Breakout
         "factors": [],          #    
         "warnings": [],         # 
         "entry_quality": None,  # A+ / A / B / C
         #  
         "market_structure": "unknown",  # uptrend/downtrend/ranging/accumulation/distribution
         "phase": None,           # Wyckoff phase
-        # ICT 
+        # Order Block / FVG 
         "ict_ob_bull": False,    # Bullish Order Block
         "ict_ob_bear": False,    # Bearish Order Block
         "ict_fvg_bull": False,   # Fair Value Gap 
@@ -9714,7 +9714,7 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         result["smc_bos"]   = "bull" if bos_bull else ("bear" if bos_bear else None)
         result["smc_choch"] = "bull" if choch_bull else ("bear" if choch_bear else None)
 
-        #  ICT ORDER BLOCKS 
+        #  ORDER BLOCKS 
         # Bullish OB:      
         ob_bull = False
         ob_bear = False
@@ -9750,7 +9750,7 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         result["ict_ob_bull"] = ob_bull
         result["ict_ob_bear"] = ob_bear
 
-        #  ICT FAIR VALUE GAP (FVG) 
+        #  FAIR VALUE GAP (FVG) 
         # FVG Bull: [i-1].high < [i+1].low     
         fvg_bull = False
         fvg_bear = False
@@ -9788,7 +9788,7 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
 
         result["ict_liquidity_sweep"] = liq_bull_sweep or liq_bear_sweep
 
-        # AMD-фаза (ICT Power of Three): Accumulation (Asia) / Manipulation
+        # AMD-фаза (модель "Power of Three"): Accumulation (Asia) / Manipulation
         # (London Open, sweep) / Distribution (NY Open) + price action.
         # Пакет 9, Шаг 2 кусок 1 (владелец, "ДА" -- "оживить без боевого
         # эффекта"): часы больше НЕ свой inline-литерал, а единый источник
@@ -9941,7 +9941,7 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         result["oi_change"]    = oi_change
         result["oi_signal"]    = oi_signal
 
-        #  PREMIUM/DISCOUNT ARRAY (ICT) 
+        #  PREMIUM/DISCOUNT ARRAY 
         #      Premium ( 50% )  Discount
         if len(closes_4h) >= 20:
             hi_20 = max(highs_4h[-20:])
@@ -9996,11 +9996,11 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
         elif bear_tfs == 2:
             bear_pts += 10
 
-        # 2. ICT Order Block
+        # 2. Order Block
         if ob_bull:
-            bull_pts += 15; factors.append(" ICT Bullish Order Block     (+15)")
+            bull_pts += 15; factors.append(" Order Block бычий     (+15)")
         if ob_bear:
-            bear_pts += 15; factors.append(" ICT Bearish Order Block     (+15)")
+            bear_pts += 15; factors.append(" Order Block медвежий  (+15)")
 
         # 3. Liquidity Sweep
         if liq_bull_sweep:
@@ -10117,12 +10117,12 @@ def pro_analysis(symbol: str, coin: dict) -> dict:
             warnings.append("  Vol/MCap   ")
 
         #  
-        if ob_bull or ob_bear:        setup = "ICT Order Block"
-        elif liq_bull_sweep or liq_bear_sweep: setup = "ICT Liquidity Sweep"
+        if ob_bull or ob_bear:        setup = "Order Block"
+        elif liq_bull_sweep or liq_bear_sweep: setup = "Liquidity Sweep"
         elif choch_bull or choch_bear: setup = "SMC CHoCH"
         elif wyckoff_phase:            setup = f"Wyckoff {wyckoff_phase}"
         elif elliott_wave:             setup = f"Elliott {elliott_wave}"
-        elif fvg_bull or fvg_bear:    setup = "ICT FVG"
+        elif fvg_bull or fvg_bear:    setup = "FVG"
         else:                          setup = "Multi-TF Confluence"
 
         # Entry quality
@@ -10776,7 +10776,7 @@ def real_full_analysis(coin: dict) -> dict:
     # Параллельный, НЕЗАВИСИМЫЙ вердикт к каждому AUTO-сигналу (real_full_analysis_TZ.md
     # не найден в репозитории -- см. ta_extra.build_13block_verdict() докстринг и
     # PROGRESS.md за честную запись; состав синтезирован из reconstructed-доки +
-    # knowledge/_ocr/trading_guide_4_.txt + Kira ICT Trading Analysis.pdf +
+    # knowledge/_ocr/trading_guide_4_.txt + авторская методология (PDF-конспект) +
     # METHODOLOGY_CORE.md). SHADOW ONLY -- rocket/is_long/tp/sl/entry read-only, эта
     # функция их не читает и не меняет. Killzone -- ЕДИНЫЙ источник get_killzone_status()
     # (Патч 01), не четвёртое определение (см. ENGINE_UNIFICATION.md). oi_change/
@@ -12821,7 +12821,7 @@ async def cmd_full_v2(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ": `/full ETH`  `/full SOL`  `/full RIVER`\n\n"
             ":\n"
             " EMA 20/50/200  RSI  MACD  Supertrend\n"
-            " ATH / ATL  SMC/ICT   \n"
+            " ATH / ATL  SMC   \n"
             "   OI   vs   ",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
