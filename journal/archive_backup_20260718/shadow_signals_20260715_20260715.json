@@ -1,0 +1,576 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "ts": 1784103720.2435584,
+      "symbol": "BEAT",
+      "direction": "long",
+      "entry_lo": 2.6432,
+      "entry_hi": 2.7261,
+      "sl": 2.57712,
+      "tp1": 2.91936667,
+      "tp2": 3.04276667,
+      "tp3": 3.40951976,
+      "rr_tp1_live": 1.3,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "manipulation_bull",
+        "nymidnight_price": 2.6829,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": {
+          "type": "sweep_high",
+          "level": 2.7026,
+          "bars_ago": 1,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          2.6766,
+          2.85
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -1.5975000000000001
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 1.8239999999999998
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "rr_gate: R:R 1.3 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=False,bear=True)"
+      ],
+      "live_journal_id": null,
+      "tz13_shadow": {
+        "ok": true,
+        "block1_bias": {
+          "bias": "SHORT",
+          "structure_1d": "LH/LL (даунтренд)",
+          "tf_agreement": "1D задаёт направление, 4H EMA не подтверждает явно",
+          "detail": [
+            "1D структура: LH/LL (даунтренд)",
+            "4H EMA-стек: смешанный",
+            "1H EMA-стек (контекст входа): недостаточно данных",
+            "Ключевой минимум: 2.05 (пробой = предпосылка разворота/продолжения вниз)",
+            "Ключевой хай: 3.0392 (снятие = цель движения вверх)"
+          ],
+          "key_low": {
+            "price": 2.05,
+            "bars_ago": 7
+          },
+          "key_high": {
+            "price": 3.0392,
+            "bars_ago": 4
+          }
+        },
+        "block2_elliott": {
+          "elliott_1d": {
+            "wave": "2",
+            "label": "похоже на волну 2 (коррекция перед волной 3)",
+            "note": "потенциальный вход у завершения коррекции",
+            "score_delta": 5
+          },
+          "elliott_4h": {
+            "wave": "C",
+            "label": "похоже на коррекцию ABC (волна C вниз)",
+            "note": "ждать завершения коррекции",
+            "score_delta": 0
+          }
+        },
+        "block3_setup_type": {
+          "setup_type": "AMD",
+          "label": "AMD — фаза manipulation_bull (цена above NY-midnight)",
+          "detail": {
+            "phase": "manipulation_bull",
+            "nymidnight_price": 2.6829,
+            "price_vs_nymidnight": "above"
+          }
+        },
+        "block4_zones": {
+          "above": [
+            {
+              "lo": 2.9084206666666663,
+              "hi": 2.9303126666666666,
+              "mid": 2.9193666666666664,
+              "touches": 3,
+              "hours_ago": 68,
+              "sources": [
+                "4h"
+              ]
+            },
+            {
+              "lo": 3.0318206666666665,
+              "hi": 3.0537126666666667,
+              "mid": 3.0427666666666666,
+              "touches": 3,
+              "hours_ago": 92,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            },
+            {
+              "lo": 3.3985737641045666,
+              "hi": 3.420465764104567,
+              "mid": 3.4095197641045667,
+              "touches": 1,
+              "hours_ago": 0,
+              "sources": [
+                "ema"
+              ]
+            },
+            {
+              "lo": 3.673420666666667,
+              "hi": 3.695312666666667,
+              "mid": 3.684366666666667,
+              "touches": 3,
+              "hours_ago": 336,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            },
+            {
+              "lo": 11.544554,
+              "hi": 11.566446000000001,
+              "mid": 11.5555,
+              "touches": 2,
+              "hours_ago": 784,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            }
+          ],
+          "below": [
+            {
+              "lo": 2.6432,
+              "hi": 2.7261,
+              "mid": 2.6833200000000006,
+              "touches": 15,
+              "hours_ago": 6,
+              "sources": [
+                "1d",
+                "1h",
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.669335725167417,
+              "hi": 2.6912277251674173,
+              "mid": 2.680281725167417,
+              "touches": 1,
+              "hours_ago": 0,
+              "sources": [
+                "ema"
+              ]
+            },
+            {
+              "lo": 2.553099157251448,
+              "hi": 2.574991157251448,
+              "mid": 2.564045157251448,
+              "touches": 1,
+              "hours_ago": 0,
+              "sources": [
+                "ema"
+              ]
+            },
+            {
+              "lo": 2.5172,
+              "hi": 2.5755,
+              "mid": 2.5491124999999997,
+              "touches": 8,
+              "hours_ago": 2,
+              "sources": [
+                "1h",
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.476054,
+              "hi": 2.497946,
+              "mid": 2.487,
+              "touches": 2,
+              "hours_ago": 9,
+              "sources": [
+                "1h",
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.420704,
+              "hi": 2.45,
+              "mid": 2.4316500000000003,
+              "touches": 4,
+              "hours_ago": 41,
+              "sources": [
+                "1h",
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.3382039999999997,
+              "hi": 2.360096,
+              "mid": 2.34915,
+              "touches": 2,
+              "hours_ago": 128,
+              "sources": [
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.209154,
+              "hi": 2.231046,
+              "mid": 2.2201,
+              "touches": 2,
+              "hours_ago": 332,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.1560539999999997,
+              "hi": 2.177946,
+              "mid": 2.167,
+              "touches": 2,
+              "hours_ago": 76,
+              "sources": [
+                "4h"
+              ]
+            },
+            {
+              "lo": 2.0421539999999996,
+              "hi": 2.064046,
+              "mid": 2.0530999999999997,
+              "touches": 4,
+              "hours_ago": 168,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            },
+            {
+              "lo": 1.658104,
+              "hi": 1.6799959999999998,
+              "mid": 1.66905,
+              "touches": 2,
+              "hours_ago": 576,
+              "sources": [
+                "4h"
+              ]
+            },
+            {
+              "lo": 1.525704,
+              "hi": 1.5475959999999997,
+              "mid": 1.5366499999999998,
+              "touches": 2,
+              "hours_ago": 540,
+              "sources": [
+                "4h"
+              ]
+            },
+            {
+              "lo": 1.4890873333333334,
+              "hi": 1.5109793333333332,
+              "mid": 1.5000333333333333,
+              "touches": 3,
+              "hours_ago": 496,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            },
+            {
+              "lo": 1.446654,
+              "hi": 1.468546,
+              "mid": 1.4576,
+              "touches": 2,
+              "hours_ago": 648,
+              "sources": [
+                "1d",
+                "4h"
+              ]
+            }
+          ]
+        },
+        "block5_checklist": {
+          "items": [
+            [
+              "Тренд старшего ТФ (1D) совпадает с направлением",
+              true
+            ],
+            [
+              "Свежий свип ликвидности в пользу направления",
+              true
+            ],
+            [
+              "Цена у зоны интереса (не в вакууме)",
+              false
+            ],
+            [
+              "Killzone активна или близко",
+              true
+            ],
+            [
+              "Funding не против позиции",
+              true
+            ],
+            [
+              "R:R по структуре ≥ 1:1.5",
+              true
+            ]
+          ],
+          "score": 5
+        },
+        "block6_liquidity": {
+          "sweep_1h": {
+            "type": "sweep_low",
+            "level": 2.56,
+            "bars_ago": 17,
+            "volume_confirmed": false
+          },
+          "sweep_4h": {
+            "type": "sweep_high",
+            "level": 2.7026,
+            "bars_ago": 1,
+            "volume_confirmed": false
+          },
+          "equal_levels": [
+            {
+              "price": 2.0562,
+              "kind": "high",
+              "touches": 2
+            },
+            {
+              "price": 2.683,
+              "kind": "high",
+              "touches": 2
+            },
+            {
+              "price": 2.70535,
+              "kind": "high",
+              "touches": 2
+            },
+            {
+              "price": 2.9193666666666664,
+              "kind": "high",
+              "touches": 3
+            },
+            {
+              "price": 1.50035,
+              "kind": "low",
+              "touches": 2
+            }
+          ]
+        },
+        "block7_oi": {
+          "oi_change_pct": 0.0,
+          "oi_combo": null,
+          "funding": null,
+          "ls_ratio": 1.43
+        },
+        "block8_killzone": {
+          "active": {
+            "name": "🇬🇧 Лондон Open",
+            "start": 540,
+            "end": 720,
+            "quality": "A+",
+            "desc": "Наибольшие объёмы дня, ищем хай/лоу дня",
+            "remaining_min": 38
+          },
+          "next": {
+            "name": "🇺🇸 NY Open",
+            "start": 840,
+            "end": 1020,
+            "quality": "A",
+            "desc": "Продолжение дневного диапазона, часто коррекция после Лондона",
+            "in_min": 158
+          },
+          "is_good": true,
+          "hour": 11,
+          "all_zones": [
+            {
+              "name": "🌏 Азиатская сессия",
+              "start": 0,
+              "end": 480,
+              "quality": "B",
+              "desc": "Низкая волатильность, часто рендж или хай/лоу дня"
+            },
+            {
+              "name": "🇬🇧 Лондон Open",
+              "start": 540,
+              "end": 720,
+              "quality": "A+",
+              "desc": "Наибольшие объёмы дня, ищем хай/лоу дня",
+              "remaining_min": 38
+            },
+            {
+              "name": "🇺🇸 NY Open",
+              "start": 840,
+              "end": 1020,
+              "quality": "A",
+              "desc": "Продолжение дневного диапазона, часто коррекция после Лондона"
+            },
+            {
+              "name": "🇬🇧 Лондон Close",
+              "start": 1020,
+              "end": 1140,
+              "quality": "B",
+              "desc": "Закрытие Лондона -- два источника, точная граница расходится (см. докстринг)"
+            },
+            {
+              "name": "🇺🇸 NY Close",
+              "start": 1380,
+              "end": 1440,
+              "quality": "C",
+              "desc": "Закрытие Нью-Йорка, не подтверждено источником"
+            }
+          ]
+        },
+        "block9_phase": {
+          "phase": "Маркдаун (Markdown)",
+          "note": "объём: доступен, но не используется в этой упрощённой эвристике"
+        },
+        "block10_dca": {
+          "entry1": 2.9084206666666663,
+          "entry2": 2.9193666666666664,
+          "entry3": 2.9303126666666666,
+          "weights": "50/30/20"
+        },
+        "block11_tp_rr": {
+          "tp1": 2.6833200000000006,
+          "tp2": 2.564045157251448,
+          "tp3": 2.5491124999999997,
+          "rr_tp1": 2.37,
+          "rr_tp2": 3.62,
+          "rr_tp3": 3.78,
+          "rr_gate_pass": true
+        },
+        "block12_sl": {
+          "sl": 3.0035704833333328,
+          "buffer_pct": 2.5
+        },
+        "block13_verdict": {
+          "has_setup": true,
+          "direction": "short",
+          "score": 5,
+          "text": "шорт: сетап готов (чеклист 5/6), тип сетапа: AMD — фаза manipulation_bull (цена above NY-midnight)"
+        },
+        "direction": "short",
+        "score": 5,
+        "entry_zone": {
+          "lo": 2.9084206666666663,
+          "hi": 2.9303126666666666
+        },
+        "sl": 3.0035704833333328,
+        "tp1": 2.6833200000000006,
+        "tp2": 2.564045157251448,
+        "tp3": 2.5491124999999997,
+        "setup_type": "AMD"
+      },
+      "tz13_score": 5,
+      "tz13_direction": "short",
+      "tz13_setup_type": "AMD",
+      "tz13_entry_zone": {
+        "lo": 2.9084206666666663,
+        "hi": 2.9303126666666666
+      },
+      "tz13_sl": 3.0035704833333328,
+      "tz13_tp1": 2.6833200000000006,
+      "tz13_tp2": 2.564045157251448,
+      "tz13_tp3": 2.5491124999999997,
+      "sweep_1h": {
+        "type": "sweep_low",
+        "level": 2.56,
+        "bars_ago": 17,
+        "volume_confirmed": false
+      },
+      "sweep_4h": {
+        "type": "sweep_high",
+        "level": 2.7026,
+        "bars_ago": 1,
+        "volume_confirmed": false
+      },
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ],
+      "oi_funding_ls_shadow": {
+        "oi_change_pct": 0.0,
+        "oi_combo": null,
+        "funding_rate": null,
+        "ls_ratio": 1.43,
+        "d_oi": 0,
+        "d_funding": 0,
+        "d_ls": 0,
+        "total_delta": 0,
+        "rocket_old": 49,
+        "rocket_would_be": 49
+      },
+      "bos_body_close_shadow": {
+        "wick_only_type": null,
+        "body_close_type": null,
+        "disagree": false,
+        "downgraded_to_invalid": false,
+        "body_close_label": "структура не определена"
+      },
+      "order_block_shadow": {
+        "live": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": false,
+          "bear_zone": null
+        },
+        "methodology": {
+          "bull": false,
+          "bull_zone": null,
+          "bear": true,
+          "bear_zone": [
+            2.6766,
+            2.85
+          ]
+        }
+      }
+    }
+  ]
+}
