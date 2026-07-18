@@ -144,7 +144,7 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN")
 CMC_API_KEY = os.getenv("CMC_API_KEY")
 TWELVE_API_KEY = os.environ.get("twelve_api_key", "")
 TZ          = pytz.timezone("Europe/Istanbul")
-BOT_VERSION = "v130"         # обновлять при каждом коммите с изменением bot.py
+BOT_VERSION = "v131"         # обновлять при каждом коммите с изменением bot.py
 
 # ── П-Каналы (владелец, 2026-07-15): единая точка отправки СИСТЕМНЫХ/
 # инфраструктурных сообщений (деплой-алерты, реконнекты, health, watchdog,
