@@ -34,6 +34,7 @@ zagovor/вероятност + 2 channel ID -- см. полный repo-wide ау
 import re
 
 import card_v2 as cv
+import glossary
 
 FORBIDDEN_TOKENS = re.compile(
     r"\b(kira|ict|королев|korolev|соболев|sobolev|2trade|pixel|заговор|zagovor|"
@@ -100,6 +101,10 @@ def test_format_capital_block_clean():
     table = cv.compute_capital_table(100.0, 94.0)
     lines = cv.format_capital_block(table, zone_capacity_usd=50000)
     _assert_clean("format_capital_block", "\n".join(lines))
+
+
+def test_glossary_full_text_clean():
+    _assert_clean("glossary.format_glossary_text", glossary.format_glossary_text())
 
 
 def test_format_timing_clean():
