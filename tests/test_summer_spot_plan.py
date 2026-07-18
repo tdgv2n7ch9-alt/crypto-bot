@@ -2,7 +2,7 @@
 pytest для Пакета 16 (tools/summer_spot_plan.py) -- летний спот-ранжир. Покрывает
 чистые/детерминированные функции: скоринг, назначение ярусов, DeFiLlama TVL/revenue
 матчинг, лестницы владельца из journal/spot_plans.json, фильтр вселенной (стейблы/
-wrapped), бонус зоны Королева. Сетевые вызовы (CoinGecko/Binance/DeFiLlama) везде
+wrapped), бонус зоны Tier-A. Сетевые вызовы (CoinGecko/Binance/DeFiLlama) везде
 замоканы -- этот файл не делает реальных HTTP-запросов.
 """
 import json
@@ -32,7 +32,7 @@ def _coin(symbol="TEST", price=10.0, market_cap=1_000_000_000, volume_24h=50_000
 
 def test_score_coin_base_is_50_when_all_data_missing():
     coin = _coin(fdv=None, ath_change_pct=None, ch_7d=None, ch_30d=None, market_cap=0)
-    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
+    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
     assert result["score"] == 50.0
 
 
@@ -40,7 +40,7 @@ def test_score_coin_rewards_moderate_ath_drawdown_and_early_bounce():
     """Сценарий владельца: просадка 40-90% от ATH + ранний отскок 7д (0..12%) --
     ДОЛЖНО давать положительные дельты (contrarian-формула для дна, не momentum)."""
     coin = _coin(ath_change_pct=-70.0, ch_7d=5.0, ch_30d=-15.0)
-    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
+    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
     assert result["score"] > 50.0
     labels = [f[0] for f in result["factors"]]
     assert any("зона интереса" in l for l in labels)
@@ -52,7 +52,7 @@ def test_score_coin_penalizes_near_ath_and_already_pumped():
     """Цена у хаёв (просадка <15%) + уже сильный импульс 7д (>12%) -- это НЕ дно,
     формула должна штрафовать, не поощрять."""
     coin = _coin(ath_change_pct=-5.0, ch_7d=25.0, ch_30d=20.0)
-    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
+    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
     assert result["score"] < 50.0
 
 
@@ -60,15 +60,15 @@ def test_score_coin_vrvp_bonus_when_price_inside_high_volume_zone():
     coin = _coin(ath_change_pct=None, ch_7d=None, ch_30d=None)
     profile_inside = {"ok": True, "ch_90d": None, "vrvp": {"price_inside": True, "price_below_pct": 0}}
     profile_outside = {"ok": True, "ch_90d": None, "vrvp": {"price_inside": False, "price_below_pct": 0}}
-    r_inside = ssp.score_coin(coin, profile_inside, {}, {"score": 0}, korolev_bonus=False)
-    r_outside = ssp.score_coin(coin, profile_outside, {}, {"score": 0}, korolev_bonus=False)
+    r_inside = ssp.score_coin(coin, profile_inside, {}, {"score": 0}, tier_a_bonus=False)
+    r_outside = ssp.score_coin(coin, profile_outside, {}, {"score": 0}, tier_a_bonus=False)
     assert r_inside["score"] > r_outside["score"]
 
 
 def test_score_coin_rug_score_penalty_proportional():
     coin = _coin(ath_change_pct=None, ch_7d=None, ch_30d=None)
-    r_clean = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
-    r_risky = ssp.score_coin(coin, {"ok": False}, {}, {"score": 35}, korolev_bonus=False)
+    r_clean = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
+    r_risky = ssp.score_coin(coin, {"ok": False}, {}, {"score": 35}, tier_a_bonus=False)
     assert r_risky["score"] < r_clean["score"]
     assert round(r_clean["score"] - r_risky["score"], 2) == round(35 * 0.3, 2)
 
@@ -77,15 +77,15 @@ def test_score_coin_fdv_mcap_penalty_for_large_unlock_overhang():
     """SUI-подобный кейс: большой FDV/MCap (навес будущей эмиссии) -- штраф."""
     coin_low = _coin(market_cap=1_000_000_000, fdv=1_100_000_000, ath_change_pct=None, ch_7d=None, ch_30d=None)
     coin_high = _coin(market_cap=1_000_000_000, fdv=4_000_000_000, ath_change_pct=None, ch_7d=None, ch_30d=None)
-    r_low = ssp.score_coin(coin_low, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
-    r_high = ssp.score_coin(coin_high, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
+    r_low = ssp.score_coin(coin_low, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
+    r_high = ssp.score_coin(coin_high, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
     assert r_low["score"] > r_high["score"]
 
 
-def test_score_coin_korolev_bonus_applied():
+def test_score_coin_tier_a_bonus_applied():
     coin = _coin(ath_change_pct=None, ch_7d=None, ch_30d=None)
-    r_no = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
-    r_yes = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=True)
+    r_no = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
+    r_yes = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=True)
     assert r_yes["score"] - r_no["score"] == 6.0
 
 
@@ -93,7 +93,7 @@ def test_score_coin_missing_data_produces_na_factor_not_fabricated_number():
     """Честность: н/д-данные не подставляют выдуманное число, идут нулевой дельтой
     с явной пометкой "н/д" в факторе."""
     coin = _coin(ath_change_pct=None, ch_7d=None, ch_30d=None)
-    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, korolev_bonus=False)
+    result = ssp.score_coin(coin, {"ok": False}, {}, {"score": 0}, tier_a_bonus=False)
     na_labels = [f[0] for f in result["factors"] if f[1] == 0]
     assert any("ATH% -- н/д" in l for l in na_labels)
     assert any("7д импульс -- н/д" in l for l in na_labels)
@@ -160,16 +160,16 @@ def test_tvl_revenue_map_not_applicable_for_l1_without_defi_protocol():
     assert result["XRPX"]["revenue_30d_usd"] is None
 
 
-# ── has_korolev_long_zone() ──────────────────────────────────────────────
+# ── has_tier_a_long_zone() ──────────────────────────────────────────────
 
-def test_korolev_zone_bonus_only_for_long_side():
+def test_tier_a_zone_bonus_only_for_long_side():
     watch_zones = {
         "BTCUSDT": [{"side": "LONG", "lo": 1, "hi": 2}, {"side": "SHORT", "lo": 3, "hi": 4}],
         "ETHUSDT": [{"side": "SHORT", "lo": 1, "hi": 2}],
     }
-    assert ssp.has_korolev_long_zone("BTC", watch_zones) is True
-    assert ssp.has_korolev_long_zone("ETH", watch_zones) is False
-    assert ssp.has_korolev_long_zone("NOPE", watch_zones) is False
+    assert ssp.has_tier_a_long_zone("BTC", watch_zones) is True
+    assert ssp.has_tier_a_long_zone("ETH", watch_zones) is False
+    assert ssp.has_tier_a_long_zone("NOPE", watch_zones) is False
 
 
 # ── build_ladder_for_coin() -- owner-provided plans используются как есть ──

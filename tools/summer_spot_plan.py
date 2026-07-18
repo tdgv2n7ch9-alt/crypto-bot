@@ -28,7 +28,7 @@ tier rate-limit катастрофе на per-coin /coins/{id} вызовах):
   доп. HTTP-вызова. concentration/exchange_transfers/age_listing детекторы честно
   "unavailable" (нет holders_data/transfer_data/age -- это НЕ ошибка, это же самое
   поведение, что и everywhere else в проекте без Etherscan-ключа).
-- level_watch.load_watch_zones() -- бонус "зона Королева" (LONG-зона в
+- level_watch.load_watch_zones() -- бонус "зона Tier-A" (LONG-зона в
   journal/watch_zones.json).
 - journal/spot_plans.json -- AVAX/SUI спот-планы владельца ИСПОЛЬЗУЮТСЯ КАК ЕСТЬ
   (не пересчитываются структурно), остальной топ-20 строит лестницу через
@@ -231,16 +231,16 @@ def compute_rug_score(coin: dict) -> dict:
     return rug_radar.compute_rug_risk(coin["symbol"], coin_shape, cg_detail=cg_detail)
 
 
-# ── 5. Зона Королева (watch_zones.json) -- бонус ────────────────────────────
+# ── 5. Зона Tier-A (watch_zones.json) -- бонус ────────────────────────────
 
-def has_korolev_long_zone(symbol: str, watch_zones: dict) -> bool:
+def has_tier_a_long_zone(symbol: str, watch_zones: dict) -> bool:
     entries = watch_zones.get(f"{symbol}USDT", [])
     return any(e.get("side") == "LONG" for e in entries)
 
 
 # ── 6. Скоринг -- полностью прозрачная аддитивная формула ──────────────────
 
-def score_coin(coin: dict, profile: dict, tvl_rev: dict, rug: dict, korolev_bonus: bool) -> dict:
+def score_coin(coin: dict, profile: dict, tvl_rev: dict, rug: dict, tier_a_bonus: bool) -> dict:
     """База 50, аддитивные дельты -- каждая компонента даёт (delta, explanation),
     как Rocket Score в fa_engine.py (тот же принцип прозрачности). Сценарий
     владельца -- ЛЕТНЕЕ ДНО альтов (отскок -> снижение -> дно), поэтому формула
@@ -352,8 +352,8 @@ def score_coin(coin: dict, profile: dict, tvl_rev: dict, rug: dict, korolev_bonu
         else:
             factors.append((f"Объём/MCap {vol_mcap:.1f}% -- нейтрально", 0))
 
-    if korolev_bonus:
-        add(6, "Есть активная LONG-зона Королева в watch_zones.json")
+    if tier_a_bonus:
+        add(6, "Есть активная LONG-зона Tier-A в watch_zones.json")
 
     return {"score": round(score, 1), "factors": factors, "rug": rug}
 
@@ -465,10 +465,10 @@ def run(top_n: int = TOP_N_DEFAULT, verbose: bool = True) -> dict:
                                    "score": rug["score"], "reasons": rug.get("reasons", [])})
             continue
         profile = profiles.get(coin["symbol"], {"ok": False})
-        korolev = has_korolev_long_zone(coin["symbol"], watch_zones)
-        scored = score_coin(coin, profile, tvl_rev, rug, korolev)
+        tier_a_zone = has_tier_a_long_zone(coin["symbol"], watch_zones)
+        scored = score_coin(coin, profile, tvl_rev, rug, tier_a_zone)
         results.append({"coin": coin, "profile": profile, "tvl_rev": tvl_rev.get(coin["symbol"], {}),
-                          "korolev": korolev, **scored,
+                          "tier_a": tier_a_zone, **scored,
                           "tier": assign_tier(coin["symbol"])})
 
     results.sort(key=lambda r: r["score"], reverse=True)

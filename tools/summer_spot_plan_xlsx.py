@@ -102,7 +102,7 @@ def _write_title_sheet(wb, data):
         "-rug_score*0.3  штраф пропорционально rug-риску (0-39, монеты >=40 исключены полностью)",
         "+5   FDV/MCap <= 1.3x (малый навес эмиссии)                    -8  FDV/MCap >= 3x",
         "+5   Объём/MCap 1-15% (здоровая ликвидность)             -5/-3  слишком низкий/высокий",
-        "+6   активная LONG-зона Королева (journal/watch_zones.json)",
+        "+6   активная LONG-зона Tier-A (journal/watch_zones.json)",
     ]:
         ws.cell(row=r, column=1, value=line)
         r += 1
@@ -148,7 +148,7 @@ def _write_ranking_sheet(wb, data):
     _setup_print(ws)
     headers = ["Ранг", "Символ", "Название", "Ярус", "Скор", "Цена $", "MCap $",
                "ATH %", "7д %", "30д %", "90д %", "Rug", "FDV/MCap", "Vol/MCap %",
-               "TVL $", "Выручка30д $", "Зона Королева", "Топ-факторы"]
+               "TVL $", "Выручка30д $", "Зона Tier-A", "Топ-факторы"]
     widths = [6, 9, 16, 9, 7, 12, 15, 8, 7, 7, 7, 6, 9, 10, 14, 13, 8, 60]
     _header_row(ws, 1, headers, widths)
 
@@ -169,7 +169,7 @@ def _write_ranking_sheet(wb, data):
             _fmt(c["volume_24h"] / c["market_cap"] * 100, "pct") if c["market_cap"] else "н/д",
             _fmt(tvl.get("tvl_usd"), "usd0"),
             _fmt(tvl.get("revenue_30d_usd"), "usd0"),
-            "да" if r["korolev"] else "",
+            "да" if r["tier_a"] else "",
             factors_str,
         ]
         ws.append(row)

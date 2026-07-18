@@ -17223,3 +17223,36 @@ Block"->"Order Block", "Kira ICT Trading Analysis.pdf"->"авторская
 
 **DoD**: `py_compile` -- чисто. Полный `pytest` -- **1706 passed, 1
 skipped** (было 1705, +1 новый тест), без регрессий.
+
+## 2026-07-18 -- Пункт (3), Батч В: данные (watch_zones_history, spot_plans.json) + tools/summer_spot_plan* переименование
+
+СЕЙЧАС ДЕЛАЮ: батч В закрыт. СЛЕДУЮЩИЙ: батч Г -- внутренние доки
+(PROGRESS.md/METHODOLOGY_CORE.md/KNOWLEDGE_INDEX.md и т.п.).
+
+**`journal/watch_zones_history/{2026-07-11,12,13}.json`**: верхнеуровневый
+`source` `"Королев ..."` -> `"tier_a"` (те же 3 файла, что были найдены
+аудитом). `legacy_watchlist_2026-07-13.json` -- чист, без находок.
+
+**`journal/spot_plans.json`**: `SOLUSDT.note` содержал `"источник: Теория
+Вероятностей|ТТ"` -- заменено на `"источник B"` (тот же принцип, что и в
+watch_zones.json ранее). **Честно проверил перед правкой**: `_spot_plan_
+row_text()`/`_zones_screen_text()` (bot.py) рендерят этот `note`, НО
+`cmd_zones()` явно `Owner-only` (докстринг подтверждает) -- это НЕ
+подписчицкий леак, просто данные с именем в owner-only команде. Чищу
+всё равно по правилу владельца "нигде", не потому что критично.
+
+**`tools/summer_spot_plan.py`/`_xlsx.py`/`tests/test_summer_spot_plan.py`**
+(owner-only инструмент, не подписчицкий): переименовано системно --
+`korolev_bonus`->`tier_a_bonus`, `has_korolev_long_zone`->`has_tier_a_
+long_zone`, dict-ключ `"korolev"`->`"tier_a"`, столбец xlsx `"Зона
+Королева"`->`"Зона Tier-A"`, комментарии/тексты факторов аналогично.
+**Поймал свою же ошибку сразу после автозамены**: скрипт-замена
+переименовала объявление переменной (`korolev = ...` -> `tier_a_zone =
+...`), но пропустила её использование чуть ниже (`"tier_a": korolev,` --
+осталось бы `NameError` на живом запуске) -- поймано `grep`-проверкой
+сразу после, исправлено ДО коммита.
+
+**DoD**: `py_compile` -- чисто. `pytest tests/test_summer_spot_plan.py`
+-- 19 passed. Полный `pytest` -- **1706 passed, 1 skipped**, без
+регрессий (тот же счёт, что и после батча Б -- эти файлы не имеют
+новых тестов, только переименование существующих).
