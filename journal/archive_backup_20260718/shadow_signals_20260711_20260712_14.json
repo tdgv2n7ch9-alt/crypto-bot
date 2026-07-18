@@ -1,0 +1,3062 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "ts": 1783863727.5066893,
+      "symbol": "NEX",
+      "direction": "short",
+      "entry_lo": 1.88e-06,
+      "entry_hi": 1.88e-06,
+      "sl": 1.936e-06,
+      "tp1": 1.842e-06,
+      "tp2": 1.819e-06,
+      "tp3": 1.782e-06,
+      "rr_tp1_live": 0.68,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.68 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863731.0219839,
+      "symbol": "S",
+      "direction": "short",
+      "entry_lo": 0.02567,
+      "entry_hi": 0.02579307,
+      "sl": 0.02643789,
+      "tp1": 0.02533833,
+      "tp2": 0.02466333,
+      "tp3": 0.024255,
+      "rr_tp1_live": 0.43,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 10,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.02593,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.02574,
+          "bars_ago": 12,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.01654
+        },
+        "triangle": {
+          "type": "ascending"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.43 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863734.5011344,
+      "symbol": "SENT",
+      "direction": "short",
+      "entry_lo": 0.01367,
+      "entry_hi": 0.013933,
+      "sl": 0.01428132,
+      "tp1": 0.01336631,
+      "tp2": 0.0126625,
+      "tp3": 0.01228533,
+      "rr_tp1_live": 0.5,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 12,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.013333,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.008645
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.011715999999999997
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.5 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863737.5500658,
+      "symbol": "RE",
+      "direction": "short",
+      "entry_lo": 0.584,
+      "entry_hi": 0.594,
+      "sl": 0.60885,
+      "tp1": 0.57104615,
+      "tp2": 0.5185,
+      "tp3": 0.45975,
+      "rr_tp1_live": 0.52,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": true,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.5821,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.5877,
+          "bars_ago": 17,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          0.5533,
+          0.5789
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.40580000000000005
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.4226
+        },
+        "triangle": {
+          "type": "descending"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.52 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=True,bear=False)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863740.799055,
+      "symbol": "ALLO",
+      "direction": "short",
+      "entry_lo": 0.37217587,
+      "entry_hi": 0.37512035,
+      "sl": 0.38449836,
+      "tp1": 0.367905,
+      "tp2": 0.349875,
+      "tp3": 0.335235,
+      "rr_tp1_live": 0.35,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 12,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.34149,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          0.36492,
+          0.3894
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.30250999999999995
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.35 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=True,bear=False)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863744.1157408,
+      "symbol": "CFG",
+      "direction": "short",
+      "entry_lo": 0.1887,
+      "entry_hi": 0.1944,
+      "sl": 0.19926,
+      "tp1": 0.18425714,
+      "tp2": 0.1813,
+      "tp3": 0.1359,
+      "rr_tp1_live": 0.42,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.1838,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.1758
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.42 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863747.9627364,
+      "symbol": "RAVE",
+      "direction": "short",
+      "entry_lo": 0.26221,
+      "entry_hi": 0.26811,
+      "sl": 0.27481275,
+      "tp1": 0.25601,
+      "tp2": 0.25143,
+      "tp3": 0.23363,
+      "rr_tp1_live": 0.49,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.25647,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.28591,
+          "bars_ago": 11,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.07845000000000002
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.24055999999999994
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.49 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863753.602426,
+      "symbol": "JELLYJELLY",
+      "direction": "short",
+      "entry_lo": 0.05473,
+      "entry_hi": 0.0582,
+      "sl": 0.059655,
+      "tp1": 0.05372,
+      "tp2": 0.05274,
+      "tp3": 0.030105,
+      "rr_tp1_live": 0.21,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 5,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.05368,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.05419,
+          "bars_ago": 3,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.09828
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.052779999999999994
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.21 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863758.5457053,
+      "symbol": "MOVE",
+      "direction": "short",
+      "entry_lo": 0.01133813,
+      "entry_hi": 0.01142645,
+      "sl": 0.01171211,
+      "tp1": 0.01097789,
+      "tp2": 0.01067,
+      "tp3": 0.01048,
+      "rr_tp1_live": 0.96,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": true,
+        "bullish_classical": true,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.01109,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.01141,
+          "bars_ago": 9,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.00933
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.0106
+        },
+        "triangle": {
+          "type": "descending"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "04-rsi-divergence"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.96 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "divergence: классическая дивергенция ПРОТИВ направления сигнала"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863762.2033339,
+      "symbol": "BARD",
+      "direction": "short",
+      "entry_lo": 0.1310664,
+      "entry_hi": 0.1321048,
+      "sl": 0.13540742,
+      "tp1": 0.12653333,
+      "tp2": 0.1237,
+      "tp3": 0.1093613,
+      "rr_tp1_live": 1.04,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": true,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 5,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.1303,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.1315,
+          "bars_ago": 3,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.12259999999999999
+        },
+        "triangle": {
+          "type": "descending"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 1.04 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863765.509127,
+      "symbol": "CARDS",
+      "direction": "short",
+      "entry_lo": 0.146391,
+      "entry_hi": 0.146391,
+      "sl": 0.15078273,
+      "tp1": 0.14346318,
+      "tp2": 0.14165379,
+      "tp3": 0.13872597,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863768.6550612,
+      "symbol": "SQD",
+      "direction": "short",
+      "entry_lo": 0.03063,
+      "entry_hi": 0.03107,
+      "sl": 0.03184675,
+      "tp1": 0.02834,
+      "tp2": 0.0267364,
+      "tp3": 0.02454625,
+      "rr_tp1_live": 1.88,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 1,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.0309,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.03087,
+          "bars_ago": 1,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.02835
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 1.88 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ]
+    },
+    {
+      "ts": 1783863771.8871849,
+      "symbol": "XAN",
+      "direction": "short",
+      "entry_lo": 0.010384,
+      "entry_hi": 0.010667,
+      "sl": 0.01093367,
+      "tp1": 0.01013852,
+      "tp2": 0.00956856,
+      "tp3": 0.00918344,
+      "rr_tp1_live": 0.45,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.01057,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.010556,
+          "bars_ago": 11,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.007770999999999998
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.008956
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.45 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863774.9777622,
+      "symbol": "CAP",
+      "direction": "short",
+      "entry_lo": 0.01611,
+      "entry_hi": 0.01638,
+      "sl": 0.0167895,
+      "tp1": 0.01543,
+      "tp2": 0.0139356,
+      "tp3": 0.0127125,
+      "rr_tp1_live": 1.0,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": true,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.01595,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.009729999999999999
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": true,
+          "target": 0.02595
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 1.0 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863985.6959167,
+      "symbol": "ZEC",
+      "direction": "long",
+      "entry_lo": 507.51,
+      "entry_hi": 517.8,
+      "sl": 494.82225,
+      "tp1": 535.01333333,
+      "tp2": 544.83,
+      "tp3": 632.68875,
+      "rr_tp1_live": 0.75,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": true,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 2,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 517.55,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 509.42,
+          "bars_ago": 4,
+          "volume_confirmed": true
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 383.48
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "04-rsi-divergence"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.75 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "divergence: классическая дивергенция ПРОТИВ направления сигнала"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863988.979656,
+      "symbol": "SKY",
+      "direction": "long",
+      "entry_lo": 0.06051704,
+      "entry_hi": 0.06101296,
+      "sl": 0.05900411,
+      "tp1": 0.06285,
+      "tp2": 0.070655,
+      "tp3": 0.07105719,
+      "rr_tp1_live": 0.91,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.06064,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.05739,
+          "bars_ago": 19,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.04887
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.91 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863992.0312428,
+      "symbol": "LIT",
+      "direction": "long",
+      "entry_lo": 2.6226,
+      "entry_hi": 2.6475,
+      "sl": 2.557035,
+      "tp1": 2.68845,
+      "tp2": 2.74732,
+      "tp3": 2.7798,
+      "rr_tp1_live": 0.45,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": true,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 2.6066,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": {
+          "type": "sweep_low",
+          "level": 2.5598,
+          "bars_ago": 1,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 3.1056
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 2.026
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "04-rsi-divergence"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.45 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "divergence: классическая дивергенция ПРОТИВ направления сигнала"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783863994.917287,
+      "symbol": "VELVET",
+      "direction": "long",
+      "entry_lo": 0.45252,
+      "entry_hi": 0.46443,
+      "sl": 0.441207,
+      "tp1": 0.52029,
+      "tp2": 0.52522031,
+      "tp3": 0.527235,
+      "rr_tp1_live": 2.41,
+      "shadow_rr_gate_pass": true,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 9,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.43894,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -1.07169
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.06631000000000009
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ]
+    },
+    {
+      "ts": 1783863999.1660557,
+      "symbol": "EGLD",
+      "direction": "long",
+      "entry_lo": 3.062,
+      "entry_hi": 3.087,
+      "sl": 2.98545,
+      "tp1": 3.169,
+      "tp2": 3.205,
+      "tp3": 3.59475,
+      "rr_tp1_live": 0.81,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 3.052,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 3.6410000000000005
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 2.45
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.81 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864002.365993,
+      "symbol": "AT",
+      "direction": "long",
+      "entry_lo": 0.15035207,
+      "entry_hi": 0.15161423,
+      "sl": 0.14659327,
+      "tp1": 0.16079125,
+      "tp2": 0.16336,
+      "tp3": 0.16705,
+      "rr_tp1_live": 1.83,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 12,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.15836,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.17992999999999998
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.13761000000000004
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 1.83 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ]
+    },
+    {
+      "ts": 1783864005.265521,
+      "symbol": "US",
+      "direction": "long",
+      "entry_lo": 0.02280278,
+      "entry_hi": 0.02299972,
+      "sl": 0.02223271,
+      "tp1": 0.0246525,
+      "tp2": 0.02499233,
+      "tp3": 0.03,
+      "rr_tp1_live": 2.15,
+      "shadow_rr_gate_pass": true,
+      "breaker_mitigation": "breaker",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 11,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.022483,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.037741
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.008192000000000001
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)"
+      ],
+      "live_journal_id": 101,
+      "source": "send_scheduled",
+      "promoted_live": true,
+      "gate_reasons": []
+    },
+    {
+      "ts": 1783864010.2678454,
+      "symbol": "IDOL",
+      "direction": "long",
+      "entry_lo": 0.01569304,
+      "entry_hi": 0.01569304,
+      "sl": 0.01522225,
+      "tp1": 0.0160069,
+      "tp2": 0.01620087,
+      "tp3": 0.01651473,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864013.615239,
+      "symbol": "BEAT",
+      "direction": "short",
+      "entry_lo": 2.9079168,
+      "entry_hi": 2.9301832,
+      "sl": 3.00343778,
+      "tp1": 2.7158,
+      "tp2": 2.67614,
+      "tp3": 2.62694652,
+      "rr_tp1_live": 2.01,
+      "shadow_rr_gate_pass": true,
+      "breaker_mitigation": "breaker",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 2.2374,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": true,
+        "bear_zone": [
+          2.6766,
+          2.85
+        ]
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -1.5975000000000001
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 1.8239999999999998
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "03-breaker-mitigation",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=False,bear=True)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ]
+    },
+    {
+      "ts": 1783864017.0348845,
+      "symbol": "TRUMP",
+      "direction": "short",
+      "entry_lo": 1.584,
+      "entry_hi": 1.632,
+      "sl": 1.6728,
+      "tp1": 1.554,
+      "tp2": 1.29984,
+      "tp3": 1.14,
+      "rr_tp1_live": 0.34,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 1.565,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 1.621,
+          "bars_ago": 6,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 1.5380000000000003
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.34 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864022.0435467,
+      "symbol": "LAB",
+      "direction": "short",
+      "entry_lo": 0.701076,
+      "entry_hi": 0.704924,
+      "sl": 0.7225471,
+      "tp1": 0.419,
+      "tp2": 0.63236848,
+      "tp3": 0.5937205,
+      "rr_tp1_live": 13.14,
+      "shadow_rr_gate_pass": true,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 10,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.454,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": -14.767
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 8.085999999999999
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "suspicious_volume",
+        "rsi_extreme_short",
+        "rocket_or_grade"
+      ]
+    },
+    {
+      "ts": 1783864025.272848,
+      "symbol": "BTW",
+      "direction": "short",
+      "entry_lo": 0.06109868,
+      "entry_hi": 0.06158132,
+      "sl": 0.06312085,
+      "tp1": 0.06016,
+      "tp2": 0.05932333,
+      "tp3": 0.05756,
+      "rr_tp1_live": 0.46,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 8,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.06236,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.06151,
+          "bars_ago": 12,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          0.05977,
+          0.06159
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.22347000000000003
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.0489
+        },
+        "triangle": {
+          "type": "symmetric"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.46 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=True,bear=False)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864029.156695,
+      "symbol": "NEX",
+      "direction": "short",
+      "entry_lo": 1.88e-06,
+      "entry_hi": 1.88e-06,
+      "sl": 1.936e-06,
+      "tp1": 1.842e-06,
+      "tp2": 1.819e-06,
+      "tp3": 1.782e-06,
+      "rr_tp1_live": 0.68,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.68 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864032.4003215,
+      "symbol": "SENT",
+      "direction": "short",
+      "entry_lo": 0.013346,
+      "entry_hi": 0.013541,
+      "sl": 0.01387952,
+      "tp1": 0.0126625,
+      "tp2": 0.01228533,
+      "tp3": 0.012124,
+      "rr_tp1_live": 1.28,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 12,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.013333,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.008623
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.011715999999999997
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 1.28 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_short",
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864036.0181077,
+      "symbol": "RE",
+      "direction": "short",
+      "entry_lo": 0.584,
+      "entry_hi": 0.594,
+      "sl": 0.60885,
+      "tp1": 0.57104615,
+      "tp2": 0.5185,
+      "tp3": 0.45975,
+      "rr_tp1_live": 0.52,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": true,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 4,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.5821,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.5877,
+          "bars_ago": 17,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": true,
+        "bull_zone": [
+          0.5533,
+          0.5789
+        ],
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.405
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.4226
+        },
+        "triangle": {
+          "type": "descending"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "07-order-block-body"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.52 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "order_block: live(bull=False,bear=False) vs methodology-тело(bull=True,bear=False)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864040.4309907,
+      "symbol": "CFG",
+      "direction": "short",
+      "entry_lo": 0.1839,
+      "entry_hi": 0.186,
+      "sl": 0.19065,
+      "tp1": 0.1813,
+      "tp2": 0.1623,
+      "tp3": 0.15015,
+      "rr_tp1_live": 0.39,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.1838,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.1758
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.39 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864043.408586,
+      "symbol": "RAVE",
+      "direction": "short",
+      "entry_lo": 0.26102,
+      "entry_hi": 0.26811,
+      "sl": 0.27481275,
+      "tp1": 0.25601,
+      "tp2": 0.25143,
+      "tp3": 0.23363,
+      "rr_tp1_live": 0.36,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 7,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.25647,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.28591,
+          "bars_ago": 11,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.07845000000000002
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.24055999999999994
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.36 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864048.548541,
+      "symbol": "MOVE",
+      "direction": "short",
+      "entry_lo": 0.01133778,
+      "entry_hi": 0.01142602,
+      "sl": 0.01171167,
+      "tp1": 0.01097789,
+      "tp2": 0.01067,
+      "tp3": 0.01048,
+      "rr_tp1_live": 0.96,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": true,
+        "bullish_classical": true,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.01109,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.01141,
+          "bars_ago": 9,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.00933
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.0106
+        },
+        "triangle": {
+          "type": "descending"
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "04-rsi-divergence"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.96 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "divergence: классическая дивергенция ПРОТИВ направления сигнала"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864054.9992301,
+      "symbol": "AZTEC",
+      "direction": "short",
+      "entry_lo": 0.013745,
+      "entry_hi": 0.0141,
+      "sl": 0.0144525,
+      "tp1": 0.01333336,
+      "tp2": 0.01261275,
+      "tp3": 0.0102075,
+      "rr_tp1_live": 0.58,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": true,
+        "bullish_classical": false,
+        "bullish_hidden": true
+      },
+      "bpr_zone_count": 9,
+      "bpr_confluence": true,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.013799,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.011129
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.012650999999999999
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "05-bpr"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.58 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "bpr: зона входа пересекается со свежим BPR (confluence)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864059.980465,
+      "symbol": "0G",
+      "direction": "short",
+      "entry_lo": 0.1872068,
+      "entry_hi": 0.1886932,
+      "sl": 0.19341053,
+      "tp1": 0.18508,
+      "tp2": 0.16735486,
+      "tp3": 0.15618815,
+      "rr_tp1_live": 0.34,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": true,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 11,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.1894,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.199,
+          "bars_ago": 9,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": true,
+          "target": 0.15889999999999999
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.17679999999999998
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.34 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864062.2527137,
+      "symbol": "CARDS",
+      "direction": "short",
+      "entry_lo": 0.144574,
+      "entry_hi": 0.144574,
+      "sl": 0.14891122,
+      "tp1": 0.14168252,
+      "tp2": 0.13989559,
+      "tp3": 0.13700411,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864067.16474,
+      "symbol": "XCH",
+      "direction": "short",
+      "entry_lo": 1.43,
+      "entry_hi": 1.43,
+      "sl": 1.4729,
+      "tp1": 1.4014,
+      "tp2": 1.3837252,
+      "tp3": 1.3551252,
+      "rr_tp1_live": 0.67,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": null,
+      "divergence": {},
+      "bpr_zone_count": 0,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution",
+        "nymidnight_price": null,
+        "price_vs_nymidnight": null
+      },
+      "inducement": {
+        "inducement_swept": false,
+        "detail": null
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": false,
+          "bottom": false,
+          "target": null
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.67 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864745.0966904,
+      "symbol": "DEXE",
+      "direction": "long",
+      "entry_lo": 36.895736,
+      "entry_hi": 37.270264,
+      "sl": 35.9733426,
+      "tp1": 39.8641068,
+      "tp2": 41.42041248,
+      "tp3": 43.754871,
+      "rr_tp1_live": 2.0,
+      "shadow_rr_gate_pass": true,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 5,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 40.354,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 36.96,
+          "bars_ago": 7,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 32.445
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 26.464999999999996
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rsi_extreme_long",
+        "rocket_or_grade"
+      ]
+    },
+    {
+      "ts": 1783864748.686979,
+      "symbol": "SKY",
+      "direction": "long",
+      "entry_lo": 0.0605174,
+      "entry_hi": 0.0610126,
+      "sl": 0.05900446,
+      "tp1": 0.06285,
+      "tp2": 0.070655,
+      "tp3": 0.07105327,
+      "rr_tp1_live": 0.91,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "mitigation",
+      "divergence": {
+        "bearish_classical": false,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 6,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bull",
+        "nymidnight_price": 0.06064,
+        "price_vs_nymidnight": "above"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_high",
+          "level": 0.05739,
+          "bars_ago": 19,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": false,
+          "bear": false,
+          "target": null
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.04887
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 0.91 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade",
+        "rr_gate"
+      ]
+    },
+    {
+      "ts": 1783864751.953195,
+      "symbol": "ARB",
+      "direction": "long",
+      "entry_lo": 0.09360664,
+      "entry_hi": 0.09447,
+      "sl": 0.09126647,
+      "tp1": 0.100245,
+      "tp2": 0.10125,
+      "tp3": 0.11048763,
+      "rr_tp1_live": 1.8,
+      "shadow_rr_gate_pass": false,
+      "breaker_mitigation": "breaker",
+      "divergence": {
+        "bearish_classical": true,
+        "bearish_hidden": false,
+        "bullish_classical": false,
+        "bullish_hidden": false
+      },
+      "bpr_zone_count": 12,
+      "bpr_confluence": false,
+      "whale_klvl_confluence": false,
+      "whale_klvl_matches": [],
+      "amd_phase_methodology": {
+        "phase": "distribution_bear",
+        "nymidnight_price": 0.09827,
+        "price_vs_nymidnight": "below"
+      },
+      "inducement": {
+        "inducement_swept": true,
+        "detail": {
+          "type": "sweep_low",
+          "level": 0.08988,
+          "bars_ago": 8,
+          "volume_confirmed": false
+        }
+      },
+      "order_block_live": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "order_block_methodology": {
+        "bull": false,
+        "bull_zone": null,
+        "bear": false,
+        "bear_zone": null
+      },
+      "chart_patterns": {
+        "flag": {
+          "bull": true,
+          "bear": false,
+          "target": 0.11601
+        },
+        "head_shoulders": {
+          "top": true,
+          "bottom": false,
+          "target": 0.07116
+        },
+        "triangle": {
+          "type": null
+        }
+      },
+      "patches_affected": [
+        "01-killzone-hours",
+        "02-rr-gate",
+        "03-breaker-mitigation",
+        "04-rsi-divergence"
+      ],
+      "discrepancy": [
+        "killzone: live=good (🇺🇸 NY Open) vs shadow=not-good (⚪ Dead Zone)",
+        "rr_gate: R:R 1.8 прошёл live-гейт (1.5), но НЕ прошёл бы shadow-гейт (2.0)",
+        "divergence: классическая дивергенция ПРОТИВ направления сигнала"
+      ],
+      "live_journal_id": null,
+      "source": "send_scheduled",
+      "promoted_live": false,
+      "gate_reasons": [
+        "rocket_or_grade"
+      ]
+    }
+  ]
+}
