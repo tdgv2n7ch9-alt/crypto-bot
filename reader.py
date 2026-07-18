@@ -31,7 +31,14 @@ BOT_TOKEN     = os.getenv("BOT_TOKEN", "")
 OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "0"))
 # Абсолютный путь, привязанный к расположению скрипта — под launchd cwd не гарантирован,
 # относительный SESSION приводил к sqlite3.OperationalError: unable to open database file.
-SESSION       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_trade_reader")
+# Владелец (2026-07-18, Telethon план Б — основной аккаунт заблокирован на 2FA-
+# восстановлении, 7-дневный сброс): READER_SESSION_PATH позволяет временно
+# переключить демон на другой session-файл (напр. best_trade_reader_temp) БЕЗ
+# правки кода — дефолт не меняется, если переменная не задана.
+SESSION       = os.getenv(
+    "READER_SESSION_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_trade_reader"),
+)
 
 # mode="signal" -- боевое поведение без изменений (format_signal -> send_telegram).
 # mode="monitor" -- ТОЛЬКО архив (knowledge/channel_archive/), в сигнальный пайплайн и
