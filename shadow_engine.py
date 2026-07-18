@@ -331,33 +331,76 @@ def _github_get_shadow_sync():
         return False, None
 
 
-def _github_put_shadow_sync(records: list, sha):
-    """PUT journal/shadow_signals.json. Возвращает новый sha при успехе, None при ошибке,
-    "conflict" при 409 (sha устарел -- вызывающий должен перечитать и повторить)."""
+def _github_put_shadow_via_data_api(records: list, max_attempts: int = 5) -> bool:
+    """PUT journal/shadow_signals.json через Git Data API (blob->tree->commit->ref)
+    -- владелец, ДА 2026-07-18, GitHub-422 вариант C (см. PROGRESS.md "Дизайн
+    GitHub-422"). ЗАМЕНЯЕТ прежний Contents API PUT (одним запросом с payload
+    прямо в теле) -- Contents API падает 422 "Sorry, the file is too large to
+    be processed" на payload ~25MB+ (штатный размер активного файла в пределах
+    ROTATION_KEEP_DAYS=3 при текущем ~6КБ/запись, живая находка 2026-07-18).
+    Git Data API лимитирован 100MB на blob -- тот же паттерн, что уже проверен
+    и работает для архивного бэкапа (scripts/shadow_dedupe.py/#267,
+    github_multi_file_commit()).
+
+    В отличие от Contents API (конфликт через sha файла и 409), здесь
+    конфликт -- гонка ref'а (PATCH git/refs/heads/main падает, если ref
+    сдвинулся между GET ref и PATCH, например конкурентный push deploy.sh
+    или другого shadow-sync коммита) -- ретрай со свежим ref/base_tree на
+    КАЖДУЮ попытку (blob уже создан не теряется -- объекты git не привязаны
+    к родителю, переиспользуется). Best-effort: возвращает True/False, не
+    поднимает исключение -- вызывающий код уже не считает провал синка
+    фатальным (локальная запись сделана раньше, до этого шага)."""
     if not signal_journal._github_configured():
-        return None
+        return False
     token_issue = signal_journal._validate_github_token()
     if token_issue:
         log.error(f"shadow_engine: {token_issue}")
-        return None
-    try:
-        payload = {"schema_version": 1, "records": records}
-        body = {
-            "message": f"shadow: {len(records)} записей",
-            "content": base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode(),
-        }
-        if sha:
-            body["sha"] = sha
-        r = requests.put(f"{signal_journal._github_api_base()}/contents/{GITHUB_SHADOW_PATH}",
-                          headers=signal_journal._github_headers(), json=body, timeout=20)
-        if r.status_code == 409:
-            return "conflict"
-        r.raise_for_status()
-        return r.json()["content"]["sha"]
-    except Exception as e:
-        detail = getattr(getattr(e, "response", None), "text", "")
-        log.error(f"shadow_engine: GitHub PUT failed ({e} {detail[:300]})")
-        return None
+        return False
+    payload = {"schema_version": 1, "records": records}
+    content = json.dumps(payload, ensure_ascii=False)
+    for attempt in range(max_attempts):
+        try:
+            base = signal_journal._github_api_base()
+            headers = signal_journal._github_headers()
+            ref = requests.get(f"{base}/git/refs/heads/main", headers=headers, timeout=15)
+            ref.raise_for_status()
+            base_commit_sha = ref.json()["object"]["sha"]
+
+            base_commit = requests.get(f"{base}/git/commits/{base_commit_sha}", headers=headers, timeout=15)
+            base_commit.raise_for_status()
+            base_tree_sha = base_commit.json()["tree"]["sha"]
+
+            blob = requests.post(f"{base}/git/blobs", headers=headers, timeout=25, json={
+                "content": base64.b64encode(content.encode()).decode(),
+                "encoding": "base64",
+            })
+            blob.raise_for_status()
+            blob_sha = blob.json()["sha"]
+
+            tree = requests.post(f"{base}/git/trees", headers=headers, timeout=20, json={
+                "base_tree": base_tree_sha,
+                "tree": [{"path": GITHUB_SHADOW_PATH, "mode": "100644", "type": "blob", "sha": blob_sha}],
+            })
+            tree.raise_for_status()
+            new_tree_sha = tree.json()["sha"]
+
+            commit = requests.post(f"{base}/git/commits", headers=headers, timeout=20, json={
+                "message": f"shadow: {len(records)} записей",
+                "tree": new_tree_sha,
+                "parents": [base_commit_sha],
+            })
+            commit.raise_for_status()
+            new_commit_sha = commit.json()["sha"]
+
+            patch = requests.patch(f"{base}/git/refs/heads/main", headers=headers, timeout=15,
+                                    json={"sha": new_commit_sha})
+            patch.raise_for_status()
+            return True
+        except Exception as e:
+            detail = getattr(getattr(e, "response", None), "text", "")
+            log.error(f"shadow_engine: Git Data API push попытка {attempt + 1}/{max_attempts} "
+                      f"не удалась ({e} {detail[:300]}) -- ретрай со свежим ref")
+    return False
 
 
 # Батчинг shadow-sync коммитов (владелец, ДА, 2026-07-15, окно 60-120с) --
@@ -403,29 +446,31 @@ def _sync_to_github_sync(new_record: dict = None, now: float = None) -> bool:
     Батчинг (см. блок констант выше, докстринг там подробный): если с прошлой
     РЕАЛЬНОЙ попытки синка прошло меньше GITHUB_SYNC_MIN_INTERVAL_SEC -- функция
     сразу возвращает True БЕЗ сетевого вызова (локальная запись уже надёжна,
-    догонит на следующем окне). `now` -- для тестируемости, None -> реальное время."""
+    догонит на следующем окне). `now` -- для тестируемости, None -> реальное время.
+
+    Владелец, ДА 2026-07-18 (GitHub-422 вариант C): запись переведена на
+    _github_put_shadow_via_data_api() (Git Data API, blob->tree->commit->ref)
+    -- см. её докстринг. Внешний ретрай-на-конфликт (раньше -- `for attempt in
+    range(2)` + "conflict" от Contents API) убран: ref-race теперь ретраится
+    ВНУТРИ _github_put_shadow_via_data_api() (5 попыток), одного цикла
+    GET+PUT здесь достаточно."""
     global _last_github_sync_attempt_ts
     now = now if now is not None else time.time()
     if now - _last_github_sync_attempt_ts < GITHUB_SYNC_MIN_INTERVAL_SEC:
         return True
     _last_github_sync_attempt_ts = now
-    for attempt in range(2):
-        remote, sha = _github_get_shadow_sync()
-        if remote is False:
-            return False  # транзиентная ошибка GET -- НЕ пустой файл, синк прерван безопасно
-        if remote is None and sha is None and not signal_journal._github_configured():
-            return False  # GitHub не настроен -- локальная запись уже сделана, этого достаточно
-        remote_records = remote or []
-        remote_keys = {_dedup_key(r) for r in remote_records}
-        local_records = _load_local()
-        missing = [r for r in local_records if _dedup_key(r) not in remote_keys]
-        if not missing:
-            return True  # уже всё синхронизировано (включая new_record, если был передан)
-        result = _github_put_shadow_sync(remote_records + missing, sha)
-        if result == "conflict":
-            continue  # повтор со свежим sha
-        return bool(result)
-    return False
+    remote, sha = _github_get_shadow_sync()
+    if remote is False:
+        return False  # транзиентная ошибка GET -- НЕ пустой файл, синк прерван безопасно
+    if remote is None and sha is None and not signal_journal._github_configured():
+        return False  # GitHub не настроен -- локальная запись уже сделана, этого достаточно
+    remote_records = remote or []
+    remote_keys = {_dedup_key(r) for r in remote_records}
+    local_records = _load_local()
+    missing = [r for r in local_records if _dedup_key(r) not in remote_keys]
+    if not missing:
+        return True  # уже всё синхронизировано (включая new_record, если был передан)
+    return _github_put_shadow_via_data_api(remote_records + missing)
 
 
 def compute_whale_confluence(classified_by_side: dict, whale_zones: dict) -> dict:

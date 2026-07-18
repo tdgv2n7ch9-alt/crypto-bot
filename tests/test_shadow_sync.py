@@ -168,10 +168,10 @@ def test_sync_aborts_on_get_error_does_not_attempt_put(monkeypatch):
 
     def fake_put(*a, **kw):
         put_called["count"] += 1
-        return "sha123"
+        return True
 
     monkeypatch.setattr(se, "_github_get_shadow_sync", fake_get_shadow_sync)
-    monkeypatch.setattr(se, "_github_put_shadow_sync", fake_put)
+    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", fake_put)
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
 
     ok = se._sync_to_github_sync({"symbol": "BTCUSDT", "ts": 111})
@@ -183,7 +183,7 @@ def test_sync_not_configured_returns_false_without_put(monkeypatch):
     put_called = {"count": 0}
 
     monkeypatch.setattr(se, "_github_get_shadow_sync", lambda: (None, None))
-    monkeypatch.setattr(se, "_github_put_shadow_sync", lambda *a, **kw: put_called.__setitem__("count", put_called["count"] + 1))
+    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", lambda *a, **kw: put_called.__setitem__("count", put_called["count"] + 1))
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: False)
 
     ok = se._sync_to_github_sync({"symbol": "BTCUSDT", "ts": 111})
@@ -203,12 +203,11 @@ def test_sync_catches_up_local_backlog_not_just_current_record(monkeypatch):
 
     put_payload = {}
 
-    def fake_put(records, sha):
+    def fake_put(records):
         put_payload["records"] = records
-        put_payload["sha"] = sha
-        return "new_sha"
+        return True
 
-    monkeypatch.setattr(se, "_github_put_shadow_sync", fake_put)
+    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", fake_put)
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
 
     ok = se._sync_to_github_sync(local_backlog[-1])
@@ -226,7 +225,7 @@ def test_sync_no_missing_records_returns_true_without_put(monkeypatch):
     monkeypatch.setattr(se, "_github_get_shadow_sync", lambda: (local_records, "remote_sha"))
 
     put_called = {"count": 0}
-    monkeypatch.setattr(se, "_github_put_shadow_sync",
+    monkeypatch.setattr(se, "_github_put_shadow_via_data_api",
                          lambda *a, **kw: put_called.__setitem__("count", put_called["count"] + 1))
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
 
@@ -235,28 +234,102 @@ def test_sync_no_missing_records_returns_true_without_put(monkeypatch):
     assert put_called["count"] == 0
 
 
-def test_sync_retries_once_on_conflict_then_succeeds(monkeypatch):
-    calls = {"get": 0, "put": 0}
+# --- GitHub-422 вариант C: _github_put_shadow_via_data_api() (Git Data API) ---
 
-    def fake_get():
-        calls["get"] += 1
-        return [], f"sha_{calls['get']}"
+def test_put_via_data_api_pushes_blob_tree_commit_ref(monkeypatch):
+    """Полный happy-path: GET ref -> GET commit -> POST blob -> POST tree ->
+    POST commit -> PATCH ref, все 6 запросов в правильном порядке."""
+    _github_ready(monkeypatch)
+    calls = []
 
-    def fake_put(records, sha):
-        calls["put"] += 1
-        if calls["put"] == 1:
-            return "conflict"
-        return "new_sha"
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(("GET", url))
+        if url.endswith("/git/refs/heads/main"):
+            return _FakeResponse(json_data={"object": {"sha": "base_commit_sha"}})
+        if url.endswith("/git/commits/base_commit_sha"):
+            return _FakeResponse(json_data={"tree": {"sha": "base_tree_sha"}})
+        raise AssertionError(f"unexpected GET {url}")
 
-    monkeypatch.setattr(se, "_load_local", lambda: [{"symbol": "BTCUSDT", "ts": 111}])
-    monkeypatch.setattr(se, "_github_get_shadow_sync", fake_get)
-    monkeypatch.setattr(se, "_github_put_shadow_sync", fake_put)
-    monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(("POST", url))
+        if url.endswith("/git/blobs"):
+            return _FakeResponse(json_data={"sha": "blob_sha"})
+        if url.endswith("/git/trees"):
+            assert json["base_tree"] == "base_tree_sha"
+            return _FakeResponse(json_data={"sha": "new_tree_sha"})
+        if url.endswith("/git/commits"):
+            assert json["tree"] == "new_tree_sha"
+            assert json["parents"] == ["base_commit_sha"]
+            return _FakeResponse(json_data={"sha": "new_commit_sha"})
+        raise AssertionError(f"unexpected POST {url}")
 
-    ok = se._sync_to_github_sync({"symbol": "BTCUSDT", "ts": 111})
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        calls.append(("PATCH", url))
+        assert json["sha"] == "new_commit_sha"
+        return _FakeResponse(json_data={})
+
+    monkeypatch.setattr(se.requests, "get", fake_get)
+    monkeypatch.setattr(se.requests, "post", fake_post)
+    monkeypatch.setattr(se.requests, "patch", fake_patch)
+
+    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}])
     assert ok is True
-    assert calls["get"] == 2
-    assert calls["put"] == 2
+    assert [c[0] for c in calls] == ["GET", "GET", "POST", "POST", "POST", "PATCH"]
+
+
+def test_put_via_data_api_retries_on_ref_race_then_succeeds(monkeypatch):
+    """Ref сдвинулся между GET и PATCH (конкурентный коммит) -- PATCH падает
+    на первой попытке, вторая попытка со свежим ref/base_tree проходит."""
+    _github_ready(monkeypatch)
+    attempt = {"n": 0}
+
+    def fake_get(url, headers=None, timeout=None):
+        if url.endswith("/git/refs/heads/main"):
+            return _FakeResponse(json_data={"object": {"sha": f"commit_{attempt['n']}"}})
+        return _FakeResponse(json_data={"tree": {"sha": f"tree_{attempt['n']}"}})
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        if url.endswith("/git/blobs"):
+            return _FakeResponse(json_data={"sha": "blob_sha"})
+        if url.endswith("/git/trees"):
+            return _FakeResponse(json_data={"sha": "new_tree_sha"})
+        return _FakeResponse(json_data={"sha": "new_commit_sha"})
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        attempt["n"] += 1
+        if attempt["n"] == 1:
+            import requests as _requests
+            resp = _FakeResponse(status_code=422, raise_exc=_requests.exceptions.HTTPError("422 ref race"))
+            resp.raise_for_status()
+        return _FakeResponse(json_data={})
+
+    monkeypatch.setattr(se.requests, "get", fake_get)
+    monkeypatch.setattr(se.requests, "post", fake_post)
+    monkeypatch.setattr(se.requests, "patch", fake_patch)
+
+    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}])
+    assert ok is True
+    assert attempt["n"] == 2  # первая попытка упала, вторая (свежий ref) прошла
+
+
+def test_put_via_data_api_gives_up_after_max_attempts(monkeypatch):
+    """Устойчивая ошибка (не транзиентная гонка) -- не зависает, честно False
+    после исчерпания попыток."""
+    _github_ready(monkeypatch)
+
+    def boom(*a, **kw):
+        raise ConnectionError("persistent network failure")
+
+    monkeypatch.setattr(se.requests, "get", boom)
+
+    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}], max_attempts=3)
+    assert ok is False
+
+
+def test_put_via_data_api_not_configured_returns_false(monkeypatch):
+    monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: False)
+    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}])
+    assert ok is False
 
 
 # --- Пакет 11 (owner-запрос "целостность shadow-окон"): integrity_report() ---

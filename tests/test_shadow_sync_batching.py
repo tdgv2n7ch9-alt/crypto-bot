@@ -80,12 +80,12 @@ def test_batched_window_collects_multiple_local_records_in_one_put(monkeypatch, 
     monkeypatch.setattr(se, "ARCHIVE_DIR", str(tmp_path / "archive"))
     put_calls = []
 
-    def _fake_put(records, sha):
+    def _fake_put(records):
         put_calls.append(len(records))
-        return "newsha"
+        return True
 
     monkeypatch.setattr(se, "_github_get_shadow_sync", lambda: ([], None))
-    monkeypatch.setattr(se, "_github_put_shadow_sync", _fake_put)
+    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", _fake_put)
 
     # Запись 1 -- тут же реальный синк (гейт свежий).
     se._write_local({"symbol": "SYM0", "ts": 1_000_000.0})
