@@ -273,7 +273,7 @@ def _make_signals_handler(bot_module, cache: _TTLCache):
     текстовый экран). Ничего не пересчитывает заново.
 
     Честно НЕ покрыто в этой версии (см. PROGRESS.md "П-MiniApp /api/signals"):
-    Rocket Score разложение, чек-лист Kira|ICT, POI/сессия/тип сетапа,
+    Rocket Score разложение, чеклист, POI/сессия/тип сетапа,
     строка ликвидаций, МЕМКОИН-бейдж -- эти поля существуют только в РЕНДЕРЕ
     текстового сообщения на момент отправки сигнала (_build_signal_post()),
     не персистентны в TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS структурированно для
