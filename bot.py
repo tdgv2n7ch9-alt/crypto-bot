@@ -14383,26 +14383,35 @@ def get_liq_data(symbol: str = "BTC"):
         if r.status_code==200:
             data = r.json()
             if data.get('code') not in ('0', 0):
-                res['error'] = data.get('msg') or f"OKX code {data.get('code')}"  # напр. "Index doesn't exist" для альтов без перпа на OKX
-            od=data.get('data',[])
-            ll=ls=0.0
-            for row in od:
-                for d in row.get('details',[]):
-                    notional=float(d.get('sz',0))*ct_val*float(d.get('bkPx',0))
-                    if d.get('side')=='buy': ll+=notional
-                    elif d.get('side')=='sell': ls+=notional
-            rt=ll/ls if ls>0 else 1.0
-            res.update({'liq_long':round(ll),'liq_short':round(ls),'liq_ratio':round(rt,2),'ok':True})
-            res['liq_signal']='bearish' if rt>2 else ('bullish' if rt<0.5 else 'neutral')
-            # Пакет 9 М3 -- Liquidation Heatmap, информационно (retrospective, см.
-            # derivatives_extra.py докстринг). Не подано в liq_ratio/liq_signal выше.
-            try:
-                tk=_r.get('https://www.okx.com/api/v5/market/ticker',params={'instId':f'{symbol}-USDT-SWAP'},timeout=6)
-                px_now=float(tk.json().get('data',[{}])[0].get('last',0) or 0) if tk.status_code==200 else 0
-                if px_now>0:
-                    res['heatmap']=derivatives_extra.compute_liquidation_heatmap(od, px_now, contract_size=ct_val)
-            except Exception:
-                pass
+                # Владелец, #290 п.6 (2026-07-18): раньше падало НАСКВОЗЬ до
+                # res.update(...,'ok':True) ниже -- пустой data=[] от ошибки OKX
+                # (напр. "Index doesn't exist" для альтов без перпа на OKX, код
+                # 51014) выглядел неотличимо от честных "0 ликвидаций найдено",
+                # и сырой текст ошибки утекал в карточку как "причина" в
+                # level_watch.format_liquidation_cluster_line(). Теперь -- честный
+                # ok=False, без похода за heatmap (той же биржи всё равно нет).
+                res['error'] = data.get('msg') or f"OKX code {data.get('code')}"
+                res['not_covered'] = True
+            else:
+                od=data.get('data',[])
+                ll=ls=0.0
+                for row in od:
+                    for d in row.get('details',[]):
+                        notional=float(d.get('sz',0))*ct_val*float(d.get('bkPx',0))
+                        if d.get('side')=='buy': ll+=notional
+                        elif d.get('side')=='sell': ls+=notional
+                rt=ll/ls if ls>0 else 1.0
+                res.update({'liq_long':round(ll),'liq_short':round(ls),'liq_ratio':round(rt,2),'ok':True})
+                res['liq_signal']='bearish' if rt>2 else ('bullish' if rt<0.5 else 'neutral')
+                # Пакет 9 М3 -- Liquidation Heatmap, информационно (retrospective, см.
+                # derivatives_extra.py докстринг). Не подано в liq_ratio/liq_signal выше.
+                try:
+                    tk=_r.get('https://www.okx.com/api/v5/market/ticker',params={'instId':f'{symbol}-USDT-SWAP'},timeout=6)
+                    px_now=float(tk.json().get('data',[{}])[0].get('last',0) or 0) if tk.status_code==200 else 0
+                    if px_now>0:
+                        res['heatmap']=derivatives_extra.compute_liquidation_heatmap(od, px_now, contract_size=ct_val)
+                except Exception:
+                    pass
     except: pass
     _liq_cache[symbol]={"ts": _t.time(), "data": res}
     return res

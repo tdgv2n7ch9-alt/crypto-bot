@@ -298,6 +298,12 @@ def format_liquidation_cluster_line(symbol: str, zone: dict, get_liq_data_fn=Non
     except Exception as e:
         return f"🗺 Ликвидации рядом: н/д (ошибка запроса: {e})"
     if not liq or not liq.get("ok"):
+        # Владелец, #290 п.6 (2026-07-18): символ, которого физически нет ни
+        # на Bybit, ни на OKX (STAR и т.п.) -- отдельная, более честная фраза,
+        # чем общее "нет данных биржи" -- `not_covered` ставит bot.get_liq_data()
+        # именно для этого случая (OKX code!=0, "Index doesn't exist" и т.п.).
+        if liq and liq.get("not_covered"):
+            return "🗺 Ликвидации рядом: нет данных (символ вне покрытия Bybit/OKX)"
         return "🗺 Ликвидации рядом: н/д (нет данных биржи для этого символа)"
     heatmap = liq.get("heatmap")
     if not heatmap or not heatmap.get("ok"):

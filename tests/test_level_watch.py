@@ -183,7 +183,15 @@ def test_format_liq_line_na_on_provider_exception():
 
 
 def test_format_liq_line_na_when_symbol_has_no_okx_market():
-    # e.g. JASMYUSDT -- confirmed live 2026-07-12: OKX code 51014 "Index doesn't exist"
+    # Владелец, #290 п.6 (2026-07-18, живая находка STARUSDT): раньше
+    # bot.get_liq_data() ошибочно возвращал ok=True с error-текстом для этого
+    # случая (OKX code 51014 "Index doesn't exist" для JASMYUSDT/STAR и т.п.),
+    # сырой текст утекал в карточку. Исправлено -- теперь ok=False +
+    # not_covered=True, см. test_format_liq_line_friendly_message_for_not_
+    # covered_symbol (tests/test_get_liq_data_okx_coverage.py) для нового
+    # честного поведения. Этот тест остаётся регресс-защитой для heatmap-less
+    # ok=True формы (напр. если рынок есть, но heatmap не посчитался) --
+    # error-текст ещё МОЖЕТ утечь в этой отдельной ветке, честно оставлено.
     def _no_market(sym):
         return {"ok": True, "heatmap": None, "error": "Index doesn't exist."}
     line = lw.format_liquidation_cluster_line("JASMYUSDT", _zone(lo=0.004, hi=0.0043), get_liq_data_fn=_no_market)
