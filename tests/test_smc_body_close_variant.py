@@ -1,15 +1,17 @@
 """
 pytest для ta_extra.smc_setup_type()/smc_setup_type_wick_only()/
-smc_setup_type_body_close_variant() -- Пакет 11 М1, A/B тело-vs-фитиль.
+smc_setup_type_body_close_variant() -- Пакет 11 М1, A/B тело-вs-фитиль.
 
-Владелец, 2026-07-17: patch05_bpr (body-close) промотирован в live -- гейт
-пройден честно (min 20 closed outcomes, live/patch05_bpr closed=23,
-ready=True). smc_setup_type() -- теперь ЖИВАЯ body-close-логика (см.
-test_promotion_smc_setup_type_now_matches_body_close_variant ниже -- лок
-регресса на сам факт промоушена). smc_setup_type_wick_only() -- прежняя
-живая логика (Инструктор B, тень/экстремум), сохранена для продолжающегося
-A/B-измерения, больше НЕ вызывается из живого пути напрямую.
-"""
+Владелец, 2026-07-17: patch05_bpr (body-close) промотирован в live.
+Владелец, 2026-07-18 вечер: ОТКАТ -- min_outcomes=20 гейт оказался
+контаминирован задвоенным счётом по journal_id (см. PROGRESS.md,
+"ИСПРАВЛЕНИЕ предыдущей записи: гейт n=20 -- НЕВЕРНО, честная цифра 15"),
+живая честная выборка меньше гейта. `smc_setup_type()` возвращён к
+wick-only логике (см. test_rollback_smc_setup_type_now_matches_wick_only_variant
+ниже -- лок регресса на сам факт отката). `smc_setup_type_body_close_variant()`
+продолжает копиться ПАРАЛЛЕЛЬНО как shadow для нового прохода гейта
+(возврат в live только после диагноза WR через ретро-разборы+MFE/MAE
+и PF>1 на честной выборке)."""
 import os
 import sys
 
@@ -45,14 +47,14 @@ _UPTREND_WICK_ONLY = [
 ]
 
 
-def test_promotion_smc_setup_type_now_matches_body_close_variant():
-    """Лок регресса на промоушен 2026-07-17: живая smc_setup_type() должна давать
-    ИДЕНТИЧНЫЙ результат smc_setup_type_body_close_variant() на любых свечах --
-    если кто-то случайно откатит промоушен (вернёт wick-only тело в smc_setup_type),
-    этот тест упадёт."""
+def test_rollback_smc_setup_type_now_matches_wick_only_variant():
+    """Лок регресса на откат 2026-07-18: живая smc_setup_type() должна давать
+    ИДЕНТИЧНЫЙ результат smc_setup_type_wick_only() на любых свечах -- если
+    кто-то случайно повторит промоушен без нового честного прохода гейта
+    (вернёт body-close тело в smc_setup_type), этот тест упадёт."""
     for candles, bias in ((_UPTREND_CLOSE_CONFIRMED, "long"), (_UPTREND_WICK_ONLY, "long"),
                           (_UPTREND_CLOSE_CONFIRMED, None), (_UPTREND_CLOSE_CONFIRMED, "short")):
-        assert te.smc_setup_type(candles, bias) == te.smc_setup_type_body_close_variant(candles, bias)
+        assert te.smc_setup_type(candles, bias) == te.smc_setup_type_wick_only(candles, bias)
 
 
 def test_close_confirmed_break_both_variants_agree_bos():
@@ -64,14 +66,16 @@ def test_close_confirmed_break_both_variants_agree_bos():
 
 
 def test_wick_only_break_variants_disagree():
-    """Ключевой A/B-кейс: тело/фитиль расходятся -- старый (wick-only) движок видел
-    BOS, живая (промотированная body-close) логика видит невалидный пробой."""
-    old = te.smc_setup_type_wick_only(_UPTREND_WICK_ONLY, "long")
-    new = te.smc_setup_type(_UPTREND_WICK_ONLY, "long")
-    assert old["type"] == "BOS_bull"
-    assert new["type"] == "invalid_break_wick_only"
-    assert new["aligned"] is None
-    assert "SFP" in new["label"]
+    """Ключевой A/B-кейс: тело/фитиль расходятся -- живая (откаченная к
+    wick-only) логика видит BOS, shadow body-close-вариант видит невалидный
+    пробой (копится параллельно на новый проход гейта, см. модульный docstring)."""
+    live = te.smc_setup_type(_UPTREND_WICK_ONLY, "long")
+    shadow_body_close = te.smc_setup_type_body_close_variant(_UPTREND_WICK_ONLY, "long")
+    assert live["type"] == "BOS_bull"
+    assert live["aligned"] is True
+    assert shadow_body_close["type"] == "invalid_break_wick_only"
+    assert shadow_body_close["aligned"] is None
+    assert "SFP" in shadow_body_close["label"]
 
 
 def test_wick_only_variant_still_registers_range_correctly():
@@ -106,15 +110,18 @@ def test_no_bias_direction_labels_break_without_bos_choch():
 
 
 def test_choch_against_bias_still_requires_close_confirmation():
-    """bias=short на аптренд-пробой вверх -- CHoCH (против bias), и body-close-гейт
-    применяется одинаково, независимо от направления bias."""
+    """bias=short на аптренд-пробой вверх -- CHoCH (против bias). На
+    CLOSE_CONFIRMED свечах оба варианта согласны (закрытие подтверждено
+    в обоих случаях). На WICK_ONLY свечах живая (откаченная к wick-only)
+    логика по-прежнему видит CHoCH, а shadow body-close-вариант понижает
+    до invalid (закрытия за уровнем нет)."""
     old = te.smc_setup_type_wick_only(_UPTREND_CLOSE_CONFIRMED, "short")
     new = te.smc_setup_type(_UPTREND_CLOSE_CONFIRMED, "short")
     assert old["type"] == "CHoCH_bull"
     assert new["type"] == "CHoCH_bull"
     assert new["aligned"] is False
 
-    old_wick = te.smc_setup_type_wick_only(_UPTREND_WICK_ONLY, "short")
-    new_wick = te.smc_setup_type(_UPTREND_WICK_ONLY, "short")
-    assert old_wick["type"] == "CHoCH_bull"
-    assert new_wick["type"] == "invalid_break_wick_only"
+    live_wick = te.smc_setup_type(_UPTREND_WICK_ONLY, "short")
+    shadow_body_close_wick = te.smc_setup_type_body_close_variant(_UPTREND_WICK_ONLY, "short")
+    assert live_wick["type"] == "CHoCH_bull"
+    assert shadow_body_close_wick["type"] == "invalid_break_wick_only"

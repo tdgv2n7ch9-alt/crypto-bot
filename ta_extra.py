@@ -814,13 +814,16 @@ def elliott_wave_heuristic(closes_1d: list, rsi_1d: float) -> dict:
 
 
 def smc_setup_type_wick_only(candles_4h: list, bias_direction: str = None) -> dict:
-    """Блок 3 ТЗ, УСТАРЕВШИЙ вариант (Инструктор B, тень/экстремум без проверки
-    закрытия) -- владелец, 2026-07-17: patch05_bpr (body-close, см.
-    smc_setup_type_body_close_variant() ниже) промотирован в live после честного
-    прохождения shadow-гейта (min 20 closed outcomes, live/patch05_bpr closed=23,
-    ready=True) -- `smc_setup_type()` теперь ЭТА (body-close) логика, не эта
-    wick-only. Функция сохранена под новым именем ТОЛЬКО для A/B shadow-сравнения
-    (см. bot.py `wick_variant`) -- больше НЕ вызывается из живого пути напрямую.
+    """Блок 3 ТЗ (Инструктор B, тень/экстремум без проверки закрытия) --
+    владелец, 2026-07-17: promoted body-close в live; владелец, 2026-07-18
+    вечер: ОТКАТ -- гейт промоушена (min_outcomes=20) оказался контаминирован
+    задвоенным счётом по journal_id (несколько shadow-записей матчились на
+    один и тот же journal_id, честная независимая выборка была меньше 20, см.
+    PROGRESS.md "ИСПРАВЛЕНИЕ предыдущей записи"). `smc_setup_type()` СНОВА
+    ЭТА (wick-only) логика -- живая, до нового честного прохода гейта
+    (PF>1 на диагностированной выборке). `smc_setup_type_body_close_variant()`
+    продолжает копиться параллельно как shadow-кандидат на повторный
+    промоушен.
 
     BOS (пробой по тренду) / CHoCH (смена характера) / range (равные хаи/лои),
     по фрактальным swing-точкам 4h.
@@ -879,22 +882,23 @@ def smc_setup_type_wick_only(candles_4h: list, bias_direction: str = None) -> di
 
 
 def smc_setup_type(candles_4h: list, bias_direction: str = None) -> dict:
-    """Блок 3 ТЗ, ЖИВАЯ версия (владелец, 2026-07-17): patch05_bpr промотирован из
-    shadow в live -- критерий валидности слома структуры теперь требует ЗАКРЫТИЯ
-    свечи за уровнем (body-close), не просто пробоя тенью (см.
-    smc_setup_type_body_close_variant() ниже, чья логика теперь ЗДЕСЬ). Гейт
-    пройден честно: min 20 closed outcomes, live/patch05_bpr closed=23, ready=True
-    (integrity_report duplicate_count=0 перед подсчётом). Прежняя wick-only логика
-    сохранена под smc_setup_type_wick_only() -- используется только для
-    продолжающегося A/B shadow-сравнения (bot.py `wick_variant`), в живом пути
-    больше не участвует."""
-    return smc_setup_type_body_close_variant(candles_4h, bias_direction)
+    """Блок 3 ТЗ, ЖИВАЯ версия. Владелец, 2026-07-17: promoted body-close в live.
+    Владелец, 2026-07-18 вечер: ОТКАТ на wick-only -- гейт промоушена оказался
+    контаминирован задвоенным счётом по journal_id (несколько shadow-записей
+    матчились на один и тот же journal_id через прямой `live_journal_id`,
+    честная уникальная выборка была 15, не 20 -- см. PROGRESS.md
+    "ИСПРАВЛЕНИЕ предыдущей записи", 2026-07-18 14:22). Возврат в body-close
+    только после диагноза WR (ретро-разборы + MFE/MAE) и НОВОГО честного
+    прохода гейта с PF>1 (см. smc_setup_type_body_close_variant() ниже,
+    копится параллельно как shadow)."""
+    return smc_setup_type_wick_only(candles_4h, bias_direction)
 
 
 def smc_setup_type_body_close_variant(candles_4h: list, bias_direction: str = None) -> dict:
-    """Владелец, 2026-07-17: ЭТА логика теперь и есть живая smc_setup_type() (см.
-    выше) -- функция сохранена под старым именем для обратной совместимости
-    существующих вызовов A/B-измерения, поведение идентично smc_setup_type().
+    """Владелец, 2026-07-17: была живой smc_setup_type() до отката. Владелец,
+    2026-07-18 вечер: ОТКАТ в shadow -- см. smc_setup_type() докстринг выше
+    (гейт промоушена контаминирован задвоенным счётом по journal_id). Копится
+    параллельно как shadow-кандидат на повторный честный проход гейта.
 
     Находка ночного цикла (knowledge/METHODOLOGY_CORE.md §1), которая привела к
     промоушену: два источника расходились в критерии валидности слома структуры.
@@ -911,8 +915,9 @@ def smc_setup_type_body_close_variant(candles_4h: list, bias_direction: str = No
     предпоследнего экстремума. Если нет -- пробой понижается до
     "invalid_break_wick_only" вместо BOS/CHoCH/break_up/break_down.
 
-    Живая, промотирована 2026-07-17 (см. smc_setup_type() выше) -- участвует в
-    rocket/скоринге/гейтах через smc_setup_type()."""
+    SHADOW с 2026-07-18 вечер (была живой 2026-07-17 -- 2026-07-18, см.
+    smc_setup_type() докстринг выше) -- в rocket/скоринге/гейтах сейчас НЕ
+    участвует, живая smc_setup_type() снова делегирует на wick-only."""
     out = {"type": None, "label": "структура не определена", "aligned": None}
     highs, lows = swing_points(candles_4h)
     if len(highs) < 3 or len(lows) < 3:
