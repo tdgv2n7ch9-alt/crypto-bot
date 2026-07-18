@@ -15167,3 +15167,55 @@ name 'get_liq_data' is not defined` (эта строка раньше появл
 
 Коммит версии (написан ранее, деплой отложен до закрытия окна #290)
 теперь деплою -- `tools/deploy.sh`, отдельно от критического фикса.
+
+## #290 п.6 ЗАКРЫТА: graceful-ответ для символов вне покрытия OKX
+
+СЕЙЧАС ДЕЛАЮ: п.6 закрыт, задеплоено, живая проверка пройдена.
+СЛЕДУЮЩИЙ: штатный вечный бэклог.
+
+**Корень найден точно**: `bot.get_liq_data()` (`bot.py:14358`) при ошибке
+OKX (`code != 0`, живьём подтверждено curl -- `{"code":"51014","data":
+[],"msg":"Index doesn't exist."}` для STAR-USDT) раньше проваливался
+НАСКВОЗЬ до `res.update(...,'ok':True)` -- пустой `data=[]` от ошибки
+выглядел неотличимо от честных "0 ликвидаций найдено", и сырой текст
+ошибки OKX (`error`) утекал в карточку через `level_watch.format_
+liquidation_cluster_line()`'s reason-fallback как будто это причина
+отсутствия heatmap.
+
+**Фикс**: ошибка OKX теперь даёт `ok=False` + `not_covered=True`, БЕЗ
+похода за heatmap (той же биржи всё равно нет -- экономия сетевого
+вызова). `format_liquidation_cluster_line()` при `not_covered=True`
+выдаёт ровно текст из решения владельца: **"нет данных (символ вне
+покрытия Bybit/OKX)"**.
+
+**Проверка остальных 9 функций (#290-critical)**: только
+`get_perp_spot_premium()` тоже берёт `symbol`-параметр с реальной биржи
+(Bybit) -- проверил, УЖЕ корректно (`if not perp_list or not spot_list:
+return res` с `ok=False`, без утечки). Остальные 8 -- рыночно-широкие
+(BTC-only/global: `get_macro_data`/`get_options_data`/`get_usdt_mcap`/
+`get_stablecoin_dominance`/`get_institutional_summary`/
+`_parse_deribit_option_name`/`compute_max_pain`) или используют
+generic-источники без per-биржа-символ риска (`get_onchain_snapshot_
+cached` -- F&G/DeFiLlama/mempool, не привязано к листингу конкретной
+биржи) -- не подвержены этому классу бага.
+
+**Тесты**: 4 новых (`tests/test_get_liq_data_okx_coverage.py` --
+`get_liq_data()` напрямую с мокнутым OKX-ответом + регресс-тест
+успешного пути + 2 теста на `format_liquidation_cluster_line()`),
+обновлён/пояснён 1 устаревший тест в `tests/test_level_watch.py`
+(раньше описывал старое поведение как норму -- честно отметил, что
+теперь это нереалистичная форма данных, оставлен как регресс-защита
+отдельной ветки). `py_compile` чисто. Полный `pytest`: **1706
+passed/1 skipped** (было 1702, без регрессий).
+
+**Деплой**: `tools/deploy.sh` -> коммит `5162aea6`, SUCCESS, deployment
+id `130519b4-8d03-4578-a4c4-d6fc812752e4`. Чистый рестарт (`Application
+started`), 2 traceback'а в окне -- оба известного класса (CoinGecko
+429), не новый тип.
+
+**Живая верификация функционально** (`bot.get_liq_data("STAR")` +
+`format_liquidation_cluster_line()` напрямую, реальный сетевой вызов к
+OKX, не мок): `{'ok': False, ..., 'error': "Index doesn't exist.",
+'not_covered': True}` -> **"🗺 Ликвидации рядом: нет данных (символ вне
+покрытия Bybit/OKX)"** -- ровно требуемый текст, сырой OKX-текст
+"Index doesn't exist" в карточку больше не попадает.
