@@ -468,14 +468,14 @@
       "batch": 1
     },
     "Session1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "session_sweep_asia_london_ny.md",
+      "batch": 9
     },
     "Session2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "session_sweep_asia_london_ny.md",
+      "batch": 9
     },
     "Smart Money.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 54,
-  "last_batch": 8,
-  "last_updated": "2026-07-18T13:12:46.438920Z"
+  "done_count": 56,
+  "last_batch": 9,
+  "last_updated": "2026-07-18T13:21:07.099648+00:00"
 }
