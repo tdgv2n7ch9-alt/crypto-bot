@@ -114,8 +114,10 @@ def test_build_record_premium_not_ok_is_none_not_zero():
 
 # ── shadow_engine.log_auto_derivatives_shadow_async() -- флаг-гейт ──────────
 
-def test_deriv_auto_shadow_disabled_by_default_is_true():
-    assert se.DERIV_AUTO_SHADOW_ENABLED is False
+def test_deriv_auto_shadow_enabled_after_phase_b_go_is_true():
+    """Владелец, ДА 2026-07-18 (после #290-critical -- get_perp_spot_premium
+    живой): флаг переведён False->True, см. PROGRESS.md очередь п.2."""
+    assert se.DERIV_AUTO_SHADOW_ENABLED is True
 
 
 def test_log_auto_derivatives_shadow_noop_when_disabled(monkeypatch):

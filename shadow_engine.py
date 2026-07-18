@@ -1542,7 +1542,7 @@ async def log_auto_ema_stack_shadow_async(symbol: str, a: dict, promoted_live: b
 # докстринг): символ без накопленных CVD-данных возвращает те же нули/
 # "нейтрально", что и реально плоский поток -- из cvd_1h==0 разделить эти два
 # случая нельзя, это ограничение источника, не баг записи ниже.
-DERIV_AUTO_SHADOW_ENABLED = False
+DERIV_AUTO_SHADOW_ENABLED = True
 
 
 def _build_auto_derivatives_shadow_record(symbol: str, a: dict, promoted_live: bool,
@@ -1621,7 +1621,7 @@ async def log_auto_derivatives_shadow_async(symbol: str, a: dict, promoted_live:
 # Deribit почти нет). Это ОСОЗНАННЫЙ компромисс той же природы, что и решение
 # владельца по свипу -- копим корреляцию "рыночное опционное настроение vs
 # исход СИГНАЛА (любого актива)", не "опционное настроение САМОГО актива".
-OPTIONS_AUTO_SHADOW_ENABLED = False
+OPTIONS_AUTO_SHADOW_ENABLED = True
 
 
 def _build_auto_options_shadow_record(symbol: str, a: dict, promoted_live: bool,
@@ -1719,7 +1719,7 @@ async def log_auto_options_shadow_async(symbol: str, a: dict, promoted_live: boo
 # зоны над/под entry), это другой контур с другим назначением. Здесь --
 # сырой liq_ratio/heatmap для теневой корреляции с исходами, не для показа
 # в карточке.
-LIQUIDATION_AUTO_SHADOW_ENABLED = False
+LIQUIDATION_AUTO_SHADOW_ENABLED = True
 
 
 def _build_auto_liquidation_shadow_record(symbol: str, a: dict, promoted_live: bool,
@@ -1790,7 +1790,7 @@ async def log_auto_liquidation_shadow_async(symbol: str, a: dict, promoted_live:
 # onchain_metrics.get_free_onchain_snapshot(), см. докстринг там же) -- НЕ
 # считает сам, чтобы не бить внешние API по разу на каждого кандидата.
 
-ONCHAIN_AUTO_SHADOW_ENABLED = False
+ONCHAIN_AUTO_SHADOW_ENABLED = True
 
 
 def _build_auto_onchain_shadow_record(symbol: str, a: dict, promoted_live: bool,

@@ -103,8 +103,10 @@ def test_build_record_data_not_ok_reflected():
 
 # ── shadow_engine.log_auto_liquidation_shadow_async() -- флаг-гейт ──────────
 
-def test_liquidation_auto_shadow_disabled_by_default_is_true():
-    assert se.LIQUIDATION_AUTO_SHADOW_ENABLED is False
+def test_liquidation_auto_shadow_enabled_after_phase_b_go_is_true():
+    """Владелец, ДА 2026-07-18 (после #290-critical -- get_liq_data
+    живой): флаг переведён False->True, см. PROGRESS.md очередь п.2."""
+    assert se.LIQUIDATION_AUTO_SHADOW_ENABLED is True
 
 
 def test_log_auto_liquidation_shadow_noop_when_disabled(monkeypatch):

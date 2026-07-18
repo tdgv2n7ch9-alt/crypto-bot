@@ -130,8 +130,10 @@ def test_build_record_fear_greed_none_when_missing_no_crash():
 
 # ── shadow_engine.log_auto_onchain_shadow_async() -- флаг-гейт ──────────────
 
-def test_onchain_auto_shadow_disabled_by_default_is_true():
-    assert se.ONCHAIN_AUTO_SHADOW_ENABLED is False
+def test_onchain_auto_shadow_enabled_after_phase_b_go_is_true():
+    """Владелец, ДА 2026-07-18 (после #290-critical -- get_onchain_snapshot_
+    cached живой): флаг переведён False->True, см. PROGRESS.md очередь п.2."""
+    assert se.ONCHAIN_AUTO_SHADOW_ENABLED is True
 
 
 def test_log_auto_onchain_shadow_noop_when_disabled(monkeypatch):
