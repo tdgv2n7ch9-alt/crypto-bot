@@ -2782,6 +2782,14 @@ def check_watchlist_alerts_from_level_watch(coins: list) -> list:
             bias = zone.get("side")
             if bias not in ("LONG", "SHORT"):
                 continue
+            # Владелец (2026-07-19, live-verify дефект, торговая безопасность):
+            # зона, отменённая/инвалидированная автором (cancelled=true), НЕ
+            # должна триггерить zone-touch алерт вообще -- лимитки по ней сняты,
+            # цена, вернувшаяся в старый диапазон, не повод писать владельцу.
+            # Найдено вместе с той же дырой в _limitki_execution_card_text()
+            # (см. её докстринг) -- один корень, две точки срабатывания.
+            if zone.get("cancelled"):
+                continue
             lo, hi = zone.get("lo"), zone.get("hi")
             if lo is None or hi is None:
                 continue
@@ -4285,6 +4293,25 @@ def _limitki_collect_zones() -> list:
     return items
 
 
+def _limitki_find_zone(symbol: str, side: str, lo: float, hi: float) -> dict:
+    """Владелец (2026-07-19, торговая безопасность): свежий поиск зоны по
+    symbol/side/lo/hi (те же значения, что кодируются в callback_data кнопки
+    "Исполнение") -- ЗАНОВО читает watch_zones.json на КАЖДОЕ нажатие, не
+    доверяет состоянию на момент рендера списка (владелец мог отменить зону
+    между рендером ленты ЛИМИТКИ и тапом по кнопке). None, если зона не
+    найдена (удалена/переименована с тех пор) -- вызывающая сторона обязана
+    честно сообщить об этом, не рендерить карточку на устаревших lo/hi."""
+    lo, hi = min(lo, hi), max(lo, hi)
+    for it in _limitki_collect_zones():
+        z = it["zone"]
+        if it["symbol"] != symbol or z.get("side") != side:
+            continue
+        z_lo, z_hi = min(z["lo"], z["hi"]), max(z["lo"], z["hi"])
+        if z_lo == lo and z_hi == hi:
+            return z
+    return None
+
+
 _SPOT_DCA_NOTE_MARKERS = ("спот-план", "спот-набор", "спот план", "спот набор", "spot-набор", "spot набор")
 
 
@@ -4401,8 +4428,12 @@ async def _mv2_render_limitki(bot, chat_id, message_id):
             lines.append(await _limitki_row_text(it))
         except Exception as e:
             lines.append(f"⚠️ {it['symbol']}: ошибка построения строки ({e})")
+        # Владелец (2026-07-19, торговая безопасность, п.2 фикса): отменённые
+        # зоны получают префикс 🚫 в лейбле кнопки вместо 🎯 -- видно ДО тапа,
+        # что зона неактивна, не только после открытия карточки.
+        btn_icon = "🚫" if it["zone"].get("cancelled") else "🎯"
         kb_rows.append([InlineKeyboardButton(
-            f"🎯 Исполнение {it['symbol']} {it['zone']['side']}",
+            f"{btn_icon} Исполнение {it['symbol']} {it['zone']['side']}",
             callback_data=f"mv2_limitki_card_{it['symbol']}_{it['zone']['side']}_"
                           f"{it['zone']['lo']}_{it['zone']['hi']}")])
         lines.append("")
@@ -4414,15 +4445,60 @@ async def _mv2_render_limitki(bot, chat_id, message_id):
                                  parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb_rows))
 
 
-async def _limitki_execution_card_text(symbol: str, side: str, lo: float, hi: float) -> str:
+async def _limitki_execution_card_text(symbol: str, side: str, lo: float, hi: float,
+                                        cancelled: bool = False, note: str = "") -> str:
     """Единственное, что бот добавляет ОТ СЕБЯ к разметке автора (владелец,
     п.13.3): карточка ИСПОЛНЕНИЯ -- лимитки 50/30/20 внутри зоны автора (сама
     зона НЕ пересчитывается, только разбивается на транши), SL за зоной
     +2-3% (SR_SL_BUFFER_PCT -- тот же буфер, что x100/build_trade_from_structure,
     Пакет 18 п.5), размер позиции 1/2/3% для депозита $1000, ликвидации,
     rug-строка если WARN. Ладдер использует ТОТ ЖЕ принцип "entry1 -- ближняя
-    к цене граница", что ta_extra.build_trade_from_structure()."""
+    к цене граница", что ta_extra.build_trade_from_structure().
+
+    Владелец (2026-07-19, live-verify дефект, ПРИОРИТЕТ ВЫСОКИЙ -- торговая
+    безопасность): до этого фикса функция слепо рендерила полный боевой
+    ладдер (DCA/SL/размеры) для ЛЮБОЙ зоны, включая уже отменённую/
+    инвалидированную автором -- живой пример: AKE LONG 0.00099-0.00101,
+    `cancelled: true` в watch_zones.json (note: "ИНВАЛИДИРОВАН 2026-07-16"),
+    карточка исполнения всё равно выдавала боевые входы без единого
+    предупреждения. Теперь: `cancelled` -- ПЕРЕДАЁТСЯ вызывающей стороной
+    (свежий читает из watch_zones.json на момент нажатия кнопки/алерта, не
+    кэш) -- если True, карточка вообще не считает ладдер, только
+    предупреждение. Отдельно, ниже -- статус "ОТРАБОТАНА" (цена уже прошла
+    зону насквозь) блокирует ладдер тем же способом, вычисляется здесь же
+    по свежей цене (тот же `_limitki_zone_status()`, что и строка списка)."""
     lo, hi = min(lo, hi), max(lo, hi)
+
+    if cancelled:
+        return (
+            f"🚫 *{symbol} {side} {fp(lo)}–{fp(hi)}*\n\n"
+            f"Сетап инвалидирован, лимитки сняты.\n"
+            f"Причина: {note or 'см. журнал разметок владельца (watch_zones.json)'}"
+        )
+
+    cg_price = 0.0
+    try:
+        coins = get_top500()
+        coin = next((c for c in coins if c["symbol"] == symbol), None)
+        cg_price = (coin.get("quote", {}).get("USDT", {}).get("price", 0) if coin else 0) or 0
+    except Exception as e:
+        log.info(f"[LIMITKI] card price {symbol}: {e}")
+    try:
+        from live_prices import resolve_price
+        price, _ = resolve_price(symbol, cg_price)
+    except Exception:
+        price = cg_price
+    price = price or 0
+
+    if price:
+        status, _dist = _limitki_zone_status(side, lo, hi, price, note=note)
+        if status == "ОТРАБОТАНА":
+            return (
+                f"🚫 *{symbol} {side} {fp(lo)}–{fp(hi)}*\n\n"
+                f"Зона уже отработана -- цена прошла её насквозь и ушла в "
+                f"сторону тейка. Лимитки внутри зоны больше не актуальны."
+            )
+
     if side == "LONG":
         entry1, entry3 = hi, lo
         sl = lo * (1 - ta_extra.SR_SL_BUFFER_PCT / 100)
@@ -5123,7 +5199,14 @@ async def _mv2_callback_router(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
             await q.answer("Не удалось разобрать запрос.")
             return
         await q.answer("Строю карточку исполнения...")
-        text = await _limitki_execution_card_text(symbol, side, lo, hi)
+        zone = _limitki_find_zone(symbol, side, lo, hi)
+        if zone is None:
+            text = (f"⚠️ Зона {symbol} {side} {fp(lo)}–{fp(hi)} не найдена в "
+                     f"текущей разметке -- обнови список ⭐ ЛИМИТКИ.")
+        else:
+            text = await _limitki_execution_card_text(
+                symbol, side, lo, hi,
+                cancelled=bool(zone.get("cancelled")), note=zone.get("note", ""))
         await bot.send_message(chat_id, text, parse_mode="Markdown",
                                 reply_markup=attach_home_row(None, back_to="mv2_limitki"))
 
@@ -7890,7 +7973,11 @@ async def check_watchlist(bot, chat_ids, coins):
         # проверяли; восстановлен по образцу level_watch.format_level_alert().
         if al.get("tier") == "author":
             try:
-                exec_card = await _limitki_execution_card_text(sym, al["bias"], al["lo"], al["hi"])
+                # cancelled всегда False здесь -- check_watchlist_alerts_from_level_watch()
+                # уже отфильтровывает cancelled-зоны выше по цепочке (см. её докстринг),
+                # note передаём для честности (spot-DCA маркер внутри карточки).
+                exec_card = await _limitki_execution_card_text(
+                    sym, al["bias"], al["lo"], al["hi"], note=al.get("note", ""))
             except Exception as e:
                 exec_card = f"⚠️ Не удалось построить карточку исполнения: {e}"
             text = (

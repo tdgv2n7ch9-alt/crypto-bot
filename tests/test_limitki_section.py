@@ -287,6 +287,125 @@ def test_execution_card_no_rug_line_when_clean(monkeypatch):
     assert "RUG-RADAR" not in text
 
 
+# ── _limitki_execution_card_text() -- торговая безопасность (владелец,       ──
+# 2026-07-19, live-verify дефект, приоритет высокий): карточка НЕ должна     ──
+# выдавать боевые DCA/SL/размеры для отменённой/инвалидированной зоны или    ──
+# зоны, которую цена уже прошла насквозь. Живой пример: AKE LONG             ──
+# 0.00099-0.00101, cancelled=true, карточка до фикса всё равно рендерила     ──
+# полный боевой ладдер без предупреждения. ────────────────────────────────
+
+def test_execution_card_cancelled_zone_no_ladder(monkeypatch):
+    monkeypatch.setattr(bot, "get_top500", lambda: [])
+
+    text = asyncio.run(bot._limitki_execution_card_text(
+        "AKE", "LONG", 0.00099, 0.00101,
+        cancelled=True, note="Триггер Г LONG -- ИНВАЛИДИРОВАН 2026-07-16."))
+    assert "инвалидирован" in text.lower()
+    assert "ИНВАЛИДИРОВАН 2026-07-16" in text
+    assert "Вход 1" not in text and "SL:" not in text and "риска" not in text
+
+
+def test_execution_card_cancelled_zone_falls_back_note_when_empty(monkeypatch):
+    monkeypatch.setattr(bot, "get_top500", lambda: [])
+
+    text = asyncio.run(bot._limitki_execution_card_text(
+        "AKE", "LONG", 0.00099, 0.00101, cancelled=True, note=""))
+    assert "инвалидирован" in text.lower()
+    assert "Причина:" in text
+
+
+def test_execution_card_worked_out_zone_no_ladder(monkeypatch):
+    """Цена ушла выше LONG-зоны 100-110 (130) -- статус ОТРАБОТАНА, карточка
+    не должна выдавать ладдер, даже если зона формально не cancelled."""
+    monkeypatch.setattr(bot, "get_top500", lambda: [
+        {"symbol": "BTC", "quote": {"USDT": {"price": 130}}}])
+
+    text = asyncio.run(bot._limitki_execution_card_text("BTC", "LONG", 100.0, 110.0))
+    assert "отработана" in text.lower()
+    assert "Вход 1" not in text and "SL:" not in text and "риска" not in text
+
+
+def test_execution_card_waiting_zone_still_shows_ladder(monkeypatch):
+    """Регресс-замок: цена ЖДЁМ ЦЕНУ (не в зоне, не прошла её) -- ладдер
+    по-прежнему строится, фикс не сломал нормальный путь."""
+    monkeypatch.setattr(bot, "get_top500", lambda: [
+        {"symbol": "BTC", "quote": {"USDT": {"price": 90}}}])
+    monkeypatch.setattr(bot.level_watch, "format_liquidation_cluster_line", lambda *a, **kw: "")
+    monkeypatch.setattr(bot, "get_cached_rug_line", lambda *a, **kw: "")
+
+    text = asyncio.run(bot._limitki_execution_card_text("BTC", "LONG", 100.0, 110.0))
+    assert "Вход 1 (50%)" in text and "SL:" in text
+
+
+def test_execution_card_price_in_zone_still_shows_ladder(monkeypatch):
+    """Регресс-замок: ЦЕНА В ЗОНЕ -- ладдер по-прежнему строится."""
+    monkeypatch.setattr(bot, "get_top500", lambda: [
+        {"symbol": "BTC", "quote": {"USDT": {"price": 105}}}])
+    monkeypatch.setattr(bot.level_watch, "format_liquidation_cluster_line", lambda *a, **kw: "")
+    monkeypatch.setattr(bot, "get_cached_rug_line", lambda *a, **kw: "")
+
+    text = asyncio.run(bot._limitki_execution_card_text("BTC", "LONG", 100.0, 110.0))
+    assert "Вход 1 (50%)" in text and "SL:" in text
+
+
+# ── _limitki_find_zone() -- свежий поиск зоны по symbol/side/lo/hi ─────────
+
+def test_find_zone_locates_matching_zone(monkeypatch):
+    config = {
+        "updated": "x", "source": "y",
+        "BTCUSDT": [_zone("LONG", 100, 110, note="тест")],
+    }
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    zone = bot._limitki_find_zone("BTC", "LONG", 100.0, 110.0)
+    assert zone is not None
+    assert zone["note"] == "тест"
+
+
+def test_find_zone_returns_none_when_missing(monkeypatch):
+    config = {"updated": "x", "source": "y", "BTCUSDT": [_zone("LONG", 100, 110)]}
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    assert bot._limitki_find_zone("BTC", "LONG", 200.0, 210.0) is None
+    assert bot._limitki_find_zone("ETH", "LONG", 100.0, 110.0) is None
+
+
+# ── check_watchlist_alerts_from_level_watch() -- cancelled-зоны не алертят ──
+
+def test_zone_touch_alert_skips_cancelled_zone(monkeypatch):
+    config = {
+        "updated": "x", "source": "test",
+        "BTCUSDT": [dict(_zone("LONG", 60000, 63000), cancelled=True)],
+    }
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    coins = [{"symbol": "BTC", "quote": {"USDT": {"price": 61000}}}]
+    alerts = bot.check_watchlist_alerts_from_level_watch(coins)
+    assert alerts == []
+
+
+# ── _mv2_render_limitki() -- 🚫-префикс на кнопке отменённой зоны ──────────
+
+def test_render_limitki_cancelled_zone_gets_warning_button_icon(monkeypatch):
+    config = {
+        "updated": "x", "source": "test",
+        "BTCUSDT": [dict(_zone("LONG", 100, 110), cancelled=True, note="инвалидирован")],
+    }
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    monkeypatch.setattr(bot, "get_top500", lambda: [])
+    monkeypatch.setattr(live_prices, "get_live_price", lambda sym: (None, None))
+
+    class _Q:
+        def __init__(self):
+            self.calls = []
+
+        async def edit_message_text(self, chat_id, message_id, text, **kw):
+            self.calls.append(kw.get("reply_markup"))
+
+    q = _Q()
+    asyncio.run(bot._mv2_render_limitki(q, 1, 1))
+    kb = q.calls[0]
+    btn_texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any(t.startswith("🚫 Исполнение") for t in btn_texts)
+
+
 # ── _check_author_zone_conflict() ───────────────────────────────────────────
 
 def test_conflict_flagged_when_opposite_side_within_2pct(monkeypatch):
