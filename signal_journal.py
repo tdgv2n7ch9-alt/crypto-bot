@@ -26,6 +26,7 @@ import pytz
 import requests
 
 import live_prices
+import mfe_mae
 
 SCHEMA_VERSION = 1
 JOURNAL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signal_journal.json")
@@ -443,6 +444,11 @@ def log_signal(source: str, symbol: str, direction: str, price_at_signal: float,
         "status": "PENDING",
         "entered_ts": None, "entered_price": None,
         "outcome": None, "outcome_ts": None, "outcome_level": None, "actual_r": None,
+        # MFE/MAE (владелец, ДА 2026-07-18, очередь п.6) -- running best/worst
+        # цена с момента входа, обновляется в run_tracker() на каждом тике,
+        # замораживается сама собой при переходе в терминальный статус (тот же
+        # цикл перестаёт трогать запись). None до первого тика после ENTERED.
+        "mfe_price": None, "mae_price": None,
     }
     _journal[rec_id] = rec
     _dirty = True
@@ -558,6 +564,18 @@ async def run_tracker():
                 continue
 
             if rec["status"] == "ENTERED":
+                # MFE/MAE running-обновление (владелец, ДА 2026-07-18, очередь
+                # п.6) -- та же live-цена, что и проверка исхода ниже, без
+                # новых сетевых вызовов. Считается ДО проверки исхода: даже
+                # тик, который закрывает сделку, должен учитываться в running
+                # best/worst (последняя цена -- часть пути excursion).
+                new_mfe, new_mae = mfe_mae.update_running_mfe_mae(
+                    rec["direction"], rec.get("entered_price"), price,
+                    rec.get("mfe_price"), rec.get("mae_price"))
+                if new_mfe != rec.get("mfe_price") or new_mae != rec.get("mae_price"):
+                    rec["mfe_price"], rec["mae_price"] = new_mfe, new_mae
+                    changed = True
+
                 status, level = _check_outcome(rec["direction"], price, rec["sl"],
                                                 rec["tp1"], rec["tp2"], rec["tp3"])
                 if status:

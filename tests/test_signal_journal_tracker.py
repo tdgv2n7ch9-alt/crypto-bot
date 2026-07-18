@@ -140,6 +140,52 @@ def test_entered_record_resolves_when_price_available(monkeypatch):
     assert rec["outcome"] == "TP1_HIT"
 
 
+def test_entered_record_updates_running_mfe_mae_on_each_tick(monkeypatch):
+    """Владелец, ДА 2026-07-18, очередь п.6: живой тик по ENTERED-записи должен
+    обновлять running mfe_price/mae_price (не только проверять исход)."""
+    now = 2_000_000.0
+    rec = {
+        "symbol": "ZRO", "direction": "long", "ts": now - 100,
+        "entry_lo": 100.0, "entry_hi": 100.0, "sl": 90.0,
+        "tp1": 200.0, "tp2": 210.0, "tp3": 220.0,  # далеко -- не закроется этим тиком
+        "status": "ENTERED", "entered_ts": now - 50, "entered_price": 100.0,
+        "outcome": None, "outcome_ts": None, "outcome_level": None, "actual_r": None,
+        "mfe_price": None, "mae_price": None,
+    }
+    monkeypatch.setattr(sj, "_journal", {1: rec})
+    monkeypatch.setattr(sj.time, "time", lambda: now)
+    monkeypatch.setattr(live_prices, "get_live_price", lambda symbol: (108.0, 0.5))
+
+    _run_one_tick(monkeypatch)
+
+    assert rec["status"] == "ENTERED"  # 108 не задело ни один TP
+    assert rec["mfe_price"] == 108.0
+    assert rec["mae_price"] == 108.0
+
+
+def test_mfe_mae_freezes_after_terminal_status(monkeypatch):
+    """После закрытия сделки run_tracker() пропускает запись целиком (терминальный
+    статус) -- mfe_price/mae_price естественно замораживаются, следующий тик их
+    не трогает."""
+    now = 2_000_000.0
+    rec = {
+        "symbol": "ZRO", "direction": "long", "ts": now - 100,
+        "entry_lo": 100.0, "entry_hi": 100.0, "sl": 90.0,
+        "tp1": 110.0, "tp2": 120.0, "tp3": 130.0,
+        "status": "TP1_HIT", "entered_ts": now - 50, "entered_price": 100.0,
+        "outcome": "TP1_HIT", "outcome_ts": now - 10, "outcome_level": "tp1", "actual_r": 1.0,
+        "mfe_price": 111.0, "mae_price": 99.0,
+    }
+    monkeypatch.setattr(sj, "_journal", {1: rec})
+    monkeypatch.setattr(sj.time, "time", lambda: now)
+    monkeypatch.setattr(live_prices, "get_live_price", lambda symbol: (150.0, 0.1))
+
+    _run_one_tick(monkeypatch)
+
+    assert rec["mfe_price"] == 111.0  # не сдвинулось несмотря на цену 150
+    assert rec["mae_price"] == 99.0
+
+
 def test_pending_with_price_touching_entry_becomes_entered_not_expired(monkeypatch):
     """Контрольный тест: живой WS-покрытый символ, зона входа тронута -- поведение
     ДО дифа не сломано (вход побеждает истечение, если запись формально старая, но
