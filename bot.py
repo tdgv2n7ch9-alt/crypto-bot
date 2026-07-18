@@ -384,16 +384,26 @@ def _cg_get(url: str, params: dict = None, timeout: int = 10):
         raise RuntimeError(
             f"CoinGecko: circuit breaker активен ещё {_cg_cooldown_until - now:.0f}с "
             f"(подряд 429: {_cg_consecutive_429}) -- сетевой вызов пропущен")
+    # #285 (владелец, ДА 2026-07-18): sleep+сетевой вызов вынесены ИЗ-ПОД лока --
+    # лок защищает только атомарное резервирование следующего слота
+    # (read-modify-write _cg_last_call_ts), сам sleep/requests.get идёт СНАРУЖИ.
+    # Иначе при всплеске параллельных вызовов каждый поток держит executor-worker
+    # заблокированным на весь wait, роняя несвязанные задачи (bsc_wallet_monitor,
+    # onchain_watch, Telegram) -- живая находка 17:23:03 UTC, см. PROGRESS.md #285.
     with _cg_lock:
-        wait = _CG_MIN_INTERVAL - (time.time() - _cg_last_call_ts)
-        if wait > 0:
-            time.sleep(wait)
+        wait = max(0.0, _CG_MIN_INTERVAL - (time.time() - _cg_last_call_ts))
+        reserved_ts = time.time() + wait
+        _cg_last_call_ts = reserved_ts
+
+    if wait > 0:
+        time.sleep(wait)
+
+    r = requests.get(url, params=params, timeout=timeout)
+    if r.status_code == 429:
+        time.sleep(_CG_429_RETRY_WAIT)
         r = requests.get(url, params=params, timeout=timeout)
-        _cg_last_call_ts = time.time()
-        if r.status_code == 429:
-            time.sleep(_CG_429_RETRY_WAIT)
-            r = requests.get(url, params=params, timeout=timeout)
-            _cg_last_call_ts = time.time()
+
+    with _cg_lock:
         if r.status_code == 429:
             _cg_consecutive_429 += 1
             cooldown = min(_CG_COOLDOWN_BASE_SEC * (2 ** (_cg_consecutive_429 - 1)), _CG_COOLDOWN_MAX_SEC)
