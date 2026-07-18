@@ -129,9 +129,9 @@
       "batch": null
     },
     "21. Стрим Мультиструктура.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 7
     },
     "22. Стрим Торговые инструменты _Pro_.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 52,
-  "last_batch": 6,
-  "last_updated": "2026-07-18"
+  "done_count": 53,
+  "last_batch": 7,
+  "last_updated": "2026-07-18T12:01:55.841376Z"
 }
