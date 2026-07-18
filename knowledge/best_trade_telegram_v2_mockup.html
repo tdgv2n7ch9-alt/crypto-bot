@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>BEST TRADE — Telegram-продукт v2 · визуальный макет</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* телеграм тёмная тема */
+  --tg-bg:#0E1621; --tg-panel:#17212B; --tg-bubble:#182533; --tg-bubble-out:#2B5278;
+  --tg-text:#F5F5F5; --tg-muted:#708499; --tg-link:#6AB3F3; --tg-line:#101921;
+  /* бренд BEST TRADE */
+  --amber:#FFB454; --ph1:#4CC9F0; --ph2:#B18CFF; --ph3:#5BE38B; --ph4:#FF6B6B;
+  --up:#5BE38B; --dn:#FF6B6B; --ink:#0A0E14; --panel:#10161F; --line:#1C2733;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#07090D;color:var(--tg-text);font-family:Inter,system-ui,sans-serif;padding:32px 20px 60px}
+h1{font-family:'Space Grotesk',sans-serif;font-size:24px;text-align:center;margin-bottom:6px}
+h1 em{font-style:normal;color:var(--amber)}
+.lead{text-align:center;color:var(--tg-muted);font-size:13px;margin-bottom:34px}
+.row{display:flex;gap:26px;justify-content:center;flex-wrap:wrap;align-items:flex-start}
+.col{width:375px;flex:0 0 auto}
+.col>h2{font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:500;color:var(--tg-muted);text-transform:uppercase;letter-spacing:.12em;margin:0 0 10px 6px}
+.col>h2 b{color:var(--amber)}
+
+/* телефон */
+.phone{background:var(--tg-bg);border:1px solid #1E2A38;border-radius:26px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.tg-head{background:var(--tg-panel);padding:12px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--tg-line)}
+.tg-head .ava{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#1a2634,#0d141c);display:flex;align-items:center;justify-content:center;font-size:15px;border:1px solid var(--line)}
+.tg-head .ava span{width:9px;height:9px;border-radius:2px;background:var(--amber);box-shadow:0 0 8px rgba(255,180,84,.7)}
+.tg-head b{font-size:14px;display:block}
+.tg-head small{color:var(--tg-muted);font-size:11px}
+.feed{padding:12px 10px 16px;display:flex;flex-direction:column;gap:10px;min-height:520px}
+.day{align-self:center;background:rgba(0,0,0,.35);color:var(--tg-muted);font-size:11px;padding:3px 10px;border-radius:99px}
+
+/* пост канала */
+.post{background:var(--tg-bubble);border-radius:12px;padding:0;max-width:340px;overflow:hidden}
+.post .body{padding:11px 13px}
+.post .time{display:block;text-align:right;color:var(--tg-muted);font-size:10px;padding:0 10px 6px}
+.mono{font-family:'IBM Plex Mono',monospace}
+.u{color:var(--up)}.d{color:var(--dn)}.mut{color:var(--tg-muted)}.amb{color:var(--amber)}
+
+/* карточка-канон */
+.sig .head{padding:10px 13px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.sig .head .dir{font-weight:700;font-size:13px}
+.sig .head .dir.long{color:var(--up)} .sig .head .dir.short{color:var(--dn)}
+.sig .head .tick{font-weight:700;font-size:15px;font-family:'Space Grotesk',sans-serif}
+.sig .head .phb{margin-left:auto;font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px}
+.phb.p3{color:var(--ph3);background:rgba(91,227,139,.14)}
+.phb.p4{color:var(--ph4);background:rgba(255,107,107,.14)}
+.phb.p2{color:var(--ph2);background:rgba(177,140,255,.14)}
+.sig .grid{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:10px 13px}
+.sig .grid span{color:var(--tg-muted);font-size:11px}
+.sig .why{padding:0 13px 10px;font-size:12px;color:var(--tg-muted)}
+.sig .why b{color:var(--tg-text);font-weight:500}
+.sig .fbar{display:flex;border-top:1px solid var(--line)}
+.sig .fbar a{flex:1;text-align:center;padding:8px 0;font-size:12px;color:var(--tg-link);border-right:1px solid var(--line)}
+.sig .fbar a:last-child{border-right:0}
+a{text-decoration:none;color:var(--tg-link)}
+
+/* исход-reply */
+.reply{border-left:2px solid var(--amber);margin:0 13px;padding:4px 10px;background:rgba(255,180,84,.05);border-radius:0 6px 6px 0;font-size:11px;color:var(--tg-muted)}
+.outcome{font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:10px 13px}
+
+/* переход фазы */
+.flow{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:11px 13px}
+.flow .pill{font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px}
+
+/* дайджест */
+.digest .body h4{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--amber);margin-bottom:6px;font-family:'Space Grotesk',sans-serif}
+.digest ul{list-style:none;font-size:12.5px;display:flex;flex-direction:column;gap:5px}
+.digest li b{font-weight:600}
+.digest .sep{height:1px;background:var(--line);margin:9px 0}
+
+/* трек-рекорд */
+.track table{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+.track td,.track th{padding:4px 6px;text-align:right;border-bottom:1px solid var(--line)}
+.track th{color:var(--tg-muted);font-size:9.5px;text-transform:uppercase;letter-spacing:.08em}
+.track td:first-child,.track th:first-child{text-align:left}
+.track tr:last-child td{border-bottom:0}
+
+/* бот: сообщения + клавиатуры */
+.bot-msg{background:var(--tg-bubble);border-radius:12px;padding:11px 13px;max-width:340px;font-size:13px}
+.user-msg{background:var(--tg-bubble-out);border-radius:12px;padding:9px 13px;max-width:240px;font-size:13px;align-self:flex-end}
+.kb{display:grid;gap:6px;max-width:340px}
+.kb.c2{grid-template-columns:1fr 1fr}
+.kb button{background:#1C2A3A;border:1px solid #24344A;color:var(--tg-link);font-size:12.5px;padding:9px 8px;border-radius:8px;cursor:pointer;font-family:Inter,sans-serif}
+.kb button.back{grid-column:1/-1;color:var(--tg-muted)}
+.kb button.mini{background:linear-gradient(135deg,#241B0C,#1a1408);border-color:#3a2d14;color:var(--amber);font-weight:600}
+.gl{border-bottom:1px dotted var(--tg-link);cursor:pointer}
+.glbox{background:var(--panel);border:1px solid var(--line);border-left:2px solid var(--amber);border-radius:8px;padding:9px 12px;font-size:12px;max-width:340px}
+.glbox b{color:var(--amber);font-family:'IBM Plex Mono',monospace}
+
+/* mini app */
+.ma-head{background:var(--tg-panel);padding:9px 14px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--tg-line);font-size:12px}
+.ma-head .x{color:var(--tg-muted)}
+.ma-head b{font-family:'Space Grotesk',sans-serif;font-size:13px}
+.ma-head b i{color:var(--amber);font-style:normal}
+.ma{background:var(--ink);padding:12px;min-height:560px}
+.ma .upd{font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--tg-muted);display:flex;gap:6px;align-items:center;margin-bottom:10px}
+.ma .upd i{width:7px;height:7px;border-radius:50%;background:var(--up)}
+.ma .pipe{border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;margin-bottom:12px}
+.ma .pipe h3{font-size:10px;text-transform:uppercase;letter-spacing:.1em;padding:8px 11px;border-bottom:1px solid var(--line);color:var(--tg-muted);font-family:'Space Grotesk',sans-serif}
+.ma .pipe h3 i{color:var(--amber);font-style:normal}
+.ma .lanes{display:flex;flex-direction:column}
+.lane{display:flex;align-items:center;gap:8px;padding:7px 11px;border-bottom:1px solid var(--line)}
+.lane:last-child{border-bottom:0}
+.lane .ph{width:4px;height:26px;border-radius:2px;flex:0 0 auto}
+.lane .nm{font-size:10px;color:var(--tg-muted);width:74px;flex:0 0 auto;text-transform:uppercase;letter-spacing:.06em}
+.lane .chips{display:flex;gap:5px;flex-wrap:wrap}
+.lane .chip{font-family:'IBM Plex Mono',monospace;font-size:10.5px;border:1px solid var(--line);background:#0C1119;border-radius:4px;padding:2px 6px}
+.lane .chip b{font-weight:600}.lane .chip span{color:var(--amber)}
+.ma .cards{display:flex;flex-direction:column;gap:8px}
+.ma .card{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:9px 11px}
+.ma .card .top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.ma .card .top .bar{width:4px;height:18px;border-radius:2px}
+.ma .card .top b{font-size:13px;font-family:'Space Grotesk',sans-serif}
+.ma .card .top .pd{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--amber)}
+.ma .card .g{display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px}
+.ma .card .g span{color:var(--tg-muted);font-size:9px;text-transform:uppercase;letter-spacing:.07em;display:block}
+.ma .tabs{display:flex;gap:6px;margin-bottom:10px}
+.ma .tabs button{flex:1;background:#0C1119;border:1px solid var(--line);color:var(--tg-muted);font-size:11px;padding:7px 0;border-radius:7px}
+.ma .tabs button.on{background:var(--amber);border-color:var(--amber);color:#131313;font-weight:600}
+.note{max-width:1210px;margin:36px auto 0;border:1px solid #1E2A38;border-left:3px solid var(--amber);border-radius:10px;background:#0C1119;padding:16px 20px;font-size:13px;color:var(--tg-muted)}
+.note b{color:var(--tg-text)}
+</style>
+</head>
+<body>
+
+<h1>BEST TRADE · Telegram-продукт <em>v2</em></h1>
+<p class="lead">Три поверхности: Канал (витрина) · Бот (кабинет) · Mini App (терминал). Макет для визуального утверждения — данные образцовые.</p>
+
+<div class="row">
+
+<!-- ═══════════ КАНАЛ ═══════════ -->
+<div class="col">
+<h2>1 · <b>Канал</b> — только продукт, ноль служебного</h2>
+<div class="phone">
+  <div class="tg-head"><div class="ava"><span></span></div><div><b>BEST TRADE</b><small>4 812 подписчиков</small></div></div>
+  <div class="feed">
+    <div class="day">Сегодня</div>
+
+    <!-- утренний дайджест -->
+    <div class="post digest">
+      <div class="body">
+        <h4>☀️ Утро · 18.07</h4>
+        <ul>
+          <li>BTC <b class="mono">63 941</b> <span class="mut">· у зоны A, контроль 1ч</span></li>
+          <li>Конвейер: <b>7</b> в наблюдении · <b>2</b> у вершины</li>
+          <li>Вчера: <b class="u">TIA TP1 ✅</b> · <b class="mut">2 сетапа без входа — фильтры не собраны</b></li>
+        </ul>
+        <div class="sep"></div>
+        <ul><li class="mut" style="font-size:11.5px">Не вошли — тоже результат: неполный триггер = нет сделки.</li></ul>
+      </div>
+      <span class="time">08:30</span>
+    </div>
+
+    <!-- карточка-канон -->
+    <div class="post sig">
+      <div class="head"><span class="dir long">🟢 LONG</span><span class="tick">TIA</span><span class="phb p3">фаза 3 · поток · PD 66</span></div>
+      <div class="grid">
+        <span>Вход DCA</span><span class="mono">0.365 / 0.355 / 0.345 · 50/30/20</span>
+        <span>SL</span><span class="mono">0.335 <span class="mut">за структурой +2.4%</span></span>
+        <span>TP</span><span class="mono">0.42 → 0.50 · <b class="u">R:R 1:2.8</b></span>
+        <span>Оператор</span><span>🟢 органика · L/S <span class="mono">1.14</span></span>
+        <span>Чеклист</span><span class="mono">5/6 ✓</span>
+      </div>
+      <div class="why"><b>Почему:</b> свип лоу по тени + закрытие телом над уровнем · сессия: Лондон</div>
+      <div class="fbar"><a>📊 Радар</a><a>📖 Разбор</a><a>🔔 Следить</a></div>
+      <span class="time">11:42</span>
+    </div>
+
+    <!-- переход фазы -->
+    <div class="post">
+      <div class="flow"><b class="mono">STAR</b><span class="pill phb p2">манипуляция</span>→<span class="pill phb p3">живой поток</span><span class="mut mono" style="margin-left:auto;font-size:10px">PD 62→64</span></div>
+      <span class="time">12:07</span>
+    </div>
+
+    <!-- исход-reply -->
+    <div class="post">
+      <div class="reply">↩ 🟢 LONG · TIA · фаза 3</div>
+      <div class="outcome">✅ <b>TP1 достигнут · +8.2%</b><br><span class="mut">MFE +11.0% · MAE −1.9% · 14ч в позиции<br>Стоп переведён в б/у. Остаток к TP2.</span></div>
+      <span class="time">14:19</span>
+    </div>
+
+    <!-- еженедельный трек-рекорд -->
+    <div class="post track">
+      <div class="body">
+        <h4 style="font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);font-family:'Space Grotesk',sans-serif;margin-bottom:7px">📊 Трек-рекорд · неделя 29</h4>
+        <table>
+          <tr><th>Контур</th><th>n</th><th>WR</th><th>PF</th></tr>
+          <tr><td>Зоны</td><td>14</td><td class="u">57%</td><td class="u">1.9</td></tr>
+          <tr><td>Импульс</td><td>9</td><td>44%</td><td>1.2</td></tr>
+          <tr><td>Шорт-вахта</td><td class="mut">6</td><td class="amb">калибруется</td><td class="mut">n&lt;20</td></tr>
+        </table>
+        <div style="font-size:10.5px;color:var(--tg-muted);margin-top:7px">Журнал append-only · 0 сигналов задним числом · «н/д» честнее красивой цифры</div>
+      </div>
+      <span class="time">Вс 20:00</span>
+    </div>
+
+  </div>
+</div>
+</div>
+
+<!-- ═══════════ БОТ ═══════════ -->
+<div class="col">
+<h2>2 · <b>Бот</b> — кабинет: меню, «← Назад», глоссарий</h2>
+<div class="phone">
+  <div class="tg-head"><div class="ava"><span></span></div><div><b>BEST TRADE Bot</b><small>бот</small></div></div>
+  <div class="feed">
+
+    <div class="bot-msg">Главное меню</div>
+    <div class="kb c2">
+      <button class="mini">📡 Радар · Mini App</button>
+      <button>🎯 Лимитки</button>
+      <button>🗺 Зоны</button>
+      <button>📈 Аналитика</button>
+      <button>🧮 Калькулятор</button>
+      <button>🔔 Подписки</button>
+      <button>📖 Глоссарий</button>
+    </div>
+
+    <div class="user-msg">🗺 Зоны</div>
+
+    <div class="bot-msg">
+      <b>Зоны · BTC</b><br>
+      <span class="mono" style="font-size:12px">
+      Цена: <b>63 941</b><br><br>
+      🟩 A&nbsp; 61 884–62 126 · <span class="u">−2.9%</span> · ждёт<br>
+      🟩 B&nbsp; 58 700–58 900 · <span class="u">−7.9%</span> · ждёт<br>
+      </span>
+      <span class="mut" style="font-size:11.5px">Статус зон — единый источник со всеми экранами. Обновлено 14:32.</span>
+    </div>
+    <div class="kb c2">
+      <button>📄 Карточка A</button>
+      <button>📄 Карточка B</button>
+      <button>🔔 Алерт при касании</button>
+      <button>Другой актив</button>
+      <button class="back">← Назад в меню</button>
+    </div>
+
+    <div class="user-msg">что такое <span class="gl">funding</span>?</div>
+
+    <div class="glbox"><b>Funding</b> — периодический платёж между лонгами и шортами на фьючерсах. Положительный → лонги платят шортам (перегрев вверх). Экстремум — сигнал охлаждения. <a>Все термины →</a></div>
+    <div class="kb"><button class="back">← Назад к зонам</button></div>
+
+  </div>
+</div>
+</div>
+
+<!-- ═══════════ MINI APP ═══════════ -->
+<div class="col">
+<h2>3 · <b>Mini App</b> — терминал внутри Telegram</h2>
+<div class="phone">
+  <div class="ma-head"><span class="x">✕</span><b>BEST TRADE <i>Радар</i></b><span class="x">⋯</span></div>
+  <div class="ma">
+    <div class="upd"><i></i>обновлено 14:32:05 · скан 638 пар / 60с</div>
+
+    <div class="tabs"><button class="on">Конвейер</button><button>Таблица</button><button>Трек-рекорд</button></div>
+
+    <div class="pipe">
+      <h3>Конвейер <i>PD-Score</i> · токен · PD · в фазе с</h3>
+      <div class="lanes">
+        <div class="lane"><span class="ph" style="background:var(--ph1)"></span><span class="nm">Зарождение</span><div class="chips"><span class="chip"><b>ZRO</b> <span>47</span> · 3ч</span><span class="chip"><b>HIPPO</b> <span>44</span> · 1ч</span></div></div>
+        <div class="lane"><span class="ph" style="background:var(--ph2)"></span><span class="nm">Манипуляция</span><div class="chips"><span class="chip"><b>MYX</b> <span>58</span> · 22ч</span></div></div>
+        <div class="lane"><span class="ph" style="background:var(--ph3)"></span><span class="nm">Живой поток</span><div class="chips"><span class="chip"><b>AKE</b> <span>78</span> · 3д</span><span class="chip"><b>STAR</b> <span>64</span> · 2ч</span><span class="chip"><b>TIA</b> <span>66</span> · 16ч</span></div></div>
+        <div class="lane"><span class="ph" style="background:var(--ph4)"></span><span class="nm">Дамп-вахта</span><div class="chips"><span class="chip"><b>BANK</b> <span>71</span> · 1д</span><span class="chip"><b>REU</b> <span>68</span> · 4д</span></div></div>
+      </div>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="top"><span class="bar" style="background:var(--ph3)"></span><b>AKE</b><span class="phb p3" style="font-size:9px">поток</span><span class="pd">PD 78</span></div>
+        <div class="g"><div><span>Рост</span><b class="u">+56.7%</b></div><div><span>Алерт → сейчас</span>0.000958→0.001502</div><div><span>L/S</span><b class="d">0.46</b></div><div><span>Риск оператора</span><b class="d">Gini 0.999</b></div></div>
+      </div>
+      <div class="card">
+        <div class="top"><span class="bar" style="background:var(--ph4)"></span><b>BANK</b><span class="phb p4" style="font-size:9px">дамп</span><span class="pd">PD 71</span></div>
+        <div class="g"><div><span>Рост</span><b class="d">−21.4%</b></div><div><span>Алерт → сейчас</span>0.0641→0.0633</div><div><span>L/S</span><b>0.92</b></div><div><span>Риск оператора</span><b class="d">CEX-слив ×4</b></div></div>
+      </div>
+      <div class="card">
+        <div class="top"><span class="bar" style="background:var(--ph3)"></span><b>STAR</b><span class="phb p3" style="font-size:9px">поток</span><span class="pd">PD 64</span></div>
+        <div class="g"><div><span>Рост</span><b class="u">+28.4%</b></div><div><span>Алерт → сейчас</span>0.171→0.2244</div><div><span>L/S</span><b>0.71</b></div><div><span>Риск оператора</span><b class="amb">Разлоки 30%</b></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+</div>
+
+<div class="note">
+<b>Что здесь зафиксировано:</b> канал получает пять типов постов (дайджест · карточка-канон · переход фазы · исход-reply · недельный трек-рекорд) — и ничего больше, весь [SYS] уходит owner-чату. Карточка читается за 3 секунды (шапка) и 15 секунд (риск-план), «Почему» — одна строка, источники методологии не упоминаются («Чеклист 5/6»). Бот: «← Назад» на каждом уровне, глоссарий отвечает на термин в один тап. Mini App — дашборд-терминал из прототипа v2, встроенный кнопкой «Радар». Честность как интерфейс: таймштамп вместо «LIVE», «калибруется · n&lt;20» вместо выдуманного винрейта, пост «не вошли — тоже результат».
+</div>
+
+</body>
+</html>
