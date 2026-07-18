@@ -1,6 +1,6 @@
 """
 pytest для level_watch.py -- уровневый вотчер дневной разметки владельца (ETH,
-Королев 4h, 2026-07-11). Покрывает чистые функции (zone_state/distance_pct/
+tier_a, 2026-07-11). Покрывает чистые функции (zone_state/distance_pct/
 format_level_alert/scan_zones), кулдаун (LevelWatchState) и файловую логику
 (load/replace, реплейс с архивом в изолированной временной директории -- боевой
 journal/watch_zones.json не трогается тестами). Сеть (fetch_price, GitHub-синк) не
@@ -74,13 +74,13 @@ def test_scan_zones_returns_only_active_zones():
 def test_format_level_alert_contains_required_fields():
     z = _zone(side="SHORT", lo=1876.10, hi=1880.00, note="галочка автора")
     text = lw.format_level_alert("ETHUSDT", z, 1878.0, "in_zone",
-                                  source="Королев 4h", updated="2026-07-11")
+                                  source="tier_a", updated="2026-07-11")
     assert "ETHUSDT" in text
     assert "SHORT" in text
     assert "1876.1" in text and "1880.0" in text
     assert "1878.00" in text
     assert "галочка автора" in text
-    assert "Королев 4h" in text
+    assert "tier_a" not in text  # source никогда не рендерится (владелец, 2026-07-18)
     assert "2026-07-11" in text
     assert "ЦЕНА В ЗОНЕ" in text
 
@@ -88,7 +88,7 @@ def test_format_level_alert_contains_required_fields():
 def test_format_level_alert_approaching_shows_nonzero_distance():
     z = _zone(side="LONG", lo=1694.49, hi=1705.87)
     text = lw.format_level_alert("ETHUSDT", z, 1710.0, "approaching",
-                                  source="Королев 4h", updated="2026-07-11")
+                                  source="tier_a", updated="2026-07-11")
     assert "Подходит к зоне" in text
     assert "0.00%" not in text
 
@@ -374,7 +374,7 @@ def test_check_and_alert_logs_touch_event(tmp_path, monkeypatch):
 
 # ── Файловая логика: load/replace (изолированная временная директория) ───────
 
-def _cfg(updated="2026-07-11", source="Королев 4h"):
+def _cfg(updated="2026-07-11", source="tier_a"):
     return {
         "updated": updated, "source": source,
         "ETHUSDT": [
@@ -431,10 +431,10 @@ def test_replace_watch_zones_archives_old_before_overwrite(tmp_path):
     path = str(tmp_path / "watch_zones.json")
     history_dir = str(tmp_path / "history")
 
-    old_cfg = _cfg(updated="2026-07-10", source="Королев 4h (вчера)")
+    old_cfg = _cfg(updated="2026-07-10", source="tier_a (вчера)")
     lw.replace_watch_zones(old_cfg, path=path, history_dir=history_dir)
 
-    new_cfg = _cfg(updated="2026-07-11", source="Королев 4h")
+    new_cfg = _cfg(updated="2026-07-11", source="tier_a")
     ok = lw.replace_watch_zones(new_cfg, path=path, history_dir=history_dir)
     assert ok is True
 
@@ -447,7 +447,7 @@ def test_replace_watch_zones_archives_old_before_overwrite(tmp_path):
     assert os.path.exists(archived_path)
     archived = lw.load_watch_zones(archived_path)
     assert archived["updated"] == "2026-07-10"
-    assert archived["source"] == "Королев 4h (вчера)"
+    assert archived["source"] == "tier_a (вчера)"
 
 
 def test_replace_watch_zones_is_full_replace_not_merge(tmp_path):
@@ -458,7 +458,7 @@ def test_replace_watch_zones_is_full_replace_not_merge(tmp_path):
     old_cfg["BTCUSDT"] = [{"side": "LONG", "lo": 1.0, "hi": 2.0, "prio": 1}]
     lw.replace_watch_zones(old_cfg, path=path, history_dir=history_dir)
 
-    new_cfg = {"updated": "2026-07-12", "source": "Королев 4h", "ETHUSDT": []}
+    new_cfg = {"updated": "2026-07-12", "source": "tier_a", "ETHUSDT": []}
     lw.replace_watch_zones(new_cfg, path=path, history_dir=history_dir)
 
     active = lw.load_watch_zones(path)
@@ -501,7 +501,7 @@ def test_run_level_watch_reads_config_and_alerts(tmp_path, monkeypatch):
     state = asyncio.run(run())
     assert isinstance(state, lw.LevelWatchState)
     assert len(sent) == 1  # первый тик алертит, второй блокирует кулдаун
-    assert "Королев 4h" in sent[0]
+    assert "tier_a" not in sent[0]  # source никогда не рендерится (владелец, 2026-07-18)
     assert "2026-07-11" in sent[0]
 
 
