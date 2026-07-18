@@ -154,12 +154,59 @@ def _load_events() -> list:
         return []
 
 
+# #287 (владелец, ДА 2026-07-18): идемпотентность по tx_hash -- та же
+# уязвимость, что чинили в shadow_engine #273 (_UID_INDEX), здесь не было
+# защиты вообще. _save_state(state) вызывается ОДИН РАЗ в конце
+# check_bank_unlock(), ПОСЛЕ отправки алертов -- прерывание тика между
+# алертом и _save_state() приводит к рескану того же диапазона блоков и
+# повторному алерту на тот же перевод. In-memory множество уже виденных
+# tx_hash, прогреваемое из EVENTS_FILE лениво -- тот же паттерн, что
+# shadow_engine._UID_INDEX, включая (файл, mtime/size)-отпечаток, чтобы
+# индекс перегревался при подмене EVENTS_FILE (тесты monkeypatch'ат путь
+# между кейсами) и при внешнем изменении файла (не только своей записью).
+_SEEN_TX_HASHES = None
+_SEEN_TX_HASHES_FILE = None
+_SEEN_TX_HASHES_FILE_STAT = None
+
+
+def _file_stat_key(path: str):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _warm_tx_index() -> set:
+    return {e.get("tx") for e in _load_events() if isinstance(e, dict) and e.get("tx")}
+
+
+def _tx_index() -> set:
+    global _SEEN_TX_HASHES, _SEEN_TX_HASHES_FILE, _SEEN_TX_HASHES_FILE_STAT
+    current_stat = _file_stat_key(EVENTS_FILE)
+    if (_SEEN_TX_HASHES is None or _SEEN_TX_HASHES_FILE != EVENTS_FILE
+            or _SEEN_TX_HASHES_FILE_STAT != current_stat):
+        _SEEN_TX_HASHES = _warm_tx_index()
+        _SEEN_TX_HASHES_FILE = EVENTS_FILE
+        _SEEN_TX_HASHES_FILE_STAT = current_stat
+    return _SEEN_TX_HASHES
+
+
+def _tx_already_seen(tx_hash: str) -> bool:
+    return tx_hash in _tx_index()
+
+
 def _append_event(event: dict) -> None:
+    global _SEEN_TX_HASHES_FILE_STAT
     events = _load_events()
     events.append(event)
     if len(events) > EVENTS_KEEP_MAX:
         events = events[-EVENTS_KEEP_MAX:]
     _atomic_write_json(EVENTS_FILE, events)
+    tx_hash = event.get("tx")
+    if tx_hash:
+        _tx_index().add(tx_hash)
+        _SEEN_TX_HASHES_FILE_STAT = _file_stat_key(EVENTS_FILE)
 
 
 def decode_transfer_log(lg: dict) -> dict:
@@ -271,6 +318,10 @@ async def check_bank_unlock(bot, send_system_fn=None, run_in_executor_fn=None) -
 
     for lg in logs:
         ev = decode_transfer_log(lg)
+        if _tx_already_seen(ev["tx"]):
+            # #287: тот же tx_hash уже обработан (append_event) в прошлом тике --
+            # рескан перекрывающегося диапазона блоков не должен дублировать алерт.
+            continue
         ev["usd"] = ev["amount"] * price if price > 0 else None
         ev["price_used"] = price
         ev["ts"] = time.time()

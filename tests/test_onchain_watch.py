@@ -258,6 +258,38 @@ def test_incomplete_tick_advances_only_to_last_processed_and_notifies_once():
     assert any("RPC-провайдеры" in t for t in sent)
 
 
+def test_rescanning_same_tx_hash_does_not_duplicate_alert_or_event():
+    """#287 (владелец, 2026-07-18): рескан перекрывающегося диапазона блоков
+    (напр. тик прервался между алертом и _save_state()) не должен породить
+    второй алерт/вторую запись на ТОТ ЖЕ tx_hash."""
+    _seed_state(tracked=[ANY_ADDR2.lower()])
+    sent = []
+
+    async def send_system_fn(bot, text, critical=False, **kw):
+        sent.append(text)
+
+    log = _transfer_log(ANY_ADDR2, CEX_ADDR, 1000, tx="0xsametx")
+
+    n1 = _run(ow.check_bank_unlock(
+        _FakeBot(), send_system_fn=send_system_fn,
+        run_in_executor_fn=_stub_run_in_executor(latest_block=5050, logs=[log], price=0.07),
+    ))
+    assert n1 == 1
+    assert len(sent) == 1
+
+    # Симулируем рескан того же диапазона (state["last_scanned_block"] НЕ
+    # продвинут за пределы этого tx -- тот же лог возвращается снова).
+    n2 = _run(ow.check_bank_unlock(
+        _FakeBot(), send_system_fn=send_system_fn,
+        run_in_executor_fn=_stub_run_in_executor(latest_block=5050, logs=[log], price=0.07),
+    ))
+    assert n2 == 0  # #287: дубль по tx_hash пропущен, не считается новым событием
+    assert len(sent) == 1  # ни одного повторного алерта
+
+    events = ow._load_events()
+    assert len(events) == 1  # ни одной повторной записи в EVENTS_FILE
+
+
 def test_no_new_blocks_since_last_scan_returns_zero_without_calling_price():
     _seed_state(last_scanned_block=9999)
 
