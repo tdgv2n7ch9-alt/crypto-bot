@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>BEST TRADE — Радар операторов</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0A0E14;--panel:#10161F;--line:#1C2733;
+  --amber:#FFB454;--text:#D7DEE8;--muted:#71808F;
+  --ph1:#4CC9F0;--ph2:#B18CFF;--ph3:#5BE38B;--ph4:#FF6B6B;
+  --up:#5BE38B;--dn:#FF6B6B;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.5}
+a{color:var(--amber);text-decoration:none}
+.wrap{max-width:1280px;margin:0 auto;padding:0 20px}
+
+/* макро-лента */
+.tape{border-bottom:1px solid var(--line);background:#0C1119;overflow:hidden;white-space:nowrap}
+.tape-inner{display:inline-block;padding:6px 0;animation:tape 40s linear infinite;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)}
+.tape-inner b{color:var(--text);font-weight:500}
+.tape-inner .u{color:var(--up)}.tape-inner .d{color:var(--dn)}
+.tape-inner span{margin-right:28px}
+@keyframes tape{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media (prefers-reduced-motion:reduce){.tape-inner{animation:none}}
+
+/* шапка — честный таймштамп вместо голого LIVE */
+header{padding:14px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
+.logo{display:flex;align-items:center;gap:10px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:18px}
+.logo .dot{width:10px;height:10px;border-radius:2px;background:var(--amber);box-shadow:0 0 12px rgba(255,180,84,.6)}
+.logo small{color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-left:6px}
+.upd{display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)}
+.upd i{width:8px;height:8px;border-radius:50%;background:var(--up)}
+.upd i.stale{background:var(--amber)}
+.upd b{color:var(--text);font-weight:500}
+.cta{background:var(--amber);color:#131313;font-weight:600;padding:9px 16px;border-radius:6px;font-size:13px}
+
+/* герой */
+.hero{padding:40px 0 8px}
+.hero h1{font-family:'Space Grotesk',sans-serif;font-size:clamp(26px,4.2vw,42px);font-weight:700;line-height:1.12;max-width:760px}
+.hero h1 em{font-style:normal;color:var(--amber)}
+.hero p.sub{color:var(--muted);max-width:640px;margin-top:12px;font-size:15px}
+.kpis{display:flex;gap:28px;margin-top:22px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace}
+.kpi b{display:block;font-size:22px;font-weight:600}
+.kpi span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+.u{color:var(--up)}.d{color:var(--dn)}.mut{color:var(--muted)}
+
+/* конвейер фаз — чипы с "в фазе с", пустое состояние с историей */
+.pipeline{margin:32px 0 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+.pipeline-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);gap:10px;flex-wrap:wrap}
+.pipeline-head h2{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:500}
+.pipeline-head span{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted)}
+.phases{display:grid;grid-template-columns:repeat(4,1fr)}
+.phase{padding:14px 16px;border-right:1px solid var(--line);min-height:158px}
+.phase:last-child{border-right:0}
+.phase h3{font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:600;display:flex;align-items:center;gap:7px}
+.phase h3 i{width:8px;height:8px;border-radius:50%}
+.phase[data-p="1"] h3{color:var(--ph1)}.phase[data-p="1"] i{background:var(--ph1)}
+.phase[data-p="2"] h3{color:var(--ph2)}.phase[data-p="2"] i{background:var(--ph2)}
+.phase[data-p="3"] h3{color:var(--ph3)}.phase[data-p="3"] i{background:var(--ph3)}
+.phase[data-p="4"] h3{color:var(--ph4)}.phase[data-p="4"] i{background:var(--ph4)}
+.phase .hint{color:var(--muted);font-size:11px;margin:4px 0 10px}
+.chip{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:5px 8px;border:1px solid var(--line);border-radius:5px;margin-bottom:6px;background:#0C1119}
+.chip b{font-weight:600}
+.chip .sc{color:var(--amber)}
+.chip .since{font-size:10px;color:var(--muted)}
+.empty{border:1px dashed var(--line);border-radius:5px;padding:8px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+.empty b{color:var(--text);font-weight:500}
+@media(max-width:820px){.phases{grid-template-columns:1fr 1fr}.phase{border-bottom:1px solid var(--line)}}
+@media(max-width:520px){.phases{grid-template-columns:1fr}}
+
+/* фильтры + про-режим */
+.controls{display:flex;gap:10px;align-items:center;margin:26px 0 12px;flex-wrap:wrap}
+.controls .lbl{color:var(--muted);font-size:12px}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:7px 12px;cursor:pointer}
+.seg button.on{background:var(--amber);color:#131313;font-weight:600}
+.seg button:focus-visible{outline:2px solid var(--amber);outline-offset:-2px}
+.pro{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.pro input{accent-color:var(--amber);width:15px;height:15px;cursor:pointer}
+
+/* таблица: базовые 8 колонок, .procol скрыты по умолчанию */
+.tbl-wrap{border:1px solid var(--line);border-radius:10px;overflow:auto;background:var(--panel)}
+table{width:100%;border-collapse:collapse;min-width:820px}
+body.pro-on table{min-width:1120px}
+th{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:600;text-align:right;padding:11px 12px;border-bottom:1px solid var(--line);white-space:nowrap;position:sticky;top:0;background:var(--panel)}
+th:first-child,td:first-child{text-align:left}
+td{font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:10px 12px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tr:hover td{background:#131B26}
+.procol{display:none}
+body.pro-on .procol{display:table-cell}
+.tok{display:flex;align-items:center;gap:9px;font-weight:600;font-family:Inter,sans-serif;font-size:13px}
+.tok .ph{width:4px;height:22px;border-radius:2px}
+.ph1{background:var(--ph1)}.ph2{background:var(--ph2)}.ph3{background:var(--ph3)}.ph4{background:var(--ph4)}
+.badge{display:inline-block;font-size:10px;font-family:Inter,sans-serif;font-weight:600;padding:2px 7px;border-radius:99px}
+.b1{color:var(--ph1);background:rgba(76,201,240,.12)}
+.b2{color:var(--ph2);background:rgba(177,140,255,.12)}
+.b3{color:var(--ph3);background:rgba(91,227,139,.12)}
+.b4{color:var(--ph4);background:rgba(255,107,107,.12)}
+.risk{font-size:10px;font-family:Inter,sans-serif;font-weight:600;padding:2px 7px;border-radius:4px}
+.rH{color:#FF6B6B;background:rgba(255,107,107,.12)}
+.rM{color:var(--amber);background:rgba(255,180,84,.12)}
+.rL{color:var(--muted);background:rgba(113,128,143,.12)}
+.score{color:var(--amber);font-weight:600}
+svg.spark{display:block;margin-left:auto}
+svg.spark polyline{fill:none;stroke-width:1.5}
+.sp-u{stroke:var(--up)}.sp-d{stroke:var(--dn)}
+
+/* мобильные карточки: таблица скрывается, карточки показываются */
+.cards{display:none}
+@media(max-width:720px){
+  .tbl-wrap{display:none}
+  .pro{display:none}
+  .cards{display:grid;gap:10px}
+  .card{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:12px 14px}
+  .card .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .card .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;font-family:'IBM Plex Mono',monospace;font-size:12px}
+  .card .grid span{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em;display:block}
+}
+
+/* протокол правды */
+.truth{margin:34px 0;border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:10px;background:var(--panel);padding:18px 20px}
+.truth h2{font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:600;margin-bottom:4px}
+.truth p{color:var(--muted);font-size:13px;max-width:760px}
+.truth .row{display:flex;gap:34px;margin-top:14px;flex-wrap:wrap;font-family:'IBM Plex Mono',monospace}
+.truth .row div b{display:block;font-size:20px}
+.truth .row div span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.09em}
+.truth .nd{color:var(--amber)}
+
+footer{padding:26px 0 40px;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;border-top:1px solid var(--line);margin-top:8px}
+</style>
+</head>
+<body>
+
+<div class="tape" aria-hidden="true"><div class="tape-inner" id="tape"></div></div>
+
+<div class="wrap">
+<header>
+  <div class="logo"><span class="dot"></span>BEST TRADE<small>Радар операторов</small></div>
+  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div class="upd"><i id="updDot"></i>обновлено <b id="updTime">--:--:--</b> · скан 638 пар / 60с</div>
+    <a class="cta" href="#">Алерты в Telegram</a>
+  </div>
+</header>
+
+<section class="hero">
+  <h1>Мы не ловим пампы.<br>Мы читаем <em>оператора</em> — от зарождения до дампа.</h1>
+  <p class="sub">Сканер ведёт каждый токен по четырём фазам PD-Score: аномалия объёма → профиль манипуляции → живой поток → распределение. Сигнал приходит с фазой и риском оператора — не просто «уже растёт».</p>
+  <div class="kpis">
+    <div class="kpi"><b>163</b><span>в наблюдении</span></div>
+    <div class="kpi"><b class="u">+43.2%</b><span>лучший ход 24ч</span></div>
+    <div class="kpi"><b>7</b><span>детекций сегодня</span></div>
+    <div class="kpi"><b>2</b><span>у вершины · шорт-вахта</span></div>
+  </div>
+</section>
+
+<section class="pipeline">
+  <div class="pipeline-head"><h2>Конвейер PD-Score</h2><span>≥40 наблюдение · ≥65 памп-профиль · чип: токен · PD · в фазе с</span></div>
+  <div class="phases">
+    <div class="phase" data-p="1"><h3><i></i>1 · Зарождение</h3><div class="hint">Vol Surge >5x при |ΔP|<3% · OI-импульс</div>
+      <div class="chip"><b>ZRO</b><span class="sc">47</span><span class="since">3ч</span></div>
+      <div class="chip"><b>HIPPO</b><span class="sc">44</span><span class="since">1ч</span></div>
+    </div>
+    <div class="phase" data-p="2"><h3><i></i>2 · Манипуляция</h3><div class="hint">Wash-Score · Gini >0.98 · возраст <90д</div>
+      <div class="chip"><b>MYX</b><span class="sc">58</span><span class="since">22ч</span></div>
+      <!-- пустое состояние с историей вместо дыры -->
+      <div class="empty">STAR перешёл в фазу 3 → <b>41 мин назад</b></div>
+    </div>
+    <div class="phase" data-p="3"><h3><i></i>3 · Живой поток</h3><div class="hint">CVD · Book Imbalance >70/30 · стены</div>
+      <div class="chip"><b>AKE</b><span class="sc">78</span><span class="since">3д14ч</span></div>
+      <div class="chip"><b>STAR</b><span class="sc">64</span><span class="since">41м</span></div>
+      <div class="chip"><b>TIA</b><span class="sc">66</span><span class="since">16ч</span></div>
+    </div>
+    <div class="phase" data-p="4"><h3><i></i>4 · Дамп / шорт-вахта</h3><div class="hint">CEX-inflow · дивергенция · откат −3–5%</div>
+      <div class="chip"><b>BANK</b><span class="sc">71</span><span class="since">1д20ч</span></div>
+      <div class="chip"><b>REU</b><span class="sc">68</span><span class="since">4д</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="controls">
+  <span class="lbl">Сортировка</span>
+  <div class="seg"><button class="on">PD</button><button>Рост %</button><button>Пик %</button><button>Длит.</button></div>
+  <span class="lbl">Окно</span>
+  <div class="seg"><button class="on">Все</button><button>24ч</button><button>7д</button><button>30д</button></div>
+  <label class="pro"><input type="checkbox" id="proToggle">Про-режим · все колонки</label>
+</div>
+
+<!-- десктоп: 8 базовых колонок + 5 про-колонок -->
+<div class="tbl-wrap">
+<table>
+  <thead><tr>
+    <th>Токен</th><th>Фаза</th><th>PD</th><th>Рост %</th><th>Алерт → Сейчас</th>
+    <th class="procol">Пик %</th><th class="procol">Тренд</th><th class="procol">OI Δ24ч</th><th class="procol">Funding</th>
+    <th>L/S</th><th>Риск оператора</th><th class="procol">Длит.</th><th>В фазе с</th>
+  </tr></thead>
+  <tbody>
+    <tr><td><div class="tok"><span class="ph ph3"></span>AKE</div></td><td><span class="badge b3">поток</span></td><td class="score">78</td><td class="u">+56.7%</td><td>0.000958 → 0.001502</td><td class="procol mut">+63.9%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-u" points="0,15 9,13 18,10 27,8 36,5 45,4 54,6 64,3"/></svg></td><td class="procol u">+31%</td><td class="procol">0.046%</td><td class="d">0.46</td><td><span class="risk rH">Gini 0.999</span></td><td class="procol">3д 14ч</td><td class="mut">3д 14ч</td></tr>
+    <tr><td><div class="tok"><span class="ph ph4"></span>BANK</div></td><td><span class="badge b4">дамп</span></td><td class="score">71</td><td class="d">−21.4%</td><td>0.0641 → 0.0633</td><td class="procol mut">+36.2%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-d" points="0,3 9,5 18,4 27,8 36,12 45,14 54,13 64,13"/></svg></td><td class="procol d">−12%</td><td class="procol">0.011%</td><td>0.92</td><td><span class="risk rH">CEX-слив ×4</span></td><td class="procol">1д 20ч</td><td class="mut">1д 20ч</td></tr>
+    <tr><td><div class="tok"><span class="ph ph3"></span>STAR</div></td><td><span class="badge b3">поток</span></td><td class="score">64</td><td class="u">+28.4%</td><td>0.171 → 0.2244</td><td class="procol mut">+37.4%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-u" points="0,14 9,13 18,11 27,9 36,8 45,6 54,3 64,5"/></svg></td><td class="procol u">+202%</td><td class="procol d">0.094%</td><td>0.71</td><td><span class="risk rM">Разлоки 30%</span></td><td class="procol">2д 06ч</td><td class="mut">41 мин</td></tr>
+    <tr><td><div class="tok"><span class="ph ph3"></span>TIA</div></td><td><span class="badge b3">поток</span></td><td class="score">66</td><td class="u">+9.8%</td><td>0.349 → 0.383</td><td class="procol mut">+12.1%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-u" points="0,14 9,12 18,11 27,9 36,8 45,7 54,5 64,4"/></svg></td><td class="procol u">+18%</td><td class="procol">0.018%</td><td>1.14</td><td><span class="risk rL">Органика</span></td><td class="procol">16ч</td><td class="mut">16ч</td></tr>
+    <tr><td><div class="tok"><span class="ph ph1"></span>ZRO</div></td><td><span class="badge b1">зарожд.</span></td><td class="score">47</td><td class="u">+3.1%</td><td>2.041 → 2.104</td><td class="procol mut">+4.4%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-u" points="0,13 9,13 18,12 27,11 36,11 45,10 54,9 64,9"/></svg></td><td class="procol u">+22%</td><td class="procol">0.006%</td><td>1.02</td><td><span class="risk rL">н/д</span></td><td class="procol">3ч</td><td class="mut">3ч</td></tr>
+    <tr><td><div class="tok"><span class="ph ph4"></span>REU</div></td><td><span class="badge b4">дамп</span></td><td class="score">68</td><td class="d">−13.3%</td><td>0.204 → 0.442</td><td class="procol mut">+118%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-d" points="0,6 9,3 18,4 27,6 36,9 45,11 54,13 64,13"/></svg></td><td class="procol d">−28%</td><td class="procol d">−0.041%</td><td>1.37</td><td><span class="risk rH">Wash 55%</span></td><td class="procol">4д 02ч</td><td class="mut">4д</td></tr>
+    <tr><td><div class="tok"><span class="ph ph2"></span>MYX</div></td><td><span class="badge b2">манип.</span></td><td class="score">58</td><td class="u">+14.9%</td><td>0.0771 → 0.0886</td><td class="procol mut">+19.7%</td><td class="procol"><svg class="spark" width="64" height="18"><polyline class="sp-u" points="0,14 9,13 18,12 27,10 36,9 45,8 54,7 64,6"/></svg></td><td class="procol u">+44%</td><td class="procol">0.031%</td><td>0.88</td><td><span class="risk rM">Топ-10 74%</span></td><td class="procol">22ч</td><td class="mut">22ч</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- мобильные карточки: тот же контент, другой компонент -->
+<div class="cards">
+  <div class="card"><div class="top"><div class="tok"><span class="ph ph3"></span>AKE</div><span class="badge b3">поток · PD 78</span></div>
+    <div class="grid"><div><span>Рост</span><b class="u">+56.7%</b></div><div><span>Алерт → сейчас</span>0.000958→0.001502</div><div><span>L/S</span><b class="d">0.46</b></div><div><span>Риск</span><span class="risk rH">Gini 0.999</span></div></div></div>
+  <div class="card"><div class="top"><div class="tok"><span class="ph ph4"></span>BANK</div><span class="badge b4">дамп · PD 71</span></div>
+    <div class="grid"><div><span>Рост</span><b class="d">−21.4%</b></div><div><span>Алерт → сейчас</span>0.0641→0.0633</div><div><span>L/S</span><b>0.92</b></div><div><span>Риск</span><span class="risk rH">CEX-слив ×4</span></div></div></div>
+  <div class="card"><div class="top"><div class="tok"><span class="ph ph3"></span>STAR</div><span class="badge b3">поток · PD 64</span></div>
+    <div class="grid"><div><span>Рост</span><b class="u">+28.4%</b></div><div><span>Алерт → сейчас</span>0.171→0.2244</div><div><span>L/S</span><b>0.71</b></div><div><span>Риск</span><span class="risk rM">Разлоки 30%</span></div></div></div>
+  <div class="card"><div class="top"><div class="tok"><span class="ph ph1"></span>ZRO</div><span class="badge b1">зарожд. · PD 47</span></div>
+    <div class="grid"><div><span>Рост</span><b class="u">+3.1%</b></div><div><span>Алерт → сейчас</span>2.041→2.104</div><div><span>L/S</span><b>1.02</b></div><div><span>Риск</span><span class="risk rL">н/д</span></div></div></div>
+</div>
+
+<section class="truth">
+  <h2>Протокол правды — публичный трек-рекорд</h2>
+  <p>Каждый сигнал пишется в append-only журнал в момент отправки: цена алерта, фаза, риск-профиль. Исходы считаются автоматически по MFE/MAE. Мы показываем и то, чего не знаем: «н/д» вместо правдоподобных цифр.</p>
+  <div class="row">
+    <div><b>342</b><span>записей в журнале</span></div>
+    <div><b>207</b><span>закрытых исходов</span></div>
+    <div><b class="nd">калибруется</b><span>винрейт · публикация при n≥20 на контур</span></div>
+    <div><b>0</b><span>сигналов задним числом</span></div>
+  </div>
+</section>
+
+<footer>
+  <span>© 2026 BEST TRADE · не является финансовым советом</span>
+  <span><a href="#">Калькулятор позиции</a> · <a href="#">Методология PD-Score</a> · <a href="#">Telegram</a></span>
+</footer>
+</div>
+
+<script>
+const tapeData=`<span>BTC <b>63 941</b> <span class="d">−0.1%</span></span><span>BTC.D <b>58.7%</b></span><span>USDT.D <b>5.31%</b></span><span>ETH <b>1 839</b> <span class="d">−1.9%</span></span><span>S&P фьюч <b>6 214</b> <span class="u">+0.2%</span></span><span>DXY <b>101.8</b></span><span>VIX <b>14.9</b></span><span>Ликвидации 24ч <b>$441M</b> <span class="u">+81%</span></span>`;
+document.getElementById('tape').innerHTML=tapeData+tapeData;
+
+/* честный таймштамп: показывает реальное время последнего обновления;
+   если данных нет дольше 3 интервалов — точка желтеет (stale) */
+let lastUpdate=new Date();
+function renderUpd(){
+  const el=document.getElementById('updTime'),dot=document.getElementById('updDot');
+  el.textContent=lastUpdate.toLocaleTimeString('ru-RU');
+  dot.classList.toggle('stale',(Date.now()-lastUpdate)>180000);
+}
+renderUpd();
+setInterval(()=>{lastUpdate=new Date();renderUpd();},60000); /* в проде: по факту прихода данных */
+setInterval(renderUpd,10000);
+
+/* про-режим */
+document.getElementById('proToggle').addEventListener('change',e=>{
+  document.body.classList.toggle('pro-on',e.target.checked);
+});
+</script>
+</body>
+</html>
