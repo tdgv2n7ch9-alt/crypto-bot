@@ -770,9 +770,9 @@
       "batch": null
     },
     "Структура 1.md": {
-      "status": "pending",
+      "status": "done",
       "library_file": null,
-      "batch": null
+      "batch": 8
     },
     "Урок 1. Структура.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 53,
-  "last_batch": 7,
-  "last_updated": "2026-07-18T12:01:55.841376Z"
+  "done_count": 54,
+  "last_batch": 8,
+  "last_updated": "2026-07-18T13:12:46.438920Z"
 }
