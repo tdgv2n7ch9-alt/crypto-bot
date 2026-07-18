@@ -102,7 +102,7 @@ GitHub Contents API (`journal/signals.json`), last-write-wins по `updated_ts`,
 Работает на Mac mini через launchd (`com.bestrade.reader.plist`), не на Railway, не
 часть `bot.py`. 13 каналов в `SOURCE_CHANNELS` (`reader.py:41`): 11 в `mode="signal"`
 (парсятся и пересылаются как раньше, поведение не менялось) + 2 в `mode="monitor"`
-(архив-онли, добавлены в этой сессии — "Королев о Крипте", "Теория Вероятностей" —
+(архив-онли, добавлены в этой сессии — "источник A", "источник B" —
 **никогда** не доходят до `format_signal`/пересылки, только пишутся в
 `knowledge/channel_archive/<slug>/<YYYY-MM>.jsonl`). Плюс Lookonchain через Nitter RSS
 (on-chain данные, отдельный путь, не Telethon).
