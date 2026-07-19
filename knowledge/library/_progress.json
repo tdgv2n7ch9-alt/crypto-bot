@@ -154,9 +154,9 @@
       "batch": 20
     },
     "26. Стрим AMD_Wyckoff Часть 1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "wyckoff_accumulation_distribution_part1.md",
+      "batch": 21
     },
     "27. Стрим Wyckoff Часть 2.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 71,
-  "last_batch": 20,
-  "last_updated": "2026-07-19T08:49:32.357759+00:00"
+  "done_count": 72,
+  "last_batch": 21,
+  "last_updated": "2026-07-19T08:53:52.316797+00:00"
 }
