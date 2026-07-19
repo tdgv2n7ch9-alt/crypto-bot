@@ -59,9 +59,9 @@
       "batch": 16
     },
     "17. Стрим Торговые сетапы.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "quasimodo_setup_stream17.md",
+      "batch": 17
     },
     "18. Бектесты 1.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 66,
-  "last_batch": 16,
-  "last_updated": "2026-07-19T08:34:42.719239+00:00"
+  "done_count": 67,
+  "last_batch": 17,
+  "last_updated": "2026-07-19T08:39:13.961697+00:00"
 }
