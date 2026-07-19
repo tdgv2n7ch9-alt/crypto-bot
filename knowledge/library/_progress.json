@@ -408,9 +408,9 @@
       "note": "myfxbook position-size калькулятор, форекс-специфика (пипсы/лоты) -- низкая релевантность крипто-боту, 0 новых правил."
     },
     "Lesson _2 _ Продолжение.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "course_c_lesson2_continuation.md",
+      "batch": 40
     },
     "Lesson _4 Liquidity Provider. Фибоначчи. part 2.md": {
       "status": "pending",
@@ -418,9 +418,9 @@
       "batch": null
     },
     "Lesson__1_Dova_Lazarus_Введение_в_Forex__Сессии__Брокеры__Новости.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "instructor_e_lesson1_forex_intro.md",
+      "batch": 38
     },
     "Lesson__2_Cryptomannn_Cтруктура_Синхронизация_Ликвидность_Частичное.md": {
       "status": "done",
@@ -433,9 +433,9 @@
       "batch": null
     },
     "Lesson__5_Liquidity_Provider_AMD_SFP_Открытие_позиции_во_время_формирования.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "instructor_e_lesson5_amd_sfp.md",
+      "batch": 39
     },
     "Ob1.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 136,
-  "last_batch": 37,
-  "last_updated": "2026-07-19T10:28:04.990879+00:00"
+  "done_count": 139,
+  "last_batch": 40,
+  "last_updated": "2026-07-19T10:32:39.957020+00:00"
 }
