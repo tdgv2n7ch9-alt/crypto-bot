@@ -14159,6 +14159,23 @@ async def _start_pump_detector(app):
         hour=morning_metrics.MORNING_HOUR_UTC3, minute=morning_metrics.MORNING_MINUTE_UTC3,
         args=[app.bot, owner_id],
     )
+    # Владелец, CLAUDE.md TODO (2026-07-19, "08:30 -- жёсткий приоритет"):
+    # tools/morning_brief.py уже строил текст/секции MORNING BRIEF, но отправка
+    # в Telegram делалась ВРУЧНУЮ интерактивной сессией -- если сессия была
+    # занята, брифинг опаздывал (живая находка в тот же день). Локальный
+    # импорт -- тот же паттерн, что pump_detector/prompt-модули выше в этой
+    # функции, избегает цикла bot.py <-> tools/morning_brief.py (тот сам
+    # делает `import bot` на своём модульном уровне). +2 мин от «Утренней
+    # сводки» выше -- намеренно, чтобы два отдельных сообщения (разного
+    # происхождения/сессий, см. докстринг send_morning_brief_telegram про
+    # частичное пересечение содержимого) не пришли владельцу в одну секунду.
+    from tools import morning_brief
+    scheduler.add_job(
+        morning_brief.send_morning_brief_telegram,
+        "cron",
+        hour=morning_metrics.MORNING_HOUR_UTC3, minute=morning_metrics.MORNING_MINUTE_UTC3 + 2,
+        args=[app.bot, owner_id],
+    )
     # SEC М4 -- security_log.log_event() сам чисто локальный (см. докстринг модуля),
     # GitHub-синк вынесен сюда отдельной периодической задачей, тот же интервал
     # порядка, что и остальные best-effort GitHub-синки в проекте.

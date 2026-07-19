@@ -326,3 +326,69 @@ def test_write_morning_brief_creates_dated_file(monkeypatch, tmp_path):
     assert "MORNING_BRIEF_" in os.path.basename(path)
     with open(path, encoding="utf-8") as f:
         assert f.read() == "тестовый контент\n"
+
+
+def test_write_morning_brief_uses_precomputed_text_without_recomputing(monkeypatch, tmp_path):
+    """Владелец, задача APScheduler-джоба брифа (2026-07-19): `send_morning_
+    brief_telegram` считает текст ОДИН раз и передаёт сюда -- `build_morning_
+    brief` не должен вызываться заново (не задваивать сетевые походы)."""
+    monkeypatch.setattr(mb, "OUTPUT_DIR", str(tmp_path))
+
+    def _boom(now_ts=None):
+        raise AssertionError("build_morning_brief не должен вызываться, когда text передан")
+    monkeypatch.setattr(mb, "build_morning_brief", _boom)
+    path = mb.write_morning_brief(now_ts=1_752_400_800.0, text="готовый текст\n")
+    with open(path, encoding="utf-8") as f:
+        assert f.read() == "готовый текст\n"
+
+
+# ── send_morning_brief_telegram() ──
+
+def _run(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+def test_send_morning_brief_telegram_sends_and_writes_file(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(mb, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(mb, "build_morning_brief", lambda now_ts=None: "бриф-текст\n")
+    fake_bot = AsyncMock()
+
+    _run(mb.send_morning_brief_telegram(fake_bot, 12345, now_ts=1_752_400_800.0))
+
+    fake_bot.send_message.assert_awaited_once_with(12345, "бриф-текст\n")
+    files = os.listdir(tmp_path)
+    assert len(files) == 1
+    with open(os.path.join(tmp_path, files[0]), encoding="utf-8") as f:
+        assert f.read() == "бриф-текст\n"
+
+
+def test_send_morning_brief_telegram_truncates_long_text(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(mb, "OUTPUT_DIR", str(tmp_path))
+    long_text = "x" * 5000
+    monkeypatch.setattr(mb, "build_morning_brief", lambda now_ts=None: long_text)
+    fake_bot = AsyncMock()
+
+    _run(mb.send_morning_brief_telegram(fake_bot, 12345, now_ts=1_752_400_800.0))
+
+    sent_text = fake_bot.send_message.call_args[0][1]
+    assert len(sent_text) == 4090
+    assert sent_text.endswith("...")
+
+
+def test_send_morning_brief_telegram_logs_and_swallows_send_failure(monkeypatch, tmp_path, caplog):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(mb, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(mb, "build_morning_brief", lambda now_ts=None: "бриф-текст\n")
+    fake_bot = AsyncMock()
+    fake_bot.send_message.side_effect = RuntimeError("telegram down")
+
+    with caplog.at_level("ERROR"):
+        _run(mb.send_morning_brief_telegram(fake_bot, 12345, now_ts=1_752_400_800.0))
+
+    assert "send_morning_brief_telegram failed" in caplog.text

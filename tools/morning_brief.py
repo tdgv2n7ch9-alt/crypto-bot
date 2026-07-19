@@ -18,11 +18,14 @@ cg_detail -- честно "н/д" по FDV/age-детекторам, не выд
 (последняя датированная запись). Ни одной оценки без цифры -- где цифры нет,
 пишем "н/д", не догадку.
 """
+import logging
 import os
 import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+
+log = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("BOT_TOKEN", os.environ.get("BOT_TOKEN", "test-token-not-real"))
@@ -307,17 +310,56 @@ def build_morning_brief(now_ts: float = None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_morning_brief(now_ts: float = None) -> str:
-    """Пишет output/MORNING_BRIEF_<YYYY-MM-DD>.md, возвращает путь."""
+def write_morning_brief(now_ts: float = None, text: str = None) -> str:
+    """Пишет output/MORNING_BRIEF_<YYYY-MM-DD>.md, возвращает путь. `text`
+    -- если уже посчитан вызывающей стороной (см. `send_morning_brief_telegram`
+    ниже, чтобы не считать бриф дважды -- дважды сходить в сеть за живыми
+    ценами/rug-риском и т.п.), иначе считается здесь же."""
     now = now_ts if now_ts is not None else time.time()
     dt_local = datetime.fromtimestamp(now, tz=timezone(timedelta(hours=3)))
     date_str = dt_local.strftime("%Y-%m-%d")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     path = os.path.join(OUTPUT_DIR, f"MORNING_BRIEF_{date_str}.md")
-    text = build_morning_brief(now_ts=now)
+    if text is None:
+        text = build_morning_brief(now_ts=now)
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return path
+
+
+async def send_morning_brief_telegram(bot, owner_id: int, now_ts: float = None) -> None:
+    """Владелец, CLAUDE.md TODO (2026-07-19, "08:30 -- жёсткий приоритет"):
+    раньше этот брифинг существовал ТОЛЬКО как MD-файл (`write_morning_brief`
+    ниже), а его отправка владельцу в Telegram делалась ВРУЧНУЮ интерактивной
+    сессией -- если сессия была занята (живая находка в тот же день), брифинг
+    опаздывал. Этот джоб регистрируется в APScheduler САМОГО bot.py (см.
+    `_start_pump_detector`, cron 08:30) -- тот же принцип, что уже
+    `morning_metrics.send_morning_digest` (не завязан на сессию Claude Code,
+    переживает рестарт процесса нативно, регистрируется заново при каждом
+    старте).
+
+    Отправляется ПЛОСКИМ текстом, БЕЗ `parse_mode="Markdown"` -- содержимое
+    собрано как GitHub-flavored Markdown (`##`-заголовки, `|таблицы|`,
+    `**bold**`) для чтения как .md-файла, не для Telegram-парсера сущностей;
+    попытка распарсить его как Telegram Markdown упала бы на несбалансированных
+    `*`/`_` (тот же класс бага, что живая находка 2026-07-14 в
+    `morning_metrics.send_morning_digest` про нечётные подчёркивания) --
+    честнее прислать читаемый плоский текст, чем рисковать `BadRequest`
+    и вообще не прислать ничего.
+
+    Владелец, честно: содержимое ЧАСТИЧНО пересекается с уже существующим
+    `morning_metrics.send_morning_digest` (тоже cron 08:30, тоже "тень"/
+    "закрытые исходы"/зоны) -- две отдельных сессии добавляли эти джобы в
+    разное время, каждый со своим объёмом полей, ни один не отменяет
+    другой. Не объединяю и не убираю ни один без явного решения владельца
+    -- см. PROGRESS.md, открытый вопрос."""
+    try:
+        text = build_morning_brief(now_ts=now_ts)
+        write_morning_brief(now_ts=now_ts, text=text)
+        telegram_text = text if len(text) <= 4090 else text[:4087] + "..."
+        await bot.send_message(owner_id, telegram_text)
+    except Exception as e:
+        log.error(f"morning_brief: send_morning_brief_telegram failed: {e}")
 
 
 if __name__ == "__main__":
