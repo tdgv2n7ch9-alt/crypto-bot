@@ -211,8 +211,14 @@ fi
 
 if [ "$STATUS" = "SKIPPED" ]; then
     if [ "$WATCH_HIT" = "no" ]; then
-        _log "SKIPPED as EXPECTED -- pushed commit touched no Watch Path files (journal/docs-only)"
-        _notify_owner "deploy.sh: SKIPPED ожидаемо ($PUSHED_SHORT -- не код), деплой не требовался"
+        # Владелец, 2026-07-19 (живая находка -- шум в Telegram: 4 "SKIPPED
+        # ожидаемо" уведомления за 12 минут докс-конспект-коммитов):
+        # ожидаемый SKIPPED (docs-only, не задел Watch Paths) -- это штатный
+        # исход, не событие, которое владельцу нужно видеть в реальном
+        # времени. Тихо в лог, БЕЗ Telegram -- уведомления оставлены только
+        # для реального деплоя (SUCCESS/восстановление) и ошибок (FATAL/
+        # неожиданный SKIPPED при затронутых Watch Paths, ниже).
+        _log "SKIPPED as EXPECTED -- pushed commit touched no Watch Path files (journal/docs-only), no Telegram notify (owner, 2026-07-19)"
         exit 0
     fi
     _log "SKIPPED but Watch Path WAS touched -- unexpected, triggering minimal bot.py commit"

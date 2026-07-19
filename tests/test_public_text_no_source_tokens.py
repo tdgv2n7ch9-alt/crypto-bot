@@ -41,6 +41,7 @@ FORBIDDEN_TOKENS = re.compile(
     r"\b(kira|ict|королев|korolev|соболев|sobolev|2trade|pixel|заговор|zagovor|"
     r"тимур|timur|санчо|sancho|влад|vlad|гарри|garri|harry|воркшоп|workshop|"
     r"мета|meta|"
+    r"cryptomannn|dova\s+lazarus|"
     r"вероятност\w*)\b",
     re.IGNORECASE,
 )

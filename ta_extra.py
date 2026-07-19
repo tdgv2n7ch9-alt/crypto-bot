@@ -904,7 +904,7 @@ def smc_setup_type_body_close_variant(candles_4h: list, bias_direction: str = No
     промоушену: два источника расходились в критерии валидности слома структуры.
     Инструктор B (прежняя живая логика, теперь smc_setup_type_wick_only() --
     _find_fractals/swing_points сравнивают только high/low, без проверки close)
-    считал пробой ТЕНЬЮ достаточным. "Урок 2. Structure.pdf" (cryptomannn.com)
+    считал пробой ТЕНЬЮ достаточным. "Урок 2. Structure.pdf" (Курс C)
     заявляет обратное: пробой без ЗАКРЫТИЯ свечи за уровнем -- это SFP (снятие
     ликвидности), не валидный слом.
 
