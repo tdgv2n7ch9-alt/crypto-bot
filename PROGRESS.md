@@ -18350,3 +18350,30 @@ executor(None, get_all_coins)` -- тот же паттерн, что УЖЕ пр
 как нарушение правила "нигде") + grep-guard + шумоподавление в
 deploy.sh для SKIPPED-докс-коммитов, затем продолжение конспектов
 (123/160, 37 осталось).
+
+**ГОТОВО (все три пункта из сообщения владельца ~13:00)**:
+1. #285-b root cause найден и задокументирован (см. запись выше) --
+   фикс НЕ применён, ждёт "да" владельца.
+2. Атрибуция: `ta_extra.py:907` ("cryptomannn.com" -> "Курс C") +
+   собственный конспект сессии `market_structure_base_advanced_
+   stream7.md` (написан до получения кодов, тоже исправлен) + маппинг
+   в `~/Documents/crypto-bot-source-mapping.md` дополнен (Dova Lazarus =
+   Инструктор E, cryptomannn.com = Курс C) + grep-guard (`tests/
+   test_public_text_no_source_tokens.py`, `tests/test_level_watch_no_
+   source_attribution.py`) расширен обоими токенами, проверено на
+   ложные срабатывания (тот же класс осторожности, что находка "влад").
+3. `tools/deploy.sh` -- Telegram-уведомление для ожидаемого SKIPPED
+   (docs-only) убрано, остаётся только в логе; реальные деплои/ошибки
+   по-прежнему уведомляют.
+
+**DoD пункта 2/3**: `py_compile ta_extra.py` -- чисто, `bash -n tools/
+deploy.sh` -- чисто, `pytest` полный -- **1726 passed, 1 skipped**, без
+регрессий. Коммит `f8917b97`, `tools/deploy.sh` -- watchPatterns hit
+(затронут `ta_extra.py`), деплой **SUCCESS** (deployment id
+`b045841f`, 13:21:03). `railway logs` -- чистый рестарт ("Scheduler
+started" -> "Application started" 10:20:13 UTC), traceback в окне --
+только известный класс (CoinGecko 429), новых типов ошибок нет.
+
+**СЕЙЧАС ДЕЛАЮ**: доложил владельцу все 3 пункта, жду решения по фиксу
+check_alerts (#285-b) -- деплоить и продолжать конспекты параллельно
+фоновому наблюдению за #285-b/coarse-паттерном.
