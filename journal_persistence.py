@@ -40,13 +40,14 @@ _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 # (локальный путь относительно repo root == repo-путь на GitHub, файлы
 # лежат по тем же именам в обоих местах)
 SYNCED_FILES = [
-    "journal/bank_setup_state.json",
+    # bank_setup_state.json/onchain_watch_state.json/onchain_watch_events.json
+    # убраны -- владелец, 2026-07-19: BANK-сетап снят, оба монитора
+    # архивированы (archive/bank_setup_monitor.py, archive/onchain_watch.py),
+    # синкать состояние мёртвых мониторов незачем.
     "journal/ake_setup_state.json",
     "journal/bsc_wallet_events.json",
     "journal/bsc_wallet_monitor_state.json",
     "journal/pump_radar_state.json",
-    "journal/onchain_watch_state.json",
-    "journal/onchain_watch_events.json",
 ]
 ZONE_ALERT_STATE_GLOB = "journal/zone_alert_state_*.json"  # динамический список символов
 SYNC_INTERVAL_SEC = 15 * 60  # владелец: "раз в 15 мин"

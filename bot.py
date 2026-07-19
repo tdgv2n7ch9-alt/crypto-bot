@@ -133,8 +133,6 @@ import glossary
 import course_content
 import methodology_content
 import bsc_wallet_monitor
-import bank_setup_monitor
-import onchain_watch
 import ake_setup_monitor
 import zone_alert_monitor
 import journal_persistence
@@ -14061,8 +14059,6 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["signal_loop"] = signal_loop.STAGE1_INTERVAL_MIN * 60
     _job_expected_interval_sec["exit_tracker"] = signal_loop.EXIT_TRACKER_INTERVAL_MIN * 60
     _job_expected_interval_sec["bsc_wallet_monitor"] = bsc_wallet_monitor.POLL_INTERVAL_SEC
-    _job_expected_interval_sec["bank_setup_monitor"] = bank_setup_monitor.POLL_INTERVAL_SEC
-    _job_expected_interval_sec["onchain_watch"] = onchain_watch.POLL_INTERVAL_SEC
     _job_expected_interval_sec["ake_setup_monitor"] = ake_setup_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["zone_alert_monitor"] = zone_alert_monitor.POLL_INTERVAL_SEC
 
@@ -14223,22 +14219,11 @@ async def _start_pump_detector(app):
         seconds=bsc_wallet_monitor.POLL_INTERVAL_SEC,
         args=[app.bot],
     )
-    # СРОЧНЫЙ наряд владельца, 2026-07-15 -- условный SHORT-сетап BANKUSDT
-    # (CHoCH -> ретест -> инвалидация). См. bank_setup_monitor.py докстринг.
-    scheduler.add_job(
-        _heartbeat_wrapper("bank_setup_monitor", bank_setup_monitor.check_bank_setup),
-        "interval",
-        seconds=bank_setup_monitor.POLL_INTERVAL_SEC,
-        args=[app.bot],
-    )
-    # Владелец, 2026-07-17: разлок BANK сегодня -- мониторинг получателей ->
-    # биржевые депозиты. См. onchain_watch.py докстринг.
-    scheduler.add_job(
-        _heartbeat_wrapper("onchain_watch", onchain_watch.check_bank_unlock),
-        "interval",
-        seconds=onchain_watch.POLL_INTERVAL_SEC,
-        args=[app.bot],
-    )
+    # Владелец, 2026-07-19: BANK-сетап СНЯТ (мёртв -- 5-я волна обналичивания
+    # транзит->Binance 51 подтверждает завершение разлока). bank_setup_monitor.py
+    # (CHoCH/ретест SHORT-сетап) и onchain_watch.py (мониторинг разлока BANK ->
+    # биржи) архивированы, см. archive/README.md. Кейс закрыт в
+    # knowledge/METHODOLOGY_CORE.md §22.
     # СРОЧНЫЙ наряд владельца, 2026-07-15 -- владелец В ПОЗИЦИИ шорт AKE, единый
     # алерт-пакет (5 триггеров). См. ake_setup_monitor.py докстринг.
     scheduler.add_job(
