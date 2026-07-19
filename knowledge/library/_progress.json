@@ -34,9 +34,9 @@
       "note": "Демо TradingView Long/Short Position tool -- риск% -> размер позиции по R:R, уже 1-в-1 реализовано в bot.calc_position_size(). Новых правил нет."
     },
     "12_Практическии__модуль_Демо_торговля.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "paper_trading_backtest_simulator.md",
+      "batch": 14
     },
     "13. Индикаторы.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 63,
-  "last_batch": 13,
-  "last_updated": "2026-07-19T08:11:06.325653+00:00"
+  "done_count": 64,
+  "last_batch": 14,
+  "last_updated": "2026-07-19T08:23:35.796935+00:00"
 }
