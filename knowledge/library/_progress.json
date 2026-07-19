@@ -7,9 +7,9 @@
       "batch": null
     },
     "1. Вводныи_ урок.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "exchange_onboarding_order_types_leverage.md",
+      "batch": 10
     },
     "1.2.md": {
       "status": "done",
@@ -79,9 +79,9 @@
       "batch": 2
     },
     "2. Работа с Trading View.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "exchange_onboarding_order_types_leverage.md",
+      "batch": 10
     },
     "2.2.md": {
       "status": "pending",
@@ -174,9 +174,9 @@
       "batch": null
     },
     "3. Работа с Биржеи_.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "exchange_onboarding_order_types_leverage.md",
+      "batch": 10
     },
     "3.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 56,
-  "last_batch": 9,
-  "last_updated": "2026-07-18T13:21:07.099648+00:00"
+  "done_count": 59,
+  "last_batch": 10,
+  "last_updated": "2026-07-19T07:53:39.529132+00:00"
 }
