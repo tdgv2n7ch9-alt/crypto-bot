@@ -9586,7 +9586,15 @@ async def check_alerts(bot: Bot):
     chat_ids = subscribers.active_chat_ids()
     if not chat_ids: return
     try:
-        coins = get_all_coins()
+        # Владелец, #285-b (2026-07-19, живая находка): get_all_coins() на
+        # cache-miss синхронно дёргает CoinGecko (retry+circuit-breaker до
+        # 90+ секунд на rate-limit), блокируя весь event loop -- тот же
+        # класс регресса, что уже исправлен для send_scheduled() (см. её
+        # докстринг, идентичный комментарий) run_in_executor'ом, но
+        # check_alerts (5-мин job, тот же вызов) остался неисправленным --
+        # источник периодических watchdog/coarse-реконнект инцидентов.
+        loop = asyncio.get_event_loop()
+        coins = await loop.run_in_executor(None, get_all_coins)
         if not coins: return
         await check_pump_dump(bot, chat_ids, coins)
         await check_entry_zones(bot, chat_ids, coins)
