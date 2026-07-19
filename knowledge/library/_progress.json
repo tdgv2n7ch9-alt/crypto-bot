@@ -343,19 +343,19 @@
       "batch": 28
     },
     "Conference 09.02.23 Liquidity Provider..md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "liquidity_provider_conferences.md",
+      "batch": 47
     },
     "Conference 16.02.23 Liquidity Provider. 2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "liquidity_provider_conferences.md",
+      "batch": 47
     },
     "Conference 16.02.23 Liquidity Provider..md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "liquidity_provider_conferences.md",
+      "batch": 47
     },
     "Conference 26.02.23 Dova Lazarus. 1.md": {
       "status": "done",
@@ -364,9 +364,9 @@
       "note": "Живой Q&A форекс-разбор, низкое качество транскрипции. XLD-темплейт не идентифицирован однозначно. Главная ценность -- перекрёстная находка: inducement_swept живой в shadow-записях, расходится с §18.5 (smc_inducement мёртвый плейсхолдер) -- требует переверки кода."
     },
     "Conference 26.02.23 Dova Lazarus..md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "liquidity_provider_conferences.md",
+      "batch": 47
     },
     "FVG 1.md": {
       "status": "done",
@@ -413,9 +413,9 @@
       "batch": 40
     },
     "Lesson _4 Liquidity Provider. Фибоначчи. part 2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "instructor_e_fibonacci_lesson4_part2.md",
+      "batch": 46
     },
     "Lesson__1_Dova_Lazarus_Введение_в_Forex__Сессии__Брокеры__Новости.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 149,
-  "last_batch": 45,
-  "last_updated": "2026-07-19T10:51:17.189211+00:00"
+  "done_count": 154,
+  "last_batch": 47,
+  "last_updated": "2026-07-19T10:56:24.956284+00:00"
 }
