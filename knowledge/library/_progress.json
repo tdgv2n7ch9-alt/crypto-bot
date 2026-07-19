@@ -189,24 +189,24 @@
       "batch": null
     },
     "32. Бектест.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "backtest_streams_32_35_practice.md",
+      "batch": 26
     },
     "33. Бектест.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "backtest_streams_32_35_practice.md",
+      "batch": 26
     },
     "34. Бектест.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "backtest_streams_32_35_practice.md",
+      "batch": 26
     },
     "35. Бектест.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "backtest_streams_32_35_practice.md",
+      "batch": 26
     },
     "36 Стрим Работа в POI.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 76,
-  "last_batch": 25,
-  "last_updated": "2026-07-19T09:08:05.740018+00:00"
+  "done_count": 80,
+  "last_batch": 26,
+  "last_updated": "2026-07-19T09:11:59.931784+00:00"
 }
