@@ -229,9 +229,9 @@
       "batch": 2
     },
     "4. Рыночная структура Base.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "market_structure_base_advanced_stream7.md",
+      "batch": 11
     },
     "4.md": {
       "status": "done",
@@ -284,9 +284,9 @@
       "batch": null
     },
     "5. Рыночная структура_ Advanced.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "market_structure_base_advanced_stream7.md",
+      "batch": 11
     },
     "5.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 59,
-  "last_batch": 10,
-  "last_updated": "2026-07-19T07:53:39.529132+00:00"
+  "done_count": 61,
+  "last_batch": 11,
+  "last_updated": "2026-07-19T07:57:19.623437+00:00"
 }
