@@ -249,9 +249,9 @@
       "batch": null
     },
     "42. Стрим Продвинутыи_ Price Action.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "advanced_price_action_stream42.md",
+      "batch": 27
     },
     "43. Стрим Торговые сетапы.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 80,
-  "last_batch": 26,
-  "last_updated": "2026-07-19T09:11:59.931784+00:00"
+  "done_count": 81,
+  "last_batch": 27,
+  "last_updated": "2026-07-19T09:17:09.992926+00:00"
 }
