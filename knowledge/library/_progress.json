@@ -44,9 +44,9 @@
       "batch": 12
     },
     "14. Психология.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "trader_psychology_stream7.md",
+      "batch": 13
     },
     "15. Кластерныи_ анализ.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 62,
-  "last_batch": 12,
-  "last_updated": "2026-07-19T08:04:53.340686+00:00"
+  "done_count": 63,
+  "last_batch": 13,
+  "last_updated": "2026-07-19T08:11:06.325653+00:00"
 }
