@@ -139,9 +139,9 @@
       "batch": 22
     },
     "23. Стрим Практическии_ модуль.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "order_flow_pro_stream23_sl_placement.md",
+      "batch": 23
     },
     "24. Стрим Психология.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 73,
-  "last_batch": 22,
-  "last_updated": "2026-07-19T08:57:49.015117+00:00"
+  "done_count": 74,
+  "last_batch": 23,
+  "last_updated": "2026-07-19T09:00:49.681937+00:00"
 }
