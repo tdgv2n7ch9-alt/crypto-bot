@@ -372,14 +372,27 @@ def test_integrity_report_detects_duplicate_symbol_ts_key():
     assert report["duplicate_keys"][0]["count"] == 2
 
 
-def test_integrity_report_detects_out_of_order_ts():
+def test_integrity_report_detects_out_of_order_ts_same_symbol():
     records = [
         {"symbol": "BTCUSDT", "ts": 100},
-        {"symbol": "ETHUSDT", "ts": 50},   # раньше предыдущей -- нарушение порядка
+        {"symbol": "BTCUSDT", "ts": 50},   # раньше предыдущей записи ТОГО ЖЕ символа -- нарушение
         {"symbol": "BNBUSDT", "ts": 102},
     ]
     report = se.integrity_report(records)
     assert report["out_of_order_count"] == 1
+
+
+def test_integrity_report_cross_symbol_interleave_not_out_of_order():
+    """Владелец, задача #281 (2026-07-19, живая находка JASMY/SOL 51мс):
+    разные символы пишутся независимо и не обязаны идти по возрастанию ts
+    друг относительно друга -- межсимвольное чередование НЕ нарушение порядка."""
+    records = [
+        {"symbol": "JASMYUSDT", "ts": 100.42},
+        {"symbol": "SOLUSDT", "ts": 100.37},  # раньше предыдущей строки, но ДРУГОЙ символ
+        {"symbol": "BNBUSDT", "ts": 102},
+    ]
+    report = se.integrity_report(records)
+    assert report["out_of_order_count"] == 0
 
 
 def test_integrity_report_detects_missing_symbol_or_ts():

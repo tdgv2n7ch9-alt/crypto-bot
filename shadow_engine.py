@@ -1078,6 +1078,23 @@ def _write_local(record: dict) -> bool:
     `out_of_order=True` (владелец: "не терять данные"). Append-only: строки
     не переписываются, только добавляются.
 
+    Владелец, задача #281 (2026-07-19, живая находка -- запись JASMY/SOL,
+    ts разница 51мс, ~19:25:08 UTC 18.07): монотонность раньше сверялась с
+    `records[-1]` -- ПОСЛЕДНЕЙ записью В ФАЙЛЕ, независимо от символа. Файл
+    -- общий для ВСЕХ символов и контуров (auto_derivatives_shadow,
+    ls_contrarian_shadow и т.д.), каждый пишет асинхронно на своём
+    расписании -- при живой проверке подтверждено: SOL/ls_contrarian_shadow
+    (ts=...708.37) записался сразу ПОСЛЕ JASMY/auto_options_shadow
+    (ts=...708.42) -- две НЕЗАВИСИМЫЕ, никак не связанные друг с другом
+    последовательности данных (разные символы), но глобальная проверка
+    "последняя строка файла" сравнила их ts напрямую и ложно пометила SOL
+    как `out_of_order=True`, хотя внутри истории самого SOL порядок ничем
+    не нарушен. Фикс: сравниваем ts новой записи с последней записью ТОГО
+    ЖЕ символа (ищем назад по `records`), не с последней строкой файла --
+    межсимвольное чередование асинхронных писателей больше не создаёт
+    ложных срабатываний. Настоящее нарушение порядка (тот же символ,
+    ts меньше предыдущей его же записи) по-прежнему ловится и помечается.
+
     Владелец, задача #273 (2026-07-17, живая находка P0/P1): весь
     load-check-append-write под `WRITE_LOCK_FILE` (blocking flock, не
     NB -- дропнуть запись хуже, чем подождать) -- защита от гонки ДВУХ
@@ -1110,11 +1127,15 @@ def _write_local(record: dict) -> bool:
             return True
 
         records = _load_local()
-        if records:
-            last_ts = records[-1].get("ts")
-            new_ts = record.get("ts")
-            if last_ts is not None and new_ts is not None and new_ts < last_ts:
-                record = {**record, "out_of_order": True}
+        new_ts = record.get("ts")
+        symbol = record.get("symbol")
+        if records and new_ts is not None:
+            last_same_symbol = next(
+                (r for r in reversed(records) if r.get("symbol") == symbol), None)
+            if last_same_symbol is not None:
+                last_ts = last_same_symbol.get("ts")
+                if last_ts is not None and new_ts < last_ts:
+                    record = {**record, "out_of_order": True}
         records.append(record)
         ok = _atomic_write_json(SHADOW_FILE, {"schema_version": 1, "records": records})
         if not ok:
@@ -1159,9 +1180,13 @@ def integrity_report(records: list) -> dict:
       - duplicate_count/duplicate_keys: повторяющиеся (symbol, ts) -- при корректной
         работе _dedup_key() в _sync_to_github_sync() дублей быть не должно; находка
         означает баг где-то в цепочке записи, не в самом чек-скрипте.
-      - out_of_order_count: сколько записей идут с ts МЕНЬШЕ предыдущей (записи
-        пишутся последовательно по времени -- нарушение подряд подсказывает на
-        неупорядоченный merge при синке).
+      - out_of_order_count: сколько записей идут с ts МЕНЬШЕ предыдущей ЗАПИСИ
+        ТОГО ЖЕ symbol (владелец, задача #281, 2026-07-19, живая находка
+        JASMY/SOL 51мс: сравнение с ГЛОБАЛЬНОЙ предыдущей строкой файла, без
+        учёта символа, ложно считало межсимвольное чередование асинхронных
+        писателей "нарушением порядка" -- разные символы пишутся независимо
+        и не обязаны идти по возрастанию ts друг относительно друга; см.
+        тот же фикс и его докстринг в `_write_local()`).
       - total: общее количество записей.
     Пустой/None список -- честно total=0, без ошибок."""
     records = records or []
@@ -1179,16 +1204,18 @@ def integrity_report(records: list) -> dict:
         if count > 1:
             dup_keys.append({"key": key, "count": count})
     out_of_order = 0
-    prev_ts = None
+    prev_ts_by_symbol = {}
     for r in records:
         if not isinstance(r, dict):
             continue
         ts = r.get("ts")
+        symbol = r.get("symbol")
         if ts is None:
             continue
+        prev_ts = prev_ts_by_symbol.get(symbol)
         if prev_ts is not None and ts < prev_ts:
             out_of_order += 1
-        prev_ts = ts
+        prev_ts_by_symbol[symbol] = ts
     return {
         "total": total,
         "schema_ok": len(schema_bad) == 0,

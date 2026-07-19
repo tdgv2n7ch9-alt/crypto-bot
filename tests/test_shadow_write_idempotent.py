@@ -214,14 +214,18 @@ def test_write_local_index_invalidated_when_shadow_file_changes(monkeypatch, tmp
 
 def test_write_local_flags_out_of_order_without_dropping_record(monkeypatch, tmp_path):
     """Владелец: "если ts новой записи < последней -- писать, но помечать
-    out_of_order=true (не терять данные)"."""
+    out_of_order=true (не терять данные)". Владелец, задача #281 (2026-07-19,
+    живая находка JASMY/SOL 51мс): монотонность теперь сверяется с последней
+    записью ТОГО ЖЕ символа, не с последней строкой файла -- этот тест
+    поэтому использует ДВЕ записи ОДНОГО символа, иначе (разные символы)
+    больше не флагуется (см. тест ниже, cross-symbol regression guard)."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
     monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
 
     se._write_local({"symbol": "AKEUSDT", "ts": 200.0, "type": "pump_reversal_shadow"})
-    se._write_local({"symbol": "BTCUSDT", "ts": 100.0, "type": "pump_reversal_shadow"})  # ts < предыдущей
+    se._write_local({"symbol": "AKEUSDT", "ts": 100.0, "type": "ls_contrarian_shadow"})  # ts < предыдущей ТОГО ЖЕ символа
 
     with open(se.SHADOW_FILE) as f:
         import json
@@ -229,3 +233,25 @@ def test_write_local_flags_out_of_order_without_dropping_record(monkeypatch, tmp
     assert len(data["records"]) == 2  # оба записаны, ничего не потеряно
     assert data["records"][1].get("out_of_order") is True
     assert data["records"][0].get("out_of_order") is not True
+
+
+def test_write_local_cross_symbol_interleave_not_flagged_out_of_order(monkeypatch, tmp_path):
+    """Владелец, задача #281 (2026-07-19, живая находка -- запись JASMY/SOL,
+    ts разница 51мс): два РАЗНЫХ символа, независимо пишущих асинхронно,
+    не обязаны идти по возрастанию ts друг относительно друга -- раньше
+    глобальное сравнение с `records[-1]` ложно флагало это как
+    `out_of_order=True`, регресс-замок на это."""
+    monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
+    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "_UID_INDEX", None)
+    monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
+
+    se._write_local({"symbol": "JASMYUSDT", "ts": 1784402708.4224718, "type": "auto_options_shadow"})
+    se._write_local({"symbol": "SOLUSDT", "ts": 1784402708.3715832, "type": "ls_contrarian_shadow"})
+
+    with open(se.SHADOW_FILE) as f:
+        import json
+        data = json.load(f)
+    assert len(data["records"]) == 2
+    assert data["records"][0].get("out_of_order") is not True
+    assert data["records"][1].get("out_of_order") is not True  # ДРУГОЙ символ -- не нарушение порядка
