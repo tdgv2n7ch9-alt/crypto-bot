@@ -18500,3 +18500,20 @@ run_in_executor)**: `signal_loop.py::run_signal_loop()` переписан --
 bot.py). Полный `pytest`: 1697 passed, 1 skipped -- без регрессий (нет
 существующих тестов на `run_signal_loop`/`_stage1_screen`/`_stage2_check`,
 риск минимален). Деплой и живая верификация -- следующим шагом.
+
+**ДЕПЛОЙ**: commit `310605f8` (signal_loop.py + PROGRESS.md), `tools/deploy.sh`
+-> SUCCESS, deployment `549bd637-1e5e-473e-8a95-a29c83390ac0`, live 15:41:35.
+Живая проверка контейнера (`railway logs --since 5m`): "Application
+started"/"Scheduler started" 12:40:25 UTC, чисто, без traceback ПОСЛЕ этой
+метки (traceback'и в этом же выводе относятся к warm-up ДО отметки
+старта -- RUG-CACHE/CoinGecko circuit breaker при прогреве кэша, не к
+рабочему циклу). Новое 60-мин окно наблюдения запущено (`/tmp/watch_285b_v2.sh`,
+проверка каждые 5 мин на coarse-разрыв/maximum-instances/traceback, до
+~16:41 local). Вердикт + фикс + статус отправлены владельцу в Telegram
+напрямую (`requests`, `httpx`-логгер приглушён по CLAUDE.md п.4) --
+доставлено (HTTP 200).
+
+Дальше по очереди (владелец, "shadow-аналитику начинай только после
+честного вердикта"): вердикт дан честно и обоснованно логами -> после
+завершения нового 60-мин окна -- shadow-аналитика (пересчёт исходов по
+контурам), затем регрессы, как и договаривались.
