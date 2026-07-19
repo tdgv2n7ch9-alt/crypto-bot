@@ -504,9 +504,9 @@
       "batch": null
     },
     "dwm.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "dwm_extremes_strategy.md",
+      "batch": 41
     },
     "lesson 4.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 139,
-  "last_batch": 40,
-  "last_updated": "2026-07-19T10:32:39.957020+00:00"
+  "done_count": 140,
+  "last_batch": 41,
+  "last_updated": "2026-07-19T10:37:19.824270+00:00"
 }
