@@ -2,9 +2,9 @@
   "total": 160,
   "files": {
     "-4712541865087879273.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "dated_market_review_bonus_file.md",
+      "batch": 19
     },
     "1. Вводныи_ урок.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 69,
-  "last_batch": 18,
-  "last_updated": "2026-07-19T08:42:17.439183+00:00"
+  "done_count": 70,
+  "last_batch": 19,
+  "last_updated": "2026-07-19T08:45:50.918600+00:00"
 }
