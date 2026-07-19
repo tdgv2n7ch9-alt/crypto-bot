@@ -89,9 +89,9 @@
       "batch": null
     },
     "2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "lesson2_conference_liquidity_imbalance.md",
+      "batch": 37
     },
     "2023-03-01 11-53-24.md": {
       "status": "pending",
@@ -423,9 +423,9 @@
       "batch": null
     },
     "Lesson__2_Cryptomannn_Cтруктура_Синхронизация_Ликвидность_Частичное.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "course_c_lesson2_structure_sync.md",
+      "batch": 36
     },
     "Lesson__3_Dova_Lazarus_Открытия__контекст_открытии_.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 134,
-  "last_batch": 35,
-  "last_updated": "2026-07-19T09:37:00.933086+00:00"
+  "done_count": 136,
+  "last_batch": 37,
+  "last_updated": "2026-07-19T10:28:04.990879+00:00"
 }
