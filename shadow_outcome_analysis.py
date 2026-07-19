@@ -226,6 +226,25 @@ def format_comparison_report(comparison: dict, now_ts: float = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _dedup_by_trade(matched: list) -> list:
+    """Один shadow-снимок на сделку -- последний по времени (`ts`). Владелец,
+    2026-07-19 (живая находка при ретро-проверке сегодняшнего среза): если
+    `send_scheduled`/`signal_loop` пере-логировали shadow-снимок ОДНОЙ и той
+    же ещё не закрытой сделки на нескольких циклах ДО её закрытия, у одного
+    `journal_id` оказывалось НЕСКОЛЬКО записей в `matched` -- WR/PF считали
+    её несколько раз (в реальном срезе 20.07 -- 20 строк на деле были 15
+    разными сделками, PF на дублирующихся строках сдвигался 0.63 -> 0.58 при
+    честном пересчёте). Берём снимок с максимальным `ts` на `journal_id` --
+    он видел сделку ближе всего к моменту её реального закрытия."""
+    latest_by_jid = {}
+    for m in matched:
+        jid = m["match"]["journal_id"]
+        cur = latest_by_jid.get(jid)
+        if cur is None or m["shadow"].get("ts", 0) > cur["shadow"].get("ts", 0):
+            latest_by_jid[jid] = m
+    return list(latest_by_jid.values())
+
+
 def closed_outcomes_by_contour(shadow_records: list, journal_records: dict,
                                 min_outcomes: int = 20) -> dict:
     """П-Отчёт исходов (владелец, ночное задание 14->15.07, Пакет 2) -- таблица
@@ -235,14 +254,18 @@ def closed_outcomes_by_contour(shadow_records: list, journal_records: dict,
     Определение "по контуру" (честно, не самоочевидно): базовая выборка --
     ВСЕ promoted_live=True shadow-записи, сопоставленные с журнальной записью
     с известным терминальным исходом (та же выборка, что
-    build_live_vs_shadow_comparison() строит для "live_all"). Контурные строки
-    (tz13/П05/П09) -- ПОДМНОЖЕСТВО этой же выборки, отфильтрованное по
-    присутствию соответствующего поля в shadow-записи (тот же признак, что
+    build_live_vs_shadow_comparison() строит для "live_all"), ДЕДУПЛИЦИРОВАННАЯ
+    по сделке (`_dedup_by_trade()` -- см. её докстринг про находку 2026-07-19,
+    n=20 строк = 15 сделок). Контурные строки (tz13/П05/П09) -- ПОДМНОЖЕСТВО
+    этой же (уже дедуплицированной) выборки, отфильтрованное по присутствию
+    соответствующего поля в shadow-записи (тот же признак, что
     shadow_engine.contour_readiness_summary() использует для n) -- отвечает на
     вопрос "как отработали РЕАЛЬНО ОТПРАВЛЕННЫЕ сделки, для которых этот
     контур тоже был посчитан", НЕ "как отработал бы контур, если бы решал
     сам" (контуры tz13/П05/П09 сейчас НЕ влияют на promoted/gate, честно не
-    выдаём их как самостоятельный результат)."""
+    выдаём их как самостоятельный результат). `min_outcomes`-гейт ("ready"/
+    "remaining") считается по УНИКАЛЬНЫМ сделкам -- дедуп идёт ДО построения
+    строк, не после."""
     matched = []
     for rec in shadow_records:
         if not rec.get("promoted_live"):
@@ -251,6 +274,7 @@ def closed_outcomes_by_contour(shadow_records: list, journal_records: dict,
         if not m["matched"] or m["outcome"] not in OUTCOME_STATUSES:
             continue
         matched.append({"shadow": rec, "match": m})
+    matched = _dedup_by_trade(matched)
 
     def _row(subset):
         wr = _win_rate(subset)

@@ -285,6 +285,79 @@ def test_closed_outcomes_by_contour_oi_shadow_error_excluded():
     assert report["patch09_oi"]["closed"] == 0  # error-запись не считается присутствием
 
 
+# ── _dedup_by_trade / дедуп повторных shadow-снимков одной сделки ────────────
+# Владелец, 2026-07-19: ретро-проверка живого среза 20.07 нашла, что
+# send_scheduled/signal_loop пере-логируют shadow-снимок одной ещё не
+# закрытой сделки на нескольких циклах -- в реальных данных 20 "закрытых"
+# строк оказались 15 разными сделками (WR совпал случайно, PF сдвинулся
+# 0.63 -> 0.58 при честном пересчёте).
+
+def test_dedup_by_trade_keeps_latest_snapshot_per_trade():
+    matched = [
+        {"shadow": {"ts": 100.0, "tz13_score": None}, "match": {"journal_id": 1}},
+        {"shadow": {"ts": 200.0, "tz13_score": 75}, "match": {"journal_id": 1}},  # позже, есть tz13
+        {"shadow": {"ts": 150.0, "tz13_score": 50}, "match": {"journal_id": 2}},
+    ]
+    deduped = soa._dedup_by_trade(matched)
+    assert len(deduped) == 2
+    kept = {m["match"]["journal_id"]: m for m in deduped}
+    assert kept[1]["shadow"]["ts"] == 200.0  # последний по времени снимок сделки 1
+    assert kept[1]["shadow"]["tz13_score"] == 75
+
+
+def test_closed_outcomes_by_contour_dedups_repeated_trade_snapshots():
+    """Фикстура повторяет форму реального среза 20.07 (20 строк, 15 сделок):
+    одна сделка залогирована 2 раза (win), две сделки -- по 3 раза (loss),
+    остальные 12 сделок -- по одному разу (2 win + 10 loss) -> итого 20 строк
+    / 15 сделок / 3 win = WR 20.0%, совпадает с реальным срезом."""
+    shadows, journal = [], {}
+
+    def _add(jid, symbol, outcome, n_snapshots):
+        for i in range(n_snapshots):
+            s, j = _closed_shadow_rec(symbol, "long", 1000.0 + jid * 10 + i, outcome, jid)
+            shadows.append(s)
+            journal.update(j)
+
+    _add(1, "DUPWIN", "TP1_HIT", 2)     # 1 сделка, 2 строки, win
+    _add(2, "DUPLOSSA", "SL_HIT", 3)    # 1 сделка, 3 строки, loss
+    _add(3, "DUPLOSSB", "SL_HIT", 3)    # 1 сделка, 3 строки, loss
+    for jid in range(4, 6):             # 2 ещё win, по 1 строке
+        _add(jid, f"WIN{jid}", "TP1_HIT", 1)
+    for jid in range(6, 16):            # 10 ещё loss, по 1 строке
+        _add(jid, f"LOSS{jid}", "SL_HIT", 1)
+
+    assert len(shadows) == 20  # форма реальных данных: 20 строк
+
+    report = soa.closed_outcomes_by_contour(shadows, journal, min_outcomes=20)
+    assert report["live"]["closed"] == 15          # но 15 разных сделок
+    assert report["live"]["win_rate_pct"] == 20.0   # 3 win / 15
+
+
+def test_closed_outcomes_by_contour_dedup_gate_counts_unique_trades_not_rows():
+    """20 строк на 15 сделках НЕ должны давать ready=True на гейте min_outcomes=20 --
+    без дедупа n=20 строк прошло бы гейт, с дедупом -- честные 15 < 20, не готово."""
+    shadows, journal = [], {}
+
+    def _add(jid, symbol, outcome, n_snapshots):
+        for i in range(n_snapshots):
+            s, j = _closed_shadow_rec(symbol, "long", 1000.0 + jid * 10 + i, outcome, jid)
+            shadows.append(s)
+            journal.update(j)
+
+    _add(1, "DUPWIN", "TP1_HIT", 2)
+    _add(2, "DUPLOSSA", "SL_HIT", 3)
+    _add(3, "DUPLOSSB", "SL_HIT", 3)
+    for jid in range(4, 6):
+        _add(jid, f"WIN{jid}", "TP1_HIT", 1)
+    for jid in range(6, 16):
+        _add(jid, f"LOSS{jid}", "SL_HIT", 1)
+
+    report = soa.closed_outcomes_by_contour(shadows, journal, min_outcomes=20)
+    assert report["live"]["closed"] == 15
+    assert report["live"]["ready"] is False   # 15 уникальных < 20 -- честный гейт по сделкам
+    assert report["live"]["remaining"] == 5
+
+
 # ── format_closed_outcomes_lines ──
 
 def test_format_closed_outcomes_lines_has_all_four_rows():
