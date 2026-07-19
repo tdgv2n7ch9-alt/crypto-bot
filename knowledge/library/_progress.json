@@ -428,9 +428,9 @@
       "batch": 36
     },
     "Lesson__3_Dova_Lazarus_Открытия__контекст_открытии_.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "instructor_e_lesson3_opens_context.md",
+      "batch": 45
     },
     "Lesson__5_Liquidity_Provider_AMD_SFP_Открытие_позиции_во_время_формирования.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 148,
-  "last_batch": 44,
-  "last_updated": "2026-07-19T10:46:33.028873+00:00"
+  "done_count": 149,
+  "last_batch": 45,
+  "last_updated": "2026-07-19T10:51:17.189211+00:00"
 }
