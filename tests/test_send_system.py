@@ -488,3 +488,73 @@ def test_startup_integrity_check_uses_send_system_non_critical(monkeypatch, tmp_
     assert len(calls) == 1
     assert calls[0]["critical"] is False
     assert calls[0]["kw"].get("parse_mode") == "Markdown"
+
+
+# ── Владелец, 2026-07-19: 3 watchdog-алерта глотали собственный сбой        ──
+# отправки без лога, а дедуп-флаг уже был выставлен ДО send_system() -- сбой ──
+# Telegram именно в момент нестабильности инфраструктуры навсегда глушил    ──
+# конкретный алерт до рестарта процесса. Фикс -- log.error + сброс флага.  ──
+
+def test_watchdog_job_alert_send_failure_logs_and_resets_flag(monkeypatch, caplog):
+    """send_system() падает -- алерт не потерян навсегда: залогировано,
+    _job_alerted_stale не остаётся выставленным, следующий тик повторит
+    попытку."""
+    async def _failing_send_system(bot_arg, text, critical=False, **kw):
+        raise RuntimeError("Telegram недоступен")
+
+    monkeypatch.setattr(bot, "send_system", _failing_send_system)
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    bot._job_alerted_stale.clear()
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {"testjob": 60})
+    monkeypatch.setattr(bot, "_job_heartbeats", {})
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+    import logging
+    with caplog.at_level(logging.ERROR):
+        _run(bot.run_watchdog(MagicMock()))
+    assert "testjob" not in bot._job_alerted_stale
+    assert any("testjob" in r.message for r in caplog.records)
+
+
+def test_watchdog_shadow_write_alert_send_failure_logs_and_resets_flag(monkeypatch, caplog):
+    """Тот же класс фикса для shadow-write алерта."""
+    async def _failing_send_system(bot_arg, text, critical=False, **kw):
+        raise RuntimeError("Telegram недоступен")
+
+    monkeypatch.setattr(bot, "send_system", _failing_send_system)
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    bot._job_alerted_stale.clear()
+    bot._shadow_write_alerted = False
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {})
+    monkeypatch.setattr(bot, "_job_heartbeats", {"send_scheduled": {"ts": time_module().time()}})
+    monkeypatch.setattr(bot.shadow_engine, "get_last_send_scheduled_write_ts",
+                         lambda: time_module().time() - bot.SHADOW_WRITE_ALERT_THRESHOLD_SEC - 100)
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+    import logging
+    with caplog.at_level(logging.ERROR):
+        _run(bot.run_watchdog(MagicMock()))
+    assert bot._shadow_write_alerted is False
+    assert any("shadow-write" in r.message for r in caplog.records)
+
+
+def test_watchdog_source_alert_send_failure_logs_and_resets_flag(monkeypatch, caplog):
+    """Тот же класс фикса для алерта источника данных."""
+    async def _failing_send_system(bot_arg, text, critical=False, **kw):
+        raise RuntimeError("Telegram недоступен")
+
+    monkeypatch.setattr(bot, "send_system", _failing_send_system)
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    bot._job_alerted_stale.clear()
+    bot._source_alerted.clear()
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {})
+    monkeypatch.setattr(bot, "_job_heartbeats", {})
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {
+        "testsource": {"consecutive_failures": bot._SOURCE_ALERT_THRESHOLD, "last_error": "timeout"},
+    })
+    import logging
+    with caplog.at_level(logging.ERROR):
+        _run(bot.run_watchdog(MagicMock()))
+    assert "testsource" not in bot._source_alerted
+    assert any("testsource" in r.message for r in caplog.records)

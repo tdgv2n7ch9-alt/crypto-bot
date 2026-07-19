@@ -960,8 +960,15 @@ async def run_watchdog(bot: Bot):
                     f"молча -- проверь /health.",
                     critical=True,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # Владелец (2026-07-19, живая находка): раньше сбой ОТПРАВКИ самого
+                # watchdog-алерта глотался молча, а флаг дедупа уже был выставлен
+                # ВЫШЕ -- то есть сбой Telegram именно в момент нестабильности
+                # инфраструктуры навсегда глушил алерт по этому имени до рестарта
+                # процесса. Теперь: лог + сброс флага, следующий тик run_watchdog
+                # (через WATCHDOG_INTERVAL_MIN) честно повторит попытку отправки.
+                log.error(f"run_watchdog: отправка алерта о «{name}» не удалась: {e}")
+                _job_alerted_stale.discard(name)
 
     # Shadow-поток (владелец "да" 2026-07-13, находка "молчал 16+ часов незамеченным"):
     # send_scheduled сам по себе может исправно тикать по heartbeat выше, но его
@@ -988,8 +995,12 @@ async def run_watchdog(bot: Bot):
                     f"проверь /stats и `railway logs` на 'log_send_scheduled_shadow_async'.",
                     critical=True,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # Владелец (2026-07-19): та же находка, что и для job-heartbeat
+                # алерта выше -- лог + сброс флага, чтобы сбой самой отправки не
+                # заглушил это предупреждение до следующего восстановления.
+                log.error(f"run_watchdog: отправка shadow-write алерта не удалась: {e}")
+                _shadow_write_alerted = False
         elif last_shadow_ts and shadow_age <= SHADOW_WRITE_ALERT_THRESHOLD_SEC:
             _shadow_write_alerted = False  # восстановилось -- сбросить, как остальные watchdog-флаги
 
@@ -1012,8 +1023,11 @@ async def run_watchdog(bot: Bot):
                     f"подряд. Последняя ошибка: {status.get('last_error') or '—'}. Проверь ключ/квоту "
                     f"(/health).",
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # Владелец (2026-07-19): та же находка, что и для остальных двух
+                # watchdog-алертов -- лог + сброс флага дедупа на сбой отправки.
+                log.error(f"run_watchdog: отправка алерта об источнике «{name}» не удалась: {e}")
+                _source_alerted.discard(name)
 
 
 DEPLOY_STALE_THRESHOLD_SEC = 15 * 60  # "Пакетный ритм", живая находка 2026-07-11:
@@ -1857,7 +1871,22 @@ def get_supertrend_signal(symbol: str) -> dict:
 
     if not candles or len(candles) < 20:
         log.warning(f"Supertrend:    {symbol}")
-        return {"direction": 1, "last_signal": None, "label": "", "current_price": 0}
+        # Владелец (2026-07-19, живая находка -- KeyError 'pct_since_signal' на
+        # тонких символах в check_supertrend_signals()): этот early-return раньше
+        # нёс усечённый словарь (4 ключа из 10) и ХАРДКОДИЛ direction=1 (BUY)
+        # независимо от истинного тренда -- если предыдущий известный tick для
+        # символа был SELL (0), а на ЭТОМ тике данных не хватило, разница
+        # 0 vs захардкоженного 1 выглядела как "разворот в BUY" и падала на
+        # pct_since_signal (отсутствовал в этом словаре) ДО того, как ложный
+        # сигнал успевал уйти дальше. Честный набор: ВСЕ ключи полного возврата
+        # присутствуют (не роняет .get()/индексацию у вызывающей стороны),
+        # direction=None -- явный маркер "нет данных", не выдуманное BUY.
+        return {
+            "direction": None, "supertrend_value": None, "label": "",
+            "last_signal": None, "last_signal_price": None, "last_signal_time": None,
+            "pct_since_signal": None, "current_price": 0,
+            "st_values": [], "candles": [],
+        }
 
     st = calc_supertrend(candles, period=10, multiplier=3.0)
 
@@ -7417,12 +7446,19 @@ async def check_supertrend_signals(bot, chat_ids, coins):
             # блокирующий вызов через run_in_executor, порядок/логика не меняются.
             st_data = await loop.run_in_executor(None, get_supertrend_signal, sym)
             new_dir = st_data["direction"]
+            # Владелец (2026-07-19, живая находка): direction=None -- честный
+            # маркер "недостаточно свечей на этом тике" (см. get_supertrend_
+            # signal()), НЕ реальное направление. Пропускаем тик БЕЗ обновления
+            # supertrend_cache -- следующий успешный тик сравнится с последним
+            # РЕАЛЬНЫМ направлением, а не молча перезапишет базу на "нет данных".
+            if new_dir is None:
+                continue
             old_dir = supertrend_cache.get(sym)
 
-            #  
+            #
             supertrend_cache[sym] = new_dir
 
-            #    
+            #
             if old_dir is None or old_dir == new_dir:
                 continue
 

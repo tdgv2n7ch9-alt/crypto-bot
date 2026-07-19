@@ -234,3 +234,44 @@ def test_check_supertrend_signals_real_time_shows_formatted_time_not_na(monkeypa
     assert "13.07 15:30 UTC+3" in text
     assert "(н/д)" not in text
     assert "()" not in text
+
+
+# ── Владелец, 2026-07-19: KeyError 'pct_since_signal' на тонких символах --
+# get_supertrend_signal() возвращал урезанный словарь (4 из 10 ключей) и
+# хардкодил direction=1 (BUY) при нехватке 4h-свечей (< 20), маскируя
+# истинное отсутствие данных под реальный сигнал. ────────────────────────
+
+def test_get_supertrend_signal_thin_candles_returns_honest_none_direction(monkeypatch):
+    """< 20 свечей (символ только что залистился/низкая ликвидность) --
+    ДОЛЖЕН вернуть полный словарь (все 10 ключей, не роняет .get()/индексацию
+    у вызывающей стороны) с direction=None (честное "нет данных"), НЕ
+    захардкоженный direction=1 (BUY)."""
+    monkeypatch.setattr(bot, "get_binance_ohlc",
+                         lambda sym, interval="4h", limit=100: _candles(n=5))
+    result = bot.get_supertrend_signal("THIN")
+    assert result["direction"] is None
+    assert result["pct_since_signal"] is None
+    assert result["current_price"] == 0
+    assert result["label"] == ""
+
+
+def test_check_supertrend_signals_skips_thin_symbol_no_false_reversal(monkeypatch):
+    """Живой баг: символ раньше был SELL (кэш=0), на этом тике данных не
+    хватило -- до фикса это ловилось как "разворот в BUY" (0 != захардкоженный
+    1) и падало на pct_since_signal. После фикса: тик тихо пропускается, БЕЗ
+    алерта, БЕЗ падения, кэш НЕ перезаписывается на None (следующий реальный
+    тик сравнится с последним настоящим направлением, не потеряет базу)."""
+    monkeypatch.setattr(bot, "get_supertrend_signal", lambda sym: {
+        "direction": None, "supertrend_value": None, "label": "",
+        "last_signal": None, "last_signal_price": None, "last_signal_time": None,
+        "pct_since_signal": None, "current_price": 0, "st_values": [], "candles": [],
+    })
+    bot.supertrend_cache.clear()
+    bot.supertrend_cache["THIN"] = 0  # предыдущий реальный SELL
+
+    coin = {"symbol": "THIN", "slug": "thin", "quote": {"USDT": {"volume_24h": 1_000_000}}}
+    fake_bot = _FakeBot()
+    asyncio.run(bot.check_supertrend_signals(fake_bot, {123}, [coin]))
+
+    assert fake_bot.sent == []
+    assert bot.supertrend_cache["THIN"] == 0
