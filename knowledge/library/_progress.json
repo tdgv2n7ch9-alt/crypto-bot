@@ -39,9 +39,9 @@
       "batch": null
     },
     "13. Индикаторы.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "indicators_volume_rsi_atr_sessions.md",
+      "batch": 12
     },
     "14. Психология.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 61,
-  "last_batch": 11,
-  "last_updated": "2026-07-19T07:57:19.623437+00:00"
+  "done_count": 62,
+  "last_batch": 12,
+  "last_updated": "2026-07-19T08:04:53.340686+00:00"
 }
