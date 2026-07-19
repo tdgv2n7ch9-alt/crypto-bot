@@ -489,19 +489,19 @@
       "note": "Чистый UI-тур TradingView (интерфейс, не методика) -- 0 торговых правил. Нет прямого соответствия модулю бота."
     },
     "conference 1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "conferences_1_5_15jan.md",
+      "batch": 48
     },
     "conference 15 01 23.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "conferences_1_5_15jan.md",
+      "batch": 48
     },
     "conference 5.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "conferences_1_5_15jan.md",
+      "batch": 48
     },
     "dwm.md": {
       "status": "done",
@@ -514,19 +514,19 @@
       "batch": 2
     },
     "lesson 6 part 2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "lesson6_context_weekly_profiles.md",
+      "batch": 49
     },
     "lesson 6 part1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "lesson6_context_weekly_profiles.md",
+      "batch": 49
     },
     "lesson 8.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "lesson6_context_weekly_profiles.md",
+      "batch": 49
     },
     "ob2.md": {
       "status": "done",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 154,
-  "last_batch": 47,
-  "last_updated": "2026-07-19T10:56:24.956284+00:00"
+  "done_count": 160,
+  "last_batch": 49,
+  "last_updated": "2026-07-19T10:59:19.682441+00:00"
 }
