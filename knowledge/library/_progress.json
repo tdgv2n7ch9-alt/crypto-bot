@@ -49,9 +49,9 @@
       "batch": 13
     },
     "15. Кластерныи_ анализ.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "cluster_delta_order_flow.md",
+      "batch": 15
     },
     "16. Фундаментальныи_ анализ.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 64,
-  "last_batch": 14,
-  "last_updated": "2026-07-19T08:23:35.796935+00:00"
+  "done_count": 65,
+  "last_batch": 15,
+  "last_updated": "2026-07-19T08:26:10.040348+00:00"
 }
