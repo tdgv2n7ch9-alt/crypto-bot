@@ -149,9 +149,9 @@
       "batch": null
     },
     "25. Стрим Supply_Demand.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "supply_demand_origin_rto.md",
+      "batch": 20
     },
     "26. Стрим AMD_Wyckoff Часть 1.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 70,
-  "last_batch": 19,
-  "last_updated": "2026-07-19T08:45:50.918600+00:00"
+  "done_count": 71,
+  "last_batch": 20,
+  "last_updated": "2026-07-19T08:49:32.357759+00:00"
 }
