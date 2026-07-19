@@ -328,19 +328,19 @@
       "batch": 2
     },
     "Binance 1.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "binance_exchange_ui_tour.md",
+      "batch": 28
     },
     "Binance 2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "binance_exchange_ui_tour.md",
+      "batch": 28
     },
     "Binance 3.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "binance_exchange_ui_tour.md",
+      "batch": 28
     },
     "Conference 09.02.23 Liquidity Provider..md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 81,
-  "last_batch": 27,
-  "last_updated": "2026-07-19T09:17:09.992926+00:00"
+  "done_count": 84,
+  "last_batch": 28,
+  "last_updated": "2026-07-19T09:19:19.657862+00:00"
 }
