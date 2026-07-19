@@ -239,9 +239,9 @@
       "batch": 2
     },
     "40. Стрим SMT.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "smt_divergence_stream40.md",
+      "batch": 25
     },
     "41. Стрим Практическии_ модуль.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 75,
-  "last_batch": 24,
-  "last_updated": "2026-07-19T09:04:51.466969+00:00"
+  "done_count": 76,
+  "last_batch": 25,
+  "last_updated": "2026-07-19T09:08:05.740018+00:00"
 }
