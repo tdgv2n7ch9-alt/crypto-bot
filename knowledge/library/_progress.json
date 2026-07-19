@@ -164,9 +164,9 @@
       "batch": 2
     },
     "28_Стрим_Индикаторы_и_особенности_торговли_FX.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "fx_specific_sessions_propfirms.md",
+      "batch": 24
     },
     "29. Стрим Торговые сетапы.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 74,
-  "last_batch": 23,
-  "last_updated": "2026-07-19T09:00:49.681937+00:00"
+  "done_count": 75,
+  "last_batch": 24,
+  "last_updated": "2026-07-19T09:04:51.466969+00:00"
 }
