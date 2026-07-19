@@ -84,9 +84,9 @@
       "batch": 10
     },
     "2.2.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "lesson2_conference_continuation.md",
+      "batch": 42
     },
     "2.md": {
       "status": "done",
@@ -94,19 +94,19 @@
       "batch": 37
     },
     "2023-03-01 11-53-24.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "dated_stream_2023_03_01.md",
+      "batch": 43
     },
     "2023-03-01 13-42-22_Trim.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "dated_stream_2023_03_01.md",
+      "batch": 43
     },
     "2023-03-01 15-15-03.md": {
-      "status": "pending",
-      "library_file": null,
-      "batch": null
+      "status": "done",
+      "library_file": "dated_stream_2023_03_01.md",
+      "batch": 43
     },
     "2025-10-21 19-28-39.md": {
       "status": "pending",
@@ -815,7 +815,7 @@
       "batch": 2
     }
   },
-  "done_count": 140,
-  "last_batch": 41,
-  "last_updated": "2026-07-19T10:37:19.824270+00:00"
+  "done_count": 144,
+  "last_batch": 43,
+  "last_updated": "2026-07-19T10:41:07.742828+00:00"
 }
