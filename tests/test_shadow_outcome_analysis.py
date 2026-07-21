@@ -446,3 +446,33 @@ def test_comparison_ignores_auxiliary_type_records():
     ]
     result = soa.build_live_vs_shadow_comparison([full] + auxiliaries, journal, min_outcomes=1)
     assert result["total_matched"] == 1
+
+
+def test_comparison_win_rate_not_skewed_by_auxiliary_duplication():
+    """Хвост 2/3 (владелец, 2026-07-21): без фильтра по type, дубли Фаза-B
+    auto_*_shadow-записей на ОДНОЙ сделке искажали агрегированный win-rate
+    (реальный инцидент: 11.5% вместо честных 18.2% на 52 vs 22 записях).
+    Здесь -- уменьшенная воспроизводимая версия того же перекоса: win-сделка
+    задублирована 5 раз (1 полная + 4 auxiliary), loss-сделка -- 1 раз (без
+    Фаза-B дублей, как до её включения). Без фильтра WR был бы 5/6=83.3%
+    (искусственно раздут дублированием winner'а); с фильтром -- честные 1/2=50%."""
+    journal = {
+        1: _journal_rec(1, "WIN1", "long", 1000.0, outcome="TP1_HIT"),
+        2: _journal_rec(2, "LOSS1", "short", 2000.0, outcome="SL_HIT"),
+    }
+    win_full = _shadow_rec("WIN1", "long", 1000.0, live_journal_id=1)
+    win_auxiliaries = [
+        {"symbol": "WIN1", "direction": "long", "ts": 1000.0 + i, "type": t,
+         "promoted_live": True, "live_journal_id": None}
+        for i, t in enumerate(["auto_derivatives_shadow", "auto_options_shadow",
+                                "auto_liquidation_shadow", "auto_onchain_shadow"], start=1)
+    ]
+    loss_full = _shadow_rec("LOSS1", "short", 2000.0, live_journal_id=2)
+
+    result = soa.build_live_vs_shadow_comparison(
+        [win_full] + win_auxiliaries + [loss_full], journal, min_outcomes=2)
+
+    assert result["total_matched"] == 2          # не 6 (1 win + 4 aux + 1 loss)
+    assert result["live_all"]["n"] == 2
+    assert result["live_all"]["wins"] == 1
+    assert result["live_all"]["win_rate_pct"] == 50.0   # не 83.3%
