@@ -18964,3 +18964,19 @@ ready=true/remaining=0 (closed=22)** -- порог min_outcomes=20 уже чес
 функция вместо разных костылей в 3 местах. Код НЕ менялся, фикс НЕ
 применён, решение о фиксе и о промоушене patch05_bpr -- за владельцем.
 `PAUSE_LIVE_SIGNAL_EMISSION` без изменений (`true`).
+
+**ФИКС ЗАДЕПЛОЕН И LIVE-VERIFIED (владелец, 2026-07-21, коммит `03b82943`,
+деплой `1b30c231-...` SUCCESS)**: `is_full_shadow_record()` (фильтр
+`type is None`) применён в `closed_outcomes_by_contour()` (LIVE),
+`build_live_vs_shadow_comparison()` (мёртвый код, починен заодно),
+`mfe_mae.retro_mfe_mae_for_closed()` (была случайно защищена, теперь явно).
+4 новых регресс-теста, py_compile чисто, полный pytest 1748 passed/1
+skipped/0 failed. `railway ssh` (read-only) на ЖИВОМ контейнере ПОСЛЕ
+рестарта подтвердил: **patch05_bpr: closed=22, PF=0.52, ready=true**
+(было closed=16, ready=false); tz13/patch09_oi: closed=19 (было 13),
+remaining=1 (было 7), ready остаётся false. Ни одного traceback в логах
+за 20 мин после рестарта. **Решающая цифра**: PF patch05_bpr = **0.52 —
+НИЖЕ 1**, т.е. несмотря на честный проход гейта min_outcomes=20, контур
+пока НЕ показывает положительное преимущество на полной выборке -- это
+аргумент ПРОТИВ немедленного промоушена, не за него. Промоушен и снятие
+`PAUSE_LIVE_SIGNAL_EMISSION` (осталась `true`) -- решения владельца.
