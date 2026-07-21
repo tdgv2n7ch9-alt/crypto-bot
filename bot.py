@@ -3196,6 +3196,18 @@ MENU_V2_ENABLED = os.getenv("MENU_V2_ENABLED", "false").strip().lower() in ("1",
 # приёмки владельцем; false -- мгновенный откат на real_full_analysis() без редеплоя.
 PRECISION_FA_MIGRATED = os.getenv("PRECISION_FA_MIGRATED", "true").strip().lower() in ("1", "true", "yes", "on")
 
+# Владелец, 2026-07-21 (safety pause, живая находка): shadow-пайплайн сломан
+# (shadow-поля = None у большинства сделок с ~18.07, см.
+# SHADOW_REGRESSION_INVESTIGATION.md) и база WR дрейфует вниз -- пауза
+# ЭМИССИИ НОВЫХ live-сигналов (send_scheduled + signal_loop.run_signal_loop)
+# до починки. Журнал/shadow-запись/мониторы/бриф 08:30/radar НЕ затронуты --
+# нужны именно для диагноза и учёта. Открытые сделки/лимитки владельца НЕ
+# трогает (run_exit_tracker продолжает работать как обычно). default true --
+# пауза активна сразу на этом деплое; снятие = PAUSE_LIVE_SIGNAL_EMISSION=false
+# в Railway env (мгновенный откат без редеплоя), после починки shadow +
+# подтверждения владельца.
+PAUSE_LIVE_SIGNAL_EMISSION = os.getenv("PAUSE_LIVE_SIGNAL_EMISSION", "true").strip().lower() in ("1", "true", "yes", "on")
+
 
 def main_kb_v2():
     # Пакет 18, п.13 (владелец, финально): "⭐ ЛИМИТКИ" -- первым разделом,
@@ -7212,6 +7224,10 @@ async def send_scheduled(bot: Bot):
     структурной модели entry/SL/TP (в отличие от лонга/шорта) -- нечего чинить по тому же
     принципу, там никогда не было реального сетапа за фиксированными процентами."""
     _last_auto_scan["ts"] = time.time()
+    if PAUSE_LIVE_SIGNAL_EMISSION:
+        log.warning("live emission paused: shadow pipeline broken + base WR drifting, pending fix")
+        _last_auto_scan["status"] = "пауза: PAUSE_LIVE_SIGNAL_EMISSION активен"
+        return
     chat_ids = subscribers.active_chat_ids()
     if not chat_ids:
         _last_auto_scan["status"] = "пропуск: нет подписчиков"

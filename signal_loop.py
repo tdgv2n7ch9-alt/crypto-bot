@@ -406,6 +406,9 @@ async def run_signal_loop(bot, tg_bot, owner_chat_id):
     реконнекты #1/#2 совпадают ровно с _cg_get circuit-breaker окнами, оба -- в моменты,
     когда должен был идти именно этот (15-мин) джоб. run_in_executor -- тот же паттерн,
     что и везде в проекте."""
+    if getattr(bot, "PAUSE_LIVE_SIGNAL_EMISSION", False):
+        _log("live emission paused: shadow pipeline broken + base WR drifting, pending fix")
+        return
     loop = asyncio.get_event_loop()
     try:
         candidates = await loop.run_in_executor(None, _stage1_screen, bot)
