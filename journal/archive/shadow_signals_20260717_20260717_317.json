@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784307976.084568, "type": "ls_contrarian_shadow", "symbol": "BTC", "ls": 1.625360987135731, "funding": -0.000109, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 29}]}

@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784370026.8110795, "type": "auto_liquidation_shadow", "symbol": "GWEI", "direction": "short", "promoted_live": false, "liq_long": 0, "liq_short": 0, "liq_ratio": 1.0, "liq_signal": "neutral", "heatmap": null, "aligned": false, "opposed": false, "liq_data_ok": false}]}

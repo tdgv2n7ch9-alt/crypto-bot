@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784242455.9710252, "type": "ls_contrarian_shadow", "symbol": "SOL", "ls": 2.6616623947272062, "funding": -0.00025, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 43}]}

@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784242448.6021483, "type": "ls_contrarian_shadow", "symbol": "ETH", "ls": 2.121098626716604, "funding": -0.000279, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 57}]}

@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784366876.1014323, "type": "ls_contrarian_shadow", "symbol": "DOGE", "ls": 3.2918454935622314, "funding": 8.6e-05, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 29}]}

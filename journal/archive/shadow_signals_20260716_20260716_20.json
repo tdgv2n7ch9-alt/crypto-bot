@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784211859.794814, "type": "ls_contrarian_shadow", "symbol": "XRP", "ls": 3.393673110720562, "funding": -0.000122, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 29}]}

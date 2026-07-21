@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784286142.3291428, "type": "ls_contrarian_shadow", "symbol": "BNB", "ls": 2.1959092361776924, "funding": -0.000222, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 29}]}

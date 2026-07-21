@@ -1,0 +1,1 @@
+{"schema_version": 1, "records": [{"ts": 1784211864.2513883, "type": "ls_contrarian_shadow", "symbol": "ADA", "ls": 2.6192544335866814, "funding": -8e-05, "is_extreme": true, "trend_direction": "LONG", "contrarian_direction": "SHORT", "diverges": true, "live_direction": "LONG", "live_score_100": 29}]}
