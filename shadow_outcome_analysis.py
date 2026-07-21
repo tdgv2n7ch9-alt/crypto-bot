@@ -50,6 +50,22 @@ CONTOUR_LABELS = {"live": "Live (все сделки)", "tz13": "tz13",
                    "patch05_bpr": "Патч 05 (BPR)", "patch09_oi": "Патч 09 (OI/funding/L-S)"}
 
 
+def is_full_shadow_record(rec: dict) -> bool:
+    """DEDUP_MATCHING_AUDIT.md (владелец, 2026-07-21) -- `send_scheduled()` пишет
+    ОДНУ полную `compute_shadow()`-запись на кандидата (source="send_scheduled"
+    или, для signal_loop-пути, без `source` вовсе) ПЛЮС несколько узкоспециальных
+    Фаза-B `auto_derivatives_shadow`/`auto_options_shadow`/`auto_liquidation_shadow`/
+    `auto_onchain_shadow` (и по тому же паттерну `pump_reversal_shadow`,
+    `dexscreener_taker_imbalance_shadow`) в течение нескольких секунд после. Только
+    ПОЛНАЯ запись содержит amd_phase/tz13/inducement/patch05/09-поля -- она
+    НИКОГДА не ставит `record["type"]` (проверено чтением обоих строителей,
+    `compute_shadow()` и специализированных writer'ов). Без этого фильтра дедуп по
+    максимальному `ts` в кластере выбирал ПОСЛЕДНЮЮ (пустую) запись вместо
+    содержательной для сделок, где Фаза-B контуры включены (~с 2026-07-18) --
+    занижало `patch05_bpr`/`tz13`/`patch09_oi`-готовность к `min_outcomes=20`."""
+    return rec.get("type") is None
+
+
 def match_shadow_to_journal(shadow_record: dict, journal_records: dict) -> dict:
     """Сопоставляет ОДНУ shadow-запись с журнальной. Возвращает
     {"matched": bool, "method": "direct_id"|"time_window"|None,
@@ -166,10 +182,17 @@ def build_live_vs_shadow_comparison(shadow_records: list, journal_records: dict,
 
     `ready=False` + честный `detail`, если исходов меньше `min_outcomes` --
     не выдумывает сравнение на недостаточной выборке (владелец: "показать
-    первое сравнение, как только исходов наберётся >=20")."""
+    первое сравнение, как только исходов наберётся >=20").
+
+    `is_full_shadow_record()`-фильтр (DEDUP_MATCHING_AUDIT.md, владелец
+    2026-07-21) -- та же причина, что в `closed_outcomes_by_contour()`: без
+    него эта функция (нигде сейчас не вызывается, но чинится заодно, чтобы не
+    выстрелила при подключении) считала бы каждую Фаза-B auto_*_shadow-запись
+    отдельным "совпадением" -- до 5 строк на одну сделку вместо одной,
+    искажая `total_matched`/`live_all`."""
     matched = []
     for rec in shadow_records:
-        if not rec.get("promoted_live"):
+        if not rec.get("promoted_live") or not is_full_shadow_record(rec):
             continue
         m = match_shadow_to_journal(rec, journal_records)
         if not m["matched"] or m["outcome"] not in OUTCOME_STATUSES:
@@ -265,10 +288,15 @@ def closed_outcomes_by_contour(shadow_records: list, journal_records: dict,
     сам" (контуры tz13/П05/П09 сейчас НЕ влияют на promoted/gate, честно не
     выдаём их как самостоятельный результат). `min_outcomes`-гейт ("ready"/
     "remaining") считается по УНИКАЛЬНЫМ сделкам -- дедуп идёт ДО построения
-    строк, не после."""
+    строк, не после.
+
+    `is_full_shadow_record()`-фильтр (DEDUP_MATCHING_AUDIT.md, владелец
+    2026-07-21) -- исключает узкоспециальные Фаза-B auto_*_shadow-записи ДО
+    матчинга/дедупа, иначе `_dedup_by_trade()` мог взять пустую (без
+    amd/tz13/patch05/09-полей) запись вместо содержательной для той же сделки."""
     matched = []
     for rec in shadow_records:
-        if not rec.get("promoted_live"):
+        if not rec.get("promoted_live") or not is_full_shadow_record(rec):
             continue
         m = match_shadow_to_journal(rec, journal_records)
         if not m["matched"] or m["outcome"] not in OUTCOME_STATUSES:

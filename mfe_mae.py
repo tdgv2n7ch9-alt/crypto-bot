@@ -150,12 +150,18 @@ def retro_mfe_mae_for_closed(shadow_records: list, journal_records: dict,
     начинаться с реального входа в позицию, не с момента карточки).
     `fetch_candles_fn` -- DI для тестов (по умолчанию fetch_bybit_1m_candles_sync).
     Пропускает (не включает в результат) записи с недостающими полями -- честно,
-    не выдумывает результат на неполных данных."""
+    не выдумывает результат на неполных данных.
+
+    `soa.is_full_shadow_record()`-фильтр (DEDUP_MATCHING_AUDIT.md, владелец
+    2026-07-21) -- эта функция и так была случайно защищена (Фаза-B
+    auto_*_shadow-записи не содержат `sl`, отсеивались предфильтром ниже), но
+    явный фильтр по типу -- та же единая точка, что в `shadow_outcome_analysis.py`,
+    не полагается на побочный эффект отсутствующего поля."""
     import shadow_outcome_analysis as soa
     fetch = fetch_candles_fn or fetch_bybit_1m_candles_sync
     results = []
     for rec in shadow_records:
-        if not rec.get("promoted_live"):
+        if not rec.get("promoted_live") or not soa.is_full_shadow_record(rec):
             continue
         m = soa.match_shadow_to_journal(rec, journal_records)
         if not m["matched"] or m["outcome"] not in soa.OUTCOME_STATUSES:

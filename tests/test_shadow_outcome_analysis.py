@@ -392,3 +392,57 @@ def test_load_journal_records_from_disk_corrupt_file_returns_empty(tmp_path):
     path.write_text("{not valid json")
     result = soa.load_journal_records_from_disk(str(path))
     assert result == {}
+
+
+# ── is_full_shadow_record / DEDUP_MATCHING_AUDIT.md фикс (владелец, 2026-07-21) ──
+# Фаза-B auto_derivatives_shadow/auto_options_shadow/auto_liquidation_shadow/
+# auto_onchain_shadow (и pump_reversal_shadow/dexscreener_taker_imbalance_shadow)
+# ставят record["type"] -- полная compute_shadow()-запись (send_scheduled или
+# signal_loop-путь) НИКОГДА этого не делает. Без фильтра дедуп по максимальному
+# ts мог взять пустую auto_*_shadow-запись вместо содержательной.
+
+def test_is_full_shadow_record_true_when_type_absent():
+    assert soa.is_full_shadow_record({"symbol": "BTC", "source": "send_scheduled"}) is True
+
+
+def test_is_full_shadow_record_true_when_type_explicitly_none():
+    assert soa.is_full_shadow_record({"symbol": "BTC", "type": None}) is True
+
+
+def test_is_full_shadow_record_false_when_type_set():
+    assert soa.is_full_shadow_record({"symbol": "BTC", "type": "auto_onchain_shadow"}) is False
+    assert soa.is_full_shadow_record({"symbol": "BTC", "type": "pump_reversal_shadow"}) is False
+
+
+def test_closed_outcomes_by_contour_ignores_auxiliary_type_record_in_dedup():
+    """Повторяет реальный найденный кейс (ZEC/AKT/CFG/UB/VVV, DEDUP_MATCHING_
+    AUDIT.md): send_scheduled-запись (полные поля) + auto_onchain_shadow-запись
+    (ПОЗЖЕ по ts, без tz13/bpr/oi-полей) на ОДНУ и ту же сделку -- без фильтра
+    _dedup_by_trade() взял бы вторую (максимальный ts), теряя tz13/patch05/09."""
+    full, journal = _closed_shadow_rec("ZEC", "long", 1000.0, "SL_HIT", 1,
+                                        tz13_score=4, bpr_zone_count=3,
+                                        oi_funding_ls_shadow={"oi_change_pct": 0.0})
+    auxiliary = {"symbol": "ZEC", "direction": "long", "ts": 1010.0,  # позже, чем full
+                 "type": "auto_onchain_shadow", "promoted_live": True,
+                 "live_journal_id": None}  # как в реальных данных -- нет live_journal_id
+    report = soa.closed_outcomes_by_contour([full, auxiliary], journal, min_outcomes=20)
+    assert report["live"]["closed"] == 1
+    assert report["tz13"]["closed"] == 1
+    assert report["patch05_bpr"]["closed"] == 1
+    assert report["patch09_oi"]["closed"] == 1
+
+
+def test_comparison_ignores_auxiliary_type_records():
+    """build_live_vs_shadow_comparison() -- без дедупа, но фильтр по type
+    должен исключить Фаза-B auxiliary-записи ДО подсчёта total_matched
+    (иначе одна сделка считалась бы до 5 раз)."""
+    journal = {1: _journal_rec(1, "AKT", "short", 1000.0, outcome="SL_HIT")}
+    full = _shadow_rec("AKT", "short", 1000.0, live_journal_id=1)
+    auxiliaries = [
+        {"symbol": "AKT", "direction": "short", "ts": 1000.0 + i, "type": t,
+         "promoted_live": True, "live_journal_id": None}
+        for i, t in enumerate(["auto_derivatives_shadow", "auto_options_shadow",
+                                "auto_liquidation_shadow", "auto_onchain_shadow"], start=1)
+    ]
+    result = soa.build_live_vs_shadow_comparison([full] + auxiliaries, journal, min_outcomes=1)
+    assert result["total_matched"] == 1

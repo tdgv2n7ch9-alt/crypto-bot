@@ -219,3 +219,22 @@ def test_retro_mfe_mae_skips_unmatched():
                         "promoted_live": True, "live_journal_id": 999}]
     results = mm.retro_mfe_mae_for_closed(shadow_records, {}, fetch_candles_fn=lambda *a: [])
     assert results == []
+
+
+def test_retro_mfe_mae_skips_auxiliary_type_record():
+    """DEDUP_MATCHING_AUDIT.md фикс (владелец, 2026-07-21) -- явный фильтр по
+    type, даже если гипотетически auxiliary-запись содержала бы sl/direction
+    (сейчас случайно защищено их отсутствием, но фильтр не должен полагаться
+    только на побочный эффект)."""
+    shadow_records = [
+        {"symbol": "BTC", "direction": "long", "ts": 1_000_000.0, "sl": 90.0,
+         "type": "auto_onchain_shadow", "promoted_live": True, "live_journal_id": 1},
+    ]
+    journal_records = {
+        1: {"symbol": "BTC", "direction": "long", "outcome": "TP1_HIT",
+            "entered_ts": 1_000_050.0, "entered_price": 100.0,
+            "outcome_ts": 1_000_300.0},
+    }
+    results = mm.retro_mfe_mae_for_closed(shadow_records, journal_records,
+                                           fetch_candles_fn=lambda *a: [{"high": 112.0, "low": 96.0}])
+    assert results == []
