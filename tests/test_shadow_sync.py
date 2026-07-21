@@ -234,6 +234,36 @@ def test_sync_no_missing_records_returns_true_without_put(monkeypatch):
     assert put_called["count"] == 0
 
 
+def test_sync_pushes_local_state_to_shrink_remote_after_rotation(monkeypatch):
+    """Владелец, P0 2026-07-21 (живая находка при верификации): count-based
+    ротация (введена этим же пакетом) регулярно усыхает активный файл --
+    remote ДОЛЖЕН зеркалить это усыхание, а не только дополняться. Remote
+    содержит запись, которую локальная ротация УЖЕ убрала из активного
+    файла (перенесла в архив) -- синк обязан отправить УМЕНЬШЕННЫЙ локальный
+    список, не remote+missing (это бы навсегда сохранило устаревшую запись
+    и не дало remote усохнуть -- тот же класс проблемы, из-за которой
+    затевался весь P0)."""
+    remote_records = [{"symbol": "OLD_ROTATED_OUT", "ts": 1}, {"symbol": "STILL_ACTIVE", "ts": 2}]
+    local_records = [{"symbol": "STILL_ACTIVE", "ts": 2}]  # OLD_ROTATED_OUT уже в архиве, не в active
+
+    monkeypatch.setattr(se, "_load_local", lambda: local_records)
+    monkeypatch.setattr(se, "_github_get_shadow_sync", lambda: (remote_records, "remote_sha"))
+    monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
+
+    pushed = {}
+
+    def fake_push(records):
+        pushed["records"] = records
+        return True
+
+    monkeypatch.setattr(se, "_push_shadow_via_git_cli", fake_push)
+    ok = se._sync_to_github_sync()
+    assert ok is True
+    # push отправляет ТОЛЬКО текущий локальный (усохший) список -- не remote+local
+    assert pushed["records"] == local_records
+    assert {r["symbol"] for r in pushed["records"]} == {"STILL_ACTIVE"}
+
+
 # --- P0 2026-07-21 (рецидив 40МБ/GitHub-422): _push_shadow_via_git_cli() ---
 # (нативный git push, ЗАМЕНЯЕТ REST Git Data API -- см. её докстринг)
 
