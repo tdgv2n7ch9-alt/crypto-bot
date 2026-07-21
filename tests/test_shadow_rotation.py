@@ -244,6 +244,33 @@ def test_load_archives_ignores_manifest_file(monkeypatch, tmp_path):
     assert records == []
 
 
+def test_load_archives_sorted_by_ts_not_filename_lexicographic_order(monkeypatch, tmp_path):
+    """Владелец, P0 2026-07-21 (живая находка при верификации): имена файлов
+    с числовым суффиксом (`_unique_archive_path()`, "_2".."_123"...) сортируются
+    АЛФАВИТНО в os.listdir -- "_123.json" лексикографически МЕНЬШЕ "_13.json"
+    ('2' < '3' на второй позиции), хотя 123 > 13. При частой ротации в
+    пределах одних суток (обычное дело с сегодняшним count-based порогом)
+    число файлов легко достигает двух-трёх цифр -- строковая сортировка
+    даёт ложные "вне порядка" при склейке. Регресс-лок: файл с БОЛЬШИМ
+    числовым суффиксом, но БОЛЕЕ РАННИМИ по времени записями, должен всё
+    равно оказаться РАНЬШЕ в объединённом списке (_load_archives()
+    сортирует по ts после сборки, не полагается на порядок файлов)."""
+    _isolate(monkeypatch, tmp_path)
+    os.makedirs(se.ARCHIVE_DIR, exist_ok=True)
+    # "_123.json" < "_13.json" лексикографически, но записи в нём -- ПОЗЖЕ по времени
+    with open(os.path.join(se.ARCHIVE_DIR, "shadow_signals_20260716_20260716_123.json"), "w") as f:
+        json.dump({"schema_version": 1, "records": [_rec("ASSET", 200)]}, f)  # позже
+    with open(os.path.join(se.ARCHIVE_DIR, "shadow_signals_20260716_20260716_13.json"), "w") as f:
+        json.dump({"schema_version": 1, "records": [_rec("ASSET", 100)]}, f)  # раньше
+
+    records = se._load_archives()
+    assert [r["ts"] for r in records] == [100, 200]  # хронологический порядок, не по имени файла
+
+    # сквозная проверка -- integrity_report() на этой связке не должен видеть "вне порядка"
+    report = se.integrity_report(records)
+    assert report["out_of_order_count"] == 0
+
+
 # ── _write_local() опционально ротирует ──────────────────────────────────────
 
 def test_write_local_triggers_rotation_when_count_crosses_threshold(monkeypatch, tmp_path):
