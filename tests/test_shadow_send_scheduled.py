@@ -304,6 +304,11 @@ def test_log_send_scheduled_shadow_async_compute_failure_returns_false(monkeypat
 
 def test_get_last_send_scheduled_write_ts_none_before_any_write(monkeypatch):
     monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    # DEDUP_MATCHING_AUDIT.md / SHADOW_WRITE_FAILURE.md фикс (владелец, 2026-07-21):
+    # in-memory=None теперь падает на чтение активного файла -- изолируем от
+    # реального journal/shadow_signals.json репозитория, тестируем именно
+    # "совсем нет данных ни там, ни там".
+    monkeypatch.setattr(se, "_load_local", lambda: [])
     assert se.get_last_send_scheduled_write_ts() is None
 
 
@@ -328,6 +333,7 @@ def test_last_write_ts_not_updated_on_compute_failure(monkeypatch):
     monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
     monkeypatch.setattr(se, "_write_local", lambda record: True)
     monkeypatch.setattr(se, "_sync_to_github_sync", lambda record: True)
+    monkeypatch.setattr(se, "_load_local", lambda: [])
 
     ok = asyncio.run(se.log_send_scheduled_shadow_async(
         "BTCUSDT", None, _FakeBotModule(), promoted_live=True, gate_reasons=[]))
@@ -339,6 +345,7 @@ def test_last_write_ts_not_updated_on_compute_failure(monkeypatch):
 def test_last_write_ts_not_updated_on_local_write_failure(monkeypatch):
     monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
     monkeypatch.setattr(se, "_write_local", lambda record: False)
+    monkeypatch.setattr(se, "_load_local", lambda: [])
 
     a = _fake_real_full_analysis_result(is_long=True)
     ok = asyncio.run(se.log_send_scheduled_shadow_async(
@@ -346,6 +353,63 @@ def test_last_write_ts_not_updated_on_local_write_failure(monkeypatch):
 
     assert ok is False
     assert se.get_last_send_scheduled_write_ts() is None
+
+
+# ── get_last_send_scheduled_write_ts persistent fallback (SHADOW_WRITE_FAILURE.md,
+# владелец 2026-07-21) -- in-memory счётчик не переживает рестарт контейнера,
+# занижая реальную тишину (watchdog заявил 2.1ч вместо фактических ~5.6ч+).
+# При in-memory=None -- читаем АКТИВНЫЙ shadow-файл (не архивы) и берём max(ts)
+# среди source=="send_scheduled" записей.
+
+def test_get_last_write_ts_falls_back_to_active_file_when_in_memory_none(monkeypatch):
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    monkeypatch.setattr(se, "_load_local", lambda: [
+        {"symbol": "AAA", "source": "send_scheduled", "ts": 1000.0},
+        {"symbol": "BBB", "source": "send_scheduled", "ts": 2000.0},  # самый свежий
+        {"symbol": "CCC", "source": "send_scheduled", "ts": 500.0},
+    ])
+    assert se.get_last_send_scheduled_write_ts() == 2000.0
+
+
+def test_get_last_write_ts_fallback_ignores_auxiliary_type_records(monkeypatch):
+    """Фаза-B auto_*_shadow-записи НЕ должны считаться send_scheduled-записями,
+    даже если у них по случайности более свежий ts."""
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    monkeypatch.setattr(se, "_load_local", lambda: [
+        {"symbol": "AAA", "source": "send_scheduled", "ts": 1000.0},
+        {"symbol": "AAA", "type": "auto_onchain_shadow", "ts": 9999.0},  # позже, но не send_scheduled
+    ])
+    assert se.get_last_send_scheduled_write_ts() == 1000.0
+
+
+def test_get_last_write_ts_fallback_honest_none_when_no_send_scheduled_records(monkeypatch):
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+    monkeypatch.setattr(se, "_load_local", lambda: [
+        {"symbol": "AAA", "type": "auto_onchain_shadow", "ts": 1000.0},
+    ])
+    assert se.get_last_send_scheduled_write_ts() is None
+
+
+def test_get_last_write_ts_fallback_load_local_failure_logs_error_returns_none(monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", None)
+
+    def _boom():
+        raise RuntimeError("disk error")
+    monkeypatch.setattr(se, "_load_local", _boom)
+
+    with caplog.at_level(logging.ERROR):
+        result = se.get_last_send_scheduled_write_ts()
+    assert result is None
+    assert any("get_last_send_scheduled_write_ts" in r.message for r in caplog.records)
+
+
+def test_get_last_write_ts_prefers_in_memory_over_file(monkeypatch):
+    """Быстрый путь -- если процесс уже писал в этой жизни, файл не читается вообще."""
+    monkeypatch.setattr(se, "_last_send_scheduled_write_ts", 12345.0)
+    monkeypatch.setattr(se, "_load_local", lambda: (_ for _ in ()).throw(
+        AssertionError("не должен читать файл, когда есть in-memory значение")))
+    assert se.get_last_send_scheduled_write_ts() == 12345.0
 
 
 # --- Пакет 14 (владелец, 2026-07-13): tz13_shadow (13-блочный вердикт) передаётся

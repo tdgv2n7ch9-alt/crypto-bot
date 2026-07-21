@@ -1039,7 +1039,12 @@ async def run_watchdog(bot: Bot):
     global _shadow_write_alerted
     send_scheduled_hb = _job_heartbeats.get("send_scheduled")
     send_scheduled_alive = bool(send_scheduled_hb and (now - send_scheduled_hb["ts"]) < 2 * 30 * 60)
-    if send_scheduled_alive:
+    # Владелец, 2026-07-21 (SHADOW_WRITE_FAILURE.md): пока PAUSE_LIVE_SIGNAL_EMISSION
+    # активен, send_scheduled() возвращается на первой строке, ДО цикла, который
+    # вызывает log_send_scheduled_shadow_async() -- молчание shadow-потока в этом
+    # случае ОЖИДАЕМО (не регресс), алерт про него -- ложный шум на весь срок паузы.
+    # Остальные watchdog-проверки (job-heartbeat выше и т.п.) паузой НЕ затронуты.
+    if send_scheduled_alive and not PAUSE_LIVE_SIGNAL_EMISSION:
         last_shadow_ts = shadow_engine.get_last_send_scheduled_write_ts()
         since_start = now - _PROCESS_START_TS
         shadow_age = (now - last_shadow_ts) if last_shadow_ts else since_start

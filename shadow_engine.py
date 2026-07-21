@@ -132,18 +132,33 @@ DEAD_ZONE_SHADOW_SCORE_PENALTY = 10  # находка владельца 2026-07
 
 # Пакет "находки 1-2" (владелец "да", 2026-07-13) -- health-счётчик "последняя
 # успешная shadow-запись N часов назад" для /stats и утренней сводки. Хранится
-# только в памяти процесса (Railway ephemeral, честно НЕ переживает рестарт --
-# после редеплоя счётчик стартует с None, пока не придёт первая новая запись
-# ЭТОГО процесса; не выдаёт время до рестарта за реальное время последней
-# записи, чтобы не создавать ложное ощущение свежести после каждого деплоя).
+# в памяти процесса как быстрый путь (без I/O на каждый вызов).
 _last_send_scheduled_write_ts = None
 
 
 def get_last_send_scheduled_write_ts():
-    """None, если этот процесс ещё не записал ни одной send_scheduled shadow-
-    записи с момента своего старта (см. докстринг _last_send_scheduled_write_ts
-    -- честно, не подставляет старое значение с прошлого рестарта)."""
-    return _last_send_scheduled_write_ts
+    """Владелец, 2026-07-21 (SHADOW_WRITE_FAILURE.md, побочная находка): раньше
+    при `_last_send_scheduled_write_ts is None` (свежий процесс после рестарта)
+    функция честно возвращала None -- но вызывающая сторона (`run_watchdog()`)
+    в этом случае откатывалась на `since_start` (аптайм ПРОЦЕССА), а не на
+    реальное время последней записи, ЗАНИЖАЯ реальную тишину (заявил 2.1ч
+    вместо фактических ~5.6ч+ в живом инциденте). Теперь -- при отсутствии
+    in-memory значения читаем АКТИВНЫЙ shadow-файл (`_load_local()`, дёшево --
+    один локальный файл, НЕ архивы, cap ROTATION_MAX_ACTIVE_RECORDS) и берём
+    максимальный `ts` среди записей с `source=="send_scheduled"` -- тот же
+    персистентный источник, что уже переживает рестарт для самих shadow-данных
+    (git-sync). None, если ни in-memory, ни файл ничего не дают (совсем нет
+    send_scheduled-записей вообще, например на самом первом старте)."""
+    if _last_send_scheduled_write_ts is not None:
+        return _last_send_scheduled_write_ts
+    try:
+        records = _load_local()
+    except Exception as e:
+        log.error(f"shadow_engine.get_last_send_scheduled_write_ts: _load_local failed: {e}")
+        return None
+    ts_values = [r.get("ts") for r in records
+                 if r.get("source") == "send_scheduled" and r.get("ts") is not None]
+    return max(ts_values) if ts_values else None
 
 
 def _atomic_write_json(path: str, obj) -> bool:

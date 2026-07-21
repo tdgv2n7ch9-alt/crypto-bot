@@ -531,6 +531,7 @@ def test_watchdog_shadow_write_alert_send_failure_logs_and_resets_flag(monkeypat
                          lambda: time_module().time() - bot.SHADOW_WRITE_ALERT_THRESHOLD_SEC - 100)
     monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
     monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+    monkeypatch.setattr(bot, "PAUSE_LIVE_SIGNAL_EMISSION", False)
     import logging
     with caplog.at_level(logging.ERROR):
         _run(bot.run_watchdog(MagicMock()))
@@ -558,3 +559,53 @@ def test_watchdog_source_alert_send_failure_logs_and_resets_flag(monkeypatch, ca
         _run(bot.run_watchdog(MagicMock()))
     assert "testsource" not in bot._source_alerted
     assert any("testsource" in r.message for r in caplog.records)
+
+
+# ── shadow-write watchdog alert suppressed under PAUSE_LIVE_SIGNAL_EMISSION
+# (SHADOW_WRITE_FAILURE.md, владелец 2026-07-21) ──────────────────────────
+
+def _setup_shadow_stale(monkeypatch, stale_ts):
+    monkeypatch.setattr(bot, "_is_night_mute_window", lambda now=None: False)
+    bot._job_alerted_stale.clear()
+    monkeypatch.setattr(bot, "_job_expected_interval_sec", {})
+    monkeypatch.setattr(bot, "_job_heartbeats", {
+        "send_scheduled": {"ts": time_module().time()},  # AUTO-цикл сам живой
+    })
+    monkeypatch.setattr(bot, "_PROCESS_START_TS", time_module().time() - 1000)
+    monkeypatch.setattr(bot, "_DATA_SOURCE_STATUS", {})
+    monkeypatch.setattr(bot, "_shadow_write_alerted", False)
+    monkeypatch.setattr(bot.shadow_engine, "get_last_send_scheduled_write_ts", lambda: stale_ts)
+
+
+def test_shadow_write_alert_suppressed_when_pause_active(monkeypatch):
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append({"text": text, "critical": critical})
+
+    monkeypatch.setattr(bot, "send_system", _fake_send_system)
+    stale_ts = time_module().time() - bot.SHADOW_WRITE_ALERT_THRESHOLD_SEC - 3600
+    _setup_shadow_stale(monkeypatch, stale_ts)
+    monkeypatch.setattr(bot, "PAUSE_LIVE_SIGNAL_EMISSION", True)
+
+    _run(bot.run_watchdog(MagicMock()))
+    assert calls == []
+
+
+def test_shadow_write_alert_still_fires_when_not_paused(monkeypatch):
+    """Регресс-замок: подавление касается ТОЛЬКО состояния паузы -- обычное
+    поведение (алерт при реальной тишине БЕЗ паузы) не тронуто."""
+    calls = []
+
+    async def _fake_send_system(bot_arg, text, critical=False, **kw):
+        calls.append({"text": text, "critical": critical})
+
+    monkeypatch.setattr(bot, "send_system", _fake_send_system)
+    stale_ts = time_module().time() - bot.SHADOW_WRITE_ALERT_THRESHOLD_SEC - 3600
+    _setup_shadow_stale(monkeypatch, stale_ts)
+    monkeypatch.setattr(bot, "PAUSE_LIVE_SIGNAL_EMISSION", False)
+
+    _run(bot.run_watchdog(MagicMock()))
+    assert len(calls) == 1
+    assert calls[0]["critical"] is True
+    assert "send_scheduled" in calls[0]["text"]
