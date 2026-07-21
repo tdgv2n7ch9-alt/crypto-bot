@@ -364,6 +364,69 @@ def cg_rate_limit_status() -> dict:
     }
 
 
+# Владелец, 2026-07-21: DefiLlama /prices как РЕЗЕРВ к CoinGecko -- снизить
+# видимые 429-паузы (см. knowledge/COMPETITOR_DEFILLAMA.md). Мгновенный
+# откат -- False, ничего не трогая в остальном коде.
+ENABLE_DEFILLAMA_PRICE_FALLBACK = True
+
+
+def _defillama_price_fallback(coingecko_id: str) -> float:
+    """Резервная цена через `https://coins.llama.fi/prices/current/coingecko:{id}`
+    -- бесплатно, без ключа. Вызывается ТОЛЬКО когда CoinGecko circuit
+    breaker открыт (см. get_price_with_defillama_fallback ниже) -- НЕ
+    подменяет живой CoinGecko, не трогается, пока CoinGecko отвечает.
+
+    Честная оговорка (knowledge/COMPETITOR_DEFILLAMA.md): DefiLlama для
+    многих монет сама берёт цену через CoinGecko -- это не полностью
+    независимый источник, а кэш/буфер поверх того же апстрима. Полезен
+    именно на КОРОТКИХ паузах (наш реальный паттерн -- 30-60с circuit
+    breaker), не спасает от полного даунтайма CoinGecko.
+
+    Возвращает 0.0 при ЛЮБОЙ ошибке (сеть/парсинг/флаг выключен) --
+    вызывающий код уже трактует 0 как "нет цены", тот же принцип, что и
+    остальные best-effort фоллбеки проекта. Ошибка всегда явно логируется
+    (log.error) -- silent except:pass здесь не используется ни разу."""
+    if not ENABLE_DEFILLAMA_PRICE_FALLBACK:
+        return 0.0
+    coin_key = f"coingecko:{coingecko_id}"
+    try:
+        # Владелец, правило BOT_TOKEN (CLAUDE.md): глушим httpx INFO ДО
+        # первого сетевого вызова -- та же дисциплина, что и везде в
+        # проекте, где заводится новый HTTP-путь, даже если сам вызов
+        # (requests, не httpx.Bot) этому конкретному риску не подвержен.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        r = requests.get(f"https://coins.llama.fi/prices/current/{coin_key}", timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        coin_data = (data.get("coins") or {}).get(coin_key)
+        if not coin_data or coin_data.get("price") is None:
+            log.error(f"defillama fallback: пустой/некорректный ответ для {coin_key}")
+            return 0.0
+        price = float(coin_data["price"])
+        log.info(f"price via defillama fallback: {coin_key} = {price}")
+        return price
+    except Exception as e:
+        log.error(f"defillama fallback не удался для {coin_key}: {e}")
+        return 0.0
+
+
+def get_price_with_defillama_fallback(symbol: str) -> float:
+    """Единая точка «цена символа, устойчивая к CoinGecko 429» -- владелец,
+    2026-07-21. При живом CoinGecko (circuit breaker закрыт) -- ОБЫЧНЫЙ
+    путь через get_all_coins(), DefiLlama НЕ вызывается вообще (проверка
+    cg_rate_limit_status() -- ДО любого обращения к DefiLlama). При
+    открытом circuit breaker -- фоллбек на _defillama_price_fallback().
+    Не заменяет и не трогает боевую сигнальную логику -- чистая утилита
+    "дай мне текущую цену", инфраструктурная, не subscriber-facing."""
+    if cg_rate_limit_status()["in_cooldown"]:
+        return _defillama_price_fallback(_cg_slug(symbol))
+    coins = get_all_coins()
+    coin = next((c for c in coins if c.get("symbol") == symbol), None)
+    if not coin:
+        return 0.0
+    return coin.get("quote", {}).get("USDT", {}).get("price", 0) or 0.0
+
+
 def _cg_get(url: str, params: dict = None, timeout: int = 10):
     """Единая точка входа для GET-запросов к api.coingecko.com: делит один rate-limit
     и один кэш на все функции бота, чтобы параллельные экраны (OI/funding/OHLC/USDT mcap/
