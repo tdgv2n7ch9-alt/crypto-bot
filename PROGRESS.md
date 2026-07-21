@@ -18886,3 +18886,30 @@ vs архив) -- смена порога не меняет доступност
 владельца -- 3+ цикла синка БЕЗ 422, `integrity_report()` на живом
 контейнере чист, число записей в git == число на `railway ssh`. Ручной
 бэкап продолжаю как stopgap до подтверждения фикса живьём.
+
+---
+
+**ПРИОРИТЕТ №1 сменился (владелец, 2026-07-21): расследование
+shadow-регресса** (shadow-поля = None у 6 из 7 сделок с ~18.07 -- причина
+WR-диагноза слепнуть). DEX Screener `taker_imbalance` -- модуль
+`dexscreener_reserve.py` закоммичен (`71bd8eed`) с `ENABLE_DEXSCREENER_RESERVE=False`,
+py_compile OK, 19 тестов зелёные, полный pytest 1736 passed/1 skipped/0
+failed -- НЕ задеплоено (только коммит, по прямому указанию владельца),
+OFF до починки shadow-регресса. Промоушены shadow->live заблокированы до
+диагноза. AMD-фаза (n=6, найдена в `RETRO_WR_DIAGNOSIS.md`) -- гипотеза в
+shadow, не применена к live. Далее -- `SHADOW_REGRESSION_INVESTIGATION.md`
+(read-only диагноз, не фикс).
+
+**ПАУЗА ЭМИССИИ ЖИВЫХ СИГНАЛОВ (владелец, 2026-07-21, реверсивно)**:
+`PAUSE_LIVE_SIGNAL_EMISSION` (env-var, default `true`) добавлен в `bot.py`,
+гейтит только точку генерации/рассылки НОВЫХ сигналов -- `send_scheduled()`
+(bot.py) и `signal_loop.run_signal_loop()`. Журнал, shadow-запись,
+мониторы (whale/ake/zone_alert/bsc_wallet/event_radar), бриф 08:30, radar
+-- НЕ затронуты, работают как обычно (нужны для диагноза/учёта). Открытые
+сделки/лимитки владельца не трогает -- `run_exit_tracker` не имеет
+зависимости от флага (закреплено регресс-тестом
+`test_run_exit_tracker_not_gated_by_pause_flag`). py_compile OK, 6 новых
+тестов + полный pytest 1742 passed/1 skipped/0 failed. Коммит `aa05d28d`.
+Снятие паузы = `PAUSE_LIVE_SIGNAL_EMISSION=false` в Railway env после
+починки shadow-регресса + подтверждения владельца -- мгновенно, без
+редеплоя.
