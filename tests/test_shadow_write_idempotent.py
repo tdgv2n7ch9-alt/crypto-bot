@@ -15,7 +15,7 @@ import shadow_engine as se
 
 def test_write_local_rejects_exact_duplicate(monkeypatch, tmp_path):
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)  # ротацию не триггерим в тесте
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)  # ротацию не триггерим в тесте
 
     record = {"symbol": "AKEUSDT", "ts": 12345.6789, "direction": "short"}
     assert se._write_local(record) is True
@@ -35,7 +35,7 @@ def test_write_local_cross_process_race_no_duplicate(monkeypatch, tmp_path):
     "процесс A" записал ту же запись -- без file-stat проверки B решит
     "uid новый" по своим устаревшим данным и допишет дубль."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE_STAT", None)
@@ -67,7 +67,7 @@ def test_write_local_cross_process_race_no_duplicate(monkeypatch, tmp_path):
 
 def test_write_local_allows_same_symbol_different_ts(monkeypatch, tmp_path):
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
 
     se._write_local({"symbol": "AKEUSDT", "ts": 100.0})
     se._write_local({"symbol": "AKEUSDT", "ts": 200.0})
@@ -80,7 +80,7 @@ def test_write_local_allows_same_symbol_different_ts(monkeypatch, tmp_path):
 
 def test_write_local_allows_different_symbol_same_ts(monkeypatch, tmp_path):
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
 
     se._write_local({"symbol": "AKEUSDT", "ts": 100.0})
     se._write_local({"symbol": "BTCUSDT", "ts": 100.0})
@@ -98,7 +98,7 @@ def test_write_local_dedup_now_consults_archive_too(monkeypatch, tmp_path):
     дублей на живом контейнере). Теперь _warm_uid_index() читает архив тоже
     -- та же запись, что уже есть в архиве, должна быть отклонена."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
     archive_dir = tmp_path / "archive"
@@ -119,7 +119,7 @@ def test_write_local_allows_new_record_not_in_archive(monkeypatch, tmp_path):
     """Расширение warm-индекса на архив не должно ложно блокировать НОВЫЕ
     записи, которых в архиве нет."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
     archive_dir = tmp_path / "archive"
@@ -167,7 +167,7 @@ def test_write_local_rejects_duplicate_via_uid_index_without_rereading_disk(monk
     отклоняется БЕЗ повторного полного чтения файла на дедуп-проверку (сама
     проверка -- O(1) по множеству, не скан списка)."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
 
@@ -196,7 +196,7 @@ def test_write_local_index_invalidated_when_shadow_file_changes(monkeypatch, tmp
     прогретый для одного SHADOW_FILE, не должен молча использоваться после
     подмены пути -- иначе запись в НОВЫЙ файл ложно отклоняется как "дубль"
     из СТАРОГО файла."""
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
 
@@ -220,7 +220,7 @@ def test_write_local_flags_out_of_order_without_dropping_record(monkeypatch, tmp
     поэтому использует ДВЕ записи ОДНОГО символа, иначе (разные символы)
     больше не флагуется (см. тест ниже, cross-symbol regression guard)."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
 
@@ -242,7 +242,7 @@ def test_write_local_cross_symbol_interleave_not_flagged_out_of_order(monkeypatc
     глобальное сравнение с `records[-1]` ложно флагало это как
     `out_of_order=True`, регресс-замок на это."""
     monkeypatch.setattr(se, "SHADOW_FILE", str(tmp_path / "shadow_signals.json"))
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 ** 9)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10 ** 6)
     monkeypatch.setattr(se, "_UID_INDEX", None)
     monkeypatch.setattr(se, "_UID_INDEX_FILE", None)
 

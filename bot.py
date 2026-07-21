@@ -14061,6 +14061,7 @@ async def _start_pump_detector(app):
     _job_expected_interval_sec["bsc_wallet_monitor"] = bsc_wallet_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["ake_setup_monitor"] = ake_setup_monitor.POLL_INTERVAL_SEC
     _job_expected_interval_sec["zone_alert_monitor"] = zone_alert_monitor.POLL_INTERVAL_SEC
+    _job_expected_interval_sec["shadow_archive_sync"] = 30 * 60
 
     scheduler.add_job(
         _heartbeat_wrapper("send_scheduled", send_scheduled),
@@ -14197,6 +14198,20 @@ async def _start_pump_detector(app):
         journal_persistence.sync_all,
         "interval",
         seconds=journal_persistence.SYNC_INTERVAL_SEC,
+        args=[app.bot],
+    )
+    # Владелец, P0 2026-07-21 (рецидив 40МБ/GitHub-422, живая находка):
+    # shadow-архивы (journal/archive/shadow_signals_*.json, создаются
+    # ротацией) раньше синкались в GitHub ТОЛЬКО при старте процесса
+    # (_startup_integrity_check) -- допущение "рестарты частые" оказалось
+    # неверным: контейнер без рестарта ~2 суток накопил 738 незасинканных
+    # файлов (4291 запись) под риском потери. Периодически, раз в 30 мин --
+    # best-effort, ничего не шлёт владельцу (см. push_pending_archives_async
+    # докстринг).
+    scheduler.add_job(
+        _heartbeat_wrapper("shadow_archive_sync", shadow_engine.push_pending_archives_async),
+        "interval",
+        minutes=30,
         args=[app.bot],
     )
     # ПАКЕТ 19, П2 (владелец): дайджест инбокса раз в 30 мин -- тот же

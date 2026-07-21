@@ -171,7 +171,7 @@ def test_sync_aborts_on_get_error_does_not_attempt_put(monkeypatch):
         return True
 
     monkeypatch.setattr(se, "_github_get_shadow_sync", fake_get_shadow_sync)
-    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", fake_put)
+    monkeypatch.setattr(se, "_push_shadow_via_git_cli", fake_put)
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
 
     ok = se._sync_to_github_sync({"symbol": "BTCUSDT", "ts": 111})
@@ -183,7 +183,7 @@ def test_sync_not_configured_returns_false_without_put(monkeypatch):
     put_called = {"count": 0}
 
     monkeypatch.setattr(se, "_github_get_shadow_sync", lambda: (None, None))
-    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", lambda *a, **kw: put_called.__setitem__("count", put_called["count"] + 1))
+    monkeypatch.setattr(se, "_push_shadow_via_git_cli", lambda *a, **kw: put_called.__setitem__("count", put_called["count"] + 1))
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: False)
 
     ok = se._sync_to_github_sync({"symbol": "BTCUSDT", "ts": 111})
@@ -207,7 +207,7 @@ def test_sync_catches_up_local_backlog_not_just_current_record(monkeypatch):
         put_payload["records"] = records
         return True
 
-    monkeypatch.setattr(se, "_github_put_shadow_via_data_api", fake_put)
+    monkeypatch.setattr(se, "_push_shadow_via_git_cli", fake_put)
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
 
     ok = se._sync_to_github_sync(local_backlog[-1])
@@ -225,7 +225,7 @@ def test_sync_no_missing_records_returns_true_without_put(monkeypatch):
     monkeypatch.setattr(se, "_github_get_shadow_sync", lambda: (local_records, "remote_sha"))
 
     put_called = {"count": 0}
-    monkeypatch.setattr(se, "_github_put_shadow_via_data_api",
+    monkeypatch.setattr(se, "_push_shadow_via_git_cli",
                          lambda *a, **kw: put_called.__setitem__("count", put_called["count"] + 1))
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: True)
 
@@ -234,102 +234,151 @@ def test_sync_no_missing_records_returns_true_without_put(monkeypatch):
     assert put_called["count"] == 0
 
 
-# --- GitHub-422 вариант C: _github_put_shadow_via_data_api() (Git Data API) ---
+# --- P0 2026-07-21 (рецидив 40МБ/GitHub-422): _push_shadow_via_git_cli() ---
+# (нативный git push, ЗАМЕНЯЕТ REST Git Data API -- см. её докстринг)
 
-def test_put_via_data_api_pushes_blob_tree_commit_ref(monkeypatch):
-    """Полный happy-path: GET ref -> GET commit -> POST blob -> POST tree ->
-    POST commit -> PATCH ref, все 6 запросов в правильном порядке."""
+def _fake_run_git_dispatcher(script: dict):
+    """Строит fake _run_git(args, cwd, ...) -- ключ script -- первый элемент
+    args (git-подкоманда), значение -- (rc, out, err) либо callable(args) ->
+    (rc, out, err) для команд, которым нужна логика по попытке (push-race)."""
+    def _fake(args, cwd=None, timeout=None, env=None):
+        key = args[0]
+        entry = script.get(key, (0, "", ""))
+        if callable(entry):
+            return entry(args)
+        return entry
+    return _fake
+
+
+def test_push_via_git_cli_happy_path(monkeypatch, tmp_path):
+    """Полный happy-path: sparse-checkout init/set -> fetch -> checkout ->
+    add -> commit -> push, все команды в правильном порядке, push успешен
+    с первой попытки."""
     _github_ready(monkeypatch)
+    monkeypatch.setattr(se, "_GIT_SYNC_DIR", str(tmp_path))
+    monkeypatch.setattr(se, "_ensure_git_sync_dir", lambda: True)
+
     calls = []
 
-    def fake_get(url, headers=None, timeout=None):
-        calls.append(("GET", url))
-        if url.endswith("/git/refs/heads/main"):
-            return _FakeResponse(json_data={"object": {"sha": "base_commit_sha"}})
-        if url.endswith("/git/commits/base_commit_sha"):
-            return _FakeResponse(json_data={"tree": {"sha": "base_tree_sha"}})
-        raise AssertionError(f"unexpected GET {url}")
+    def fake(args, cwd=None, timeout=None, env=None):
+        calls.append(args[0])
+        return (0, "", "")
 
-    def fake_post(url, headers=None, json=None, timeout=None):
-        calls.append(("POST", url))
-        if url.endswith("/git/blobs"):
-            return _FakeResponse(json_data={"sha": "blob_sha"})
-        if url.endswith("/git/trees"):
-            assert json["base_tree"] == "base_tree_sha"
-            return _FakeResponse(json_data={"sha": "new_tree_sha"})
-        if url.endswith("/git/commits"):
-            assert json["tree"] == "new_tree_sha"
-            assert json["parents"] == ["base_commit_sha"]
-            return _FakeResponse(json_data={"sha": "new_commit_sha"})
-        raise AssertionError(f"unexpected POST {url}")
-
-    def fake_patch(url, headers=None, json=None, timeout=None):
-        calls.append(("PATCH", url))
-        assert json["sha"] == "new_commit_sha"
-        return _FakeResponse(json_data={})
-
-    monkeypatch.setattr(se.requests, "get", fake_get)
-    monkeypatch.setattr(se.requests, "post", fake_post)
-    monkeypatch.setattr(se.requests, "patch", fake_patch)
-
-    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}])
+    monkeypatch.setattr(se, "_run_git", fake)
+    ok = se._push_shadow_via_git_cli([{"symbol": "BTCUSDT", "ts": 111}])
     assert ok is True
-    assert [c[0] for c in calls] == ["GET", "GET", "POST", "POST", "POST", "PATCH"]
+    assert calls == ["fetch", "checkout", "add", "commit", "push"]
+    # рабочий файл реально записан перед add/commit
+    with open(os.path.join(str(tmp_path), "journal", "shadow_signals.json"), encoding="utf-8") as f:
+        payload = json.load(f)
+    assert payload["records"] == [{"symbol": "BTCUSDT", "ts": 111}]
 
 
-def test_put_via_data_api_retries_on_ref_race_then_succeeds(monkeypatch):
-    """Ref сдвинулся между GET и PATCH (конкурентный коммит) -- PATCH падает
-    на первой попытке, вторая попытка со свежим ref/base_tree проходит."""
+def test_push_via_git_cli_retries_on_push_rejection_then_succeeds(monkeypatch, tmp_path):
+    """Push отклонён (гонка с другим пушем) на первой попытке -- вторая
+    попытка (свежий fetch+rebuild) проходит."""
     _github_ready(monkeypatch)
+    monkeypatch.setattr(se, "_GIT_SYNC_DIR", str(tmp_path))
+    monkeypatch.setattr(se, "_ensure_git_sync_dir", lambda: True)
+
     attempt = {"n": 0}
 
-    def fake_get(url, headers=None, timeout=None):
-        if url.endswith("/git/refs/heads/main"):
-            return _FakeResponse(json_data={"object": {"sha": f"commit_{attempt['n']}"}})
-        return _FakeResponse(json_data={"tree": {"sha": f"tree_{attempt['n']}"}})
+    def fake(args, cwd=None, timeout=None, env=None):
+        if args[0] == "push":
+            attempt["n"] += 1
+            if attempt["n"] == 1:
+                return (1, "", "! [rejected] main -> main (fetch first)")
+            return (0, "", "")
+        return (0, "", "")
 
-    def fake_post(url, headers=None, json=None, timeout=None):
-        if url.endswith("/git/blobs"):
-            return _FakeResponse(json_data={"sha": "blob_sha"})
-        if url.endswith("/git/trees"):
-            return _FakeResponse(json_data={"sha": "new_tree_sha"})
-        return _FakeResponse(json_data={"sha": "new_commit_sha"})
-
-    def fake_patch(url, headers=None, json=None, timeout=None):
-        attempt["n"] += 1
-        if attempt["n"] == 1:
-            import requests as _requests
-            resp = _FakeResponse(status_code=422, raise_exc=_requests.exceptions.HTTPError("422 ref race"))
-            resp.raise_for_status()
-        return _FakeResponse(json_data={})
-
-    monkeypatch.setattr(se.requests, "get", fake_get)
-    monkeypatch.setattr(se.requests, "post", fake_post)
-    monkeypatch.setattr(se.requests, "patch", fake_patch)
-
-    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}])
+    monkeypatch.setattr(se, "_run_git", fake)
+    ok = se._push_shadow_via_git_cli([{"symbol": "BTCUSDT", "ts": 111}])
     assert ok is True
-    assert attempt["n"] == 2  # первая попытка упала, вторая (свежий ref) прошла
+    assert attempt["n"] == 2
 
 
-def test_put_via_data_api_gives_up_after_max_attempts(monkeypatch):
+def test_push_via_git_cli_gives_up_after_max_attempts(monkeypatch, tmp_path):
     """Устойчивая ошибка (не транзиентная гонка) -- не зависает, честно False
     после исчерпания попыток."""
     _github_ready(monkeypatch)
+    monkeypatch.setattr(se, "_GIT_SYNC_DIR", str(tmp_path))
+    monkeypatch.setattr(se, "_ensure_git_sync_dir", lambda: True)
+    monkeypatch.setattr(se, "_run_git", lambda args, cwd=None, timeout=None, env=None: (1, "", "persistent failure"))
 
-    def boom(*a, **kw):
-        raise ConnectionError("persistent network failure")
-
-    monkeypatch.setattr(se.requests, "get", boom)
-
-    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}], max_attempts=3)
+    ok = se._push_shadow_via_git_cli([{"symbol": "BTCUSDT", "ts": 111}], max_attempts=3)
     assert ok is False
 
 
-def test_put_via_data_api_not_configured_returns_false(monkeypatch):
+def test_push_via_git_cli_not_configured_returns_false(monkeypatch):
     monkeypatch.setattr(se.signal_journal, "_github_configured", lambda: False)
-    ok = se._github_put_shadow_via_data_api([{"symbol": "BTCUSDT", "ts": 111}])
+    ok = se._push_shadow_via_git_cli([{"symbol": "BTCUSDT", "ts": 111}])
     assert ok is False
+
+
+def test_push_via_git_cli_nothing_to_commit_returns_true(monkeypatch, tmp_path):
+    """remote уже содержит идентичное содержимое -- commit говорит "nothing
+    to commit", это не ошибка, а честный признак "уже синхронизировано"."""
+    _github_ready(monkeypatch)
+    monkeypatch.setattr(se, "_GIT_SYNC_DIR", str(tmp_path))
+    monkeypatch.setattr(se, "_ensure_git_sync_dir", lambda: True)
+
+    def fake(args, cwd=None, timeout=None, env=None):
+        if args[0] == "commit":
+            return (1, "nothing to commit, working tree clean", "")
+        return (0, "", "")
+
+    monkeypatch.setattr(se, "_run_git", fake)
+    ok = se._push_shadow_via_git_cli([{"symbol": "BTCUSDT", "ts": 111}])
+    assert ok is True
+
+
+def test_push_via_git_cli_ensure_dir_failure_returns_false(monkeypatch):
+    _github_ready(monkeypatch)
+    monkeypatch.setattr(se, "_ensure_git_sync_dir", lambda: False)
+    ok = se._push_shadow_via_git_cli([{"symbol": "BTCUSDT", "ts": 111}])
+    assert ok is False
+
+
+def test_run_git_masks_token_from_output(monkeypatch):
+    """Токен НИКОГДА не должен просочиться в лог -- _run_git() маскирует его
+    из stdout/stderr перед возвратом вызывающему коду."""
+    monkeypatch.setattr(se.signal_journal, "GITHUB_TOKEN", "supersecrettoken123")
+
+    class _FakeCompleted:
+        returncode = 1
+        stdout = "some output with supersecrettoken123 embedded"
+        stderr = "error mentioning supersecrettoken123 too"
+
+    monkeypatch.setattr(se.subprocess, "run", lambda *a, **kw: _FakeCompleted())
+    rc, out, err = se._run_git(["status"], cwd="/tmp")
+    assert "supersecrettoken123" not in out
+    assert "supersecrettoken123" not in err
+    assert "***" in out
+    assert "***" in err
+
+
+def test_ensure_git_sync_dir_sparse_checkout_targets_single_file_not_whole_dir(monkeypatch, tmp_path):
+    """Живая находка при ревью (2026-07-21): cone-режим sparse-checkout с
+    путём "journal" материализовал бы ВЕСЬ каталог, включая journal/archive/
+    (сотни МБ архивных файлов) -- ровно то, чего мы избегаем этим переходом
+    на git. Sparse-checkout должен быть настроен на ОДИН файл
+    (GITHUB_SHADOW_PATH), НЕ на каталог `journal`, и БЕЗ --cone."""
+    monkeypatch.setattr(se, "_GIT_SYNC_DIR", str(tmp_path))
+    calls = []
+
+    def fake(args, cwd=None, timeout=None, env=None):
+        calls.append(list(args))
+        return (0, "", "")
+
+    monkeypatch.setattr(se, "_run_git", fake)
+    ok = se._ensure_git_sync_dir()
+    assert ok is True
+
+    sparse_calls = [c for c in calls if c[0] == "sparse-checkout"]
+    assert ["sparse-checkout", "init"] in sparse_calls  # без --cone
+    assert ["sparse-checkout", "set", se.GITHUB_SHADOW_PATH] in sparse_calls
+    assert not any("--cone" in c for c in sparse_calls)
+    assert not any(c == ["sparse-checkout", "set", "journal"] for c in sparse_calls)
 
 
 # --- Пакет 11 (owner-запрос "целостность shadow-окон"): integrity_report() ---

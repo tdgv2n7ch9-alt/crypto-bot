@@ -68,6 +68,8 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
+import tempfile
 import time
 from datetime import datetime
 
@@ -86,24 +88,41 @@ log = logging.getLogger(__name__)
 SHADOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "shadow_signals.json")
 GITHUB_SHADOW_PATH = "journal/shadow_signals.json"
 
-# ── П-Ротация (владелец, решение §3 утреннего брифа 2026-07-14): активный
-# файл выше НЕ капается (см. докстринг модуля -- "каждая запись ценна"), но
-# КАЖДАЯ запись/чтение файла целиком (_write_local читает-дописывает-
-# перезаписывает ВЕСЬ файл на каждую новую shadow-запись) становится дороже
-# линейно с ростом файла без ограничения -- живьём файл вырос до 12.5МБ за
-# 3 суток. Ротация переносит записи старше ROTATION_KEEP_DAYS суток из
-# активного файла в journal/archive/shadow_signals_<от>_<до>.json, БЕЗ
-# потери данных -- get_local_records() по умолчанию читает активный файл
-# ПЛЮС все архивы (полная история для readiness-порогов/integrity_report/
-# анализа исходов), только _write_local()/_sync_to_github_sync() держат
-# "горячий" путь на одном (маленьком после ротации) активном файле.
+# ── П-Ротация (владелец, решение §3 утреннего брифа 2026-07-14, ПЕРЕСМОТРЕНО
+# владельцем P0 2026-07-21 -- рецидив 40МБ/GitHub-422): активный файл выше НЕ
+# капается (см. докстринг модуля -- "каждая запись ценна"), но КАЖДАЯ запись/
+# чтение файла целиком (_write_local читает-дописывает-перезаписывает ВЕСЬ
+# файл на каждую новую shadow-запись) становится дороже линейно с ростом
+# файла без ограничения. Ротация переносит СТАРЫЕ записи из активного файла в
+# journal/archive/shadow_signals_<от>_<до>.json, БЕЗ потери данных --
+# get_local_records() по умолчанию читает активный файл ПЛЮС все архивы
+# (полная история для readiness-порогов/integrity_report/анализа исходов),
+# только _write_local()/_sync_to_github_sync() держат "горячий" путь на одном
+# (маленьком после ротации) активном файле.
+#
+# ПОРОГ ПО ЧИСЛУ ЗАПИСЕЙ, НЕ ПО ВРЕМЕНИ/МБ (владелец, P0 2026-07-21): прежний
+# time-based порог (ROTATION_KEEP_DAYS=3, триггер -- размер файла > 5МБ) на
+# практике позволял активному файлу расти НЕОГРАНИЧЕННО в пределах 3-суточного
+# окна -- при живом трафике ~3400 записей/сутки 3-суточное окно само по себе
+# достигало ~30МБ, и REST Git Data API (blob->tree->commit->ref) начал
+# проваливаться 422 "input too large to process" (живая находка 2026-07-21,
+# см. PROGRESS.md) задолго до официального лимита блоба (100МБ) -- практический
+# потолок тела HTTP-запроса (base64+JSON overhead) оказался ниже. Новый порог
+# считает КОЛИЧЕСТВО записей (не зависит от объёма трафика в сутки) -- активный
+# файл физически не может вырасти больше ROTATION_MAX_ACTIVE_RECORDS независимо
+# от того, сколько сигналов генерируется в день. `get_local_records()`
+# (все нижестоящие потребители -- shadow-аналитика/readiness/integrity) не
+# зависит от того, где именно лежит запись (активный файл vs архив) -- эта
+# смена триггера НИКАК не меняет доступность исторических данных, только
+# частоту/размер ротации.
 ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal", "archive")
 GITHUB_ARCHIVE_DIR = "journal/archive"
 ARCHIVE_MANIFEST = os.path.join(ARCHIVE_DIR, ".pushed.json")
-ROTATION_SIZE_BYTES = 5 * 1024 * 1024  # триггер ротации -- активный файл больше 5МБ
-ROTATION_KEEP_DAYS = 3  # окно, которое ВСЕГДА остаётся в активном файле после ротации --
-# с запасом покрывает самое широкое окно прямого (не через get_local_records()) чтения
-# активного файла в живом коде: daily_metrics.shadow_vs_live_today() (окно 24ч).
+ROTATION_MAX_ACTIVE_RECORDS = 1000  # триггер ротации -- активный файл длиннее этого числа записей
+ROTATION_KEEP_RECORDS = 800  # сколько САМЫХ НОВЫХ записей остаётся в активном файле после ротации
+# (~2.3-2.9МБ при текущем ~2.9КБ/запись -- на порядок ниже практического
+# потолка REST/git-транспорта в любом случае, буфер в 200 записей между
+# триггером и keep не даёт ротации срабатывать на КАЖДУЮ новую запись подряд).
 SR_MIN_RR_TP1_SHADOW = 2.0  # патч 02 -- см. patches/02-rr-gate/README.md, НЕ live-константа
 DEAD_ZONE_SHADOW_SCORE_PENALTY = 10  # находка владельца 2026-07-11 (карточка EVAA):
 # METHODOLOGY_CORE.md §8 -- сессия влияет на качество, но killzone quality=="D" (Dead
@@ -331,75 +350,168 @@ def _github_get_shadow_sync():
         return False, None
 
 
-def _github_put_shadow_via_data_api(records: list, max_attempts: int = 5) -> bool:
-    """PUT journal/shadow_signals.json через Git Data API (blob->tree->commit->ref)
-    -- владелец, ДА 2026-07-18, GitHub-422 вариант C (см. PROGRESS.md "Дизайн
-    GitHub-422"). ЗАМЕНЯЕТ прежний Contents API PUT (одним запросом с payload
-    прямо в теле) -- Contents API падает 422 "Sorry, the file is too large to
-    be processed" на payload ~25MB+ (штатный размер активного файла в пределах
-    ROTATION_KEEP_DAYS=3 при текущем ~6КБ/запись, живая находка 2026-07-18).
-    Git Data API лимитирован 100MB на blob -- тот же паттерн, что уже проверен
-    и работает для архивного бэкапа (scripts/shadow_dedupe.py/#267,
-    github_multi_file_commit()).
+# ── git-based push (владелец, P0 2026-07-21, рецидив 40МБ/GitHub-422) ───────
+#
+# REST Git Data API (blob->tree->commit->ref, введён 2026-07-18 как фикс
+# ПРЕДЫДУЩЕГО инцидента этого же класса) сам упёрся в практический лимит: живая
+# находка 2026-07-21 -- журнал вырос до ~52МБ (base64+JSON overhead в теле
+# запроса `POST git/blobs`), GitHub начал отвечать 422 "input was too large to
+# process" ВСЕ 5 попыток КАЖДЫЙ цикл синка, задолго до официального лимита
+# блоба (100MB) -- тот же класс проблемы, что и предыдущий Contents API
+# инцидент (см. докстринг _github_get_shadow_sync про 1MB-порог), просто на
+# другом (более высоком) пороге. Нативный `git push` через smart-HTTP
+# протокол этого искусственного порога размера тела запроса не имеет --
+# ровно тот путь, что сработал как аварийный бэкап при живой находке этого
+# P0 (обычный `git add`/`commit`/`push` из рабочего дерева, не REST).
+_GIT_SYNC_DIR = os.path.join(tempfile.gettempdir(), "shadow_git_sync")
 
-    В отличие от Contents API (конфликт через sha файла и 409), здесь
-    конфликт -- гонка ref'а (PATCH git/refs/heads/main падает, если ref
-    сдвинулся между GET ref и PATCH, например конкурентный push deploy.sh
-    или другого shadow-sync коммита) -- ретрай со свежим ref/base_tree на
-    КАЖДУЮ попытку (blob уже создан не теряется -- объекты git не привязаны
-    к родителю, переиспользуется). Best-effort: возвращает True/False, не
-    поднимает исключение -- вызывающий код уже не считает провал синка
-    фатальным (локальная запись сделана раньше, до этого шага)."""
+
+def _git_remote_url() -> str:
+    """URL с встроенным токеном -- НЕ персистится на диск (не через `git
+    remote add`, передаётся аргументом команды на каждый fetch/push) и НИКОГДА
+    не логируется целиком (см. _run_git() -- маскирует токен из любого
+    перехваченного вывода перед возвратом вызывающему коду)."""
+    return (f"https://{signal_journal.GITHUB_TOKEN}@github.com/"
+            f"{signal_journal.GITHUB_OWNER}/{signal_journal.GITHUB_REPO}.git")
+
+
+def _run_git(args: list, cwd: str, timeout: int = 60, env: dict = None):
+    """subprocess-обёртка вокруг `git` -- маскирует GITHUB_TOKEN из stdout/
+    stderr ПЕРЕД возвратом, вызывающий код обязан логировать только то, что
+    вернула эта функция (не сырые args, если они сами содержат URL с
+    токеном -- вызывающий код передаёт URL только как позиционный аргумент
+    самой git-команде, не через args, которые попадают в лог)."""
+    token = signal_journal.GITHUB_TOKEN
+    try:
+        result = subprocess.run(["git"] + args, cwd=cwd, timeout=timeout,
+                                 capture_output=True, text=True, env=env)
+        out, err = result.stdout, result.stderr
+        if token:
+            out = out.replace(token, "***")
+            err = err.replace(token, "***")
+        return result.returncode, out, err
+    except subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except Exception as e:
+        return -1, "", str(e)
+
+
+def _ensure_git_sync_dir() -> bool:
+    """Ленивая инициализация локального git-репо для sync -- ОДИН РАЗ за
+    время жизни процесса (переживает между вызовами _push_shadow_via_git_cli(),
+    не пересоздаётся каждый цикл -- инкрементальные fetch дёшевы). Возвращает
+    True, если репо готово (создано либо уже было). Не настраивает `remote`
+    (URL с токеном передаётся аргументом на каждый вызов, не персистится).
+
+    Sparse-checkout -- НЕ cone-режим (cone материализует ВЕСЬ каталог,
+    включая `journal/archive/*.json` -- сотни МБ архивных файлов, ровно то,
+    чего мы избегаем этим переходом на git) -- явный файловый паттерн, только
+    `journal/shadow_signals.json`, ничего из `journal/archive/` или остального
+    репозитория не выкачивается на диск."""
+    if os.path.isdir(os.path.join(_GIT_SYNC_DIR, ".git")):
+        return True
+    try:
+        os.makedirs(_GIT_SYNC_DIR, exist_ok=True)
+        rc, out, err = _run_git(["init", "-q"], cwd=_GIT_SYNC_DIR)
+        if rc != 0:
+            log.error(f"shadow_engine: git init sync-репо не удался: {err[:300]}")
+            return False
+        _run_git(["config", "user.email", "shadow-sync@bestrade.local"], cwd=_GIT_SYNC_DIR)
+        _run_git(["config", "user.name", "BEST TRADE shadow-sync"], cwd=_GIT_SYNC_DIR)
+        _run_git(["sparse-checkout", "init"], cwd=_GIT_SYNC_DIR)  # НЕ --cone, см. докстринг
+        rc, out, err = _run_git(["sparse-checkout", "set", GITHUB_SHADOW_PATH],
+                                 cwd=_GIT_SYNC_DIR, timeout=15)
+        if rc != 0:
+            log.error(f"shadow_engine: git sparse-checkout не удался: {err[:300]}")
+            return False
+        return True
+    except Exception as e:
+        log.error(f"shadow_engine: инициализация git sync-репо упала: {e}")
+        return False
+
+
+def _push_shadow_via_git_cli(records: list, max_attempts: int = 5) -> bool:
+    """PUT journal/shadow_signals.json через нативный `git push` (НЕ REST Git
+    Data API, см. блок-комментарий выше про P0 2026-07-21) -- владелец, ДА.
+    ЗАМЕНЯЕТ _github_put_shadow_via_data_api() полностью (тот же вызывающий
+    код в _sync_to_github_sync(), только транспорт).
+
+    Механика (fetch --filter=blob:none + sparse-checkout ОДНОГО файла, НЕ
+    полный checkout всего репозитория на каждый цикл):
+    - Персистентный локальный git-репо в /tmp (см. _ensure_git_sync_dir) со
+      sparse-checkout, ограниченным ТОЛЬКО `journal/shadow_signals.json`
+      (не cone-режим, не весь `journal/` -- иначе `journal/archive/*.json`,
+      сотни МБ, материализовались бы на каждый checkout, ровно то, чего
+      избегаем этим переходом) -- рабочее дерево содержит ТОЛЬКО этот один
+      файл, остальной репозиторий остаётся "sparse" (не выкачивается на диск).
+    - `git fetch --filter=blob:none --depth=1 <url> main` тянет commit+tree
+      метаданные main БЕЗ содержимого блобов (partial clone, официально
+      поддерживается GitHub) -- дёшево по трафику независимо от размера
+      остального репозитория.
+    - `git checkout -B main FETCH_HEAD` -- материализует sparse-часть дерева
+      (только shadow_signals.json) с актуальным содержимым.
+    - Перезаписываем journal/shadow_signals.json новым содержимым, `add` +
+      `commit` + `push <url> HEAD:refs/heads/main`.
+    - При отклонении пуша (не fast-forward, гонка с другим пушем, например
+      deploy.sh или журнал-синком другого контура) -- повторный fetch со
+      свежего main + rebuild, до `max_attempts` раз (тот же паттерн ретрая,
+      что был у REST-версии).
+
+    Best-effort: возвращает True/False, не поднимает исключение наружу --
+    вызывающий код уже не считает провал синка фатальным (локальная запись
+    на диск сделана раньше, до этого шага, см. _write_local())."""
     if not signal_journal._github_configured():
         return False
     token_issue = signal_journal._validate_github_token()
     if token_issue:
         log.error(f"shadow_engine: {token_issue}")
         return False
+    if not _ensure_git_sync_dir():
+        return False
+
+    remote_url = _git_remote_url()
     payload = {"schema_version": 1, "records": records}
-    content = json.dumps(payload, ensure_ascii=False)
+    target_path = os.path.join(_GIT_SYNC_DIR, "journal", "shadow_signals.json")
+
     for attempt in range(max_attempts):
+        rc, out, err = _run_git(["fetch", "-q", "--filter=blob:none", "--depth=1",
+                                  remote_url, "main"], cwd=_GIT_SYNC_DIR, timeout=60)
+        if rc != 0:
+            log.error(f"shadow_engine: git-sync fetch попытка {attempt + 1}/{max_attempts} "
+                      f"не удалась: {err[:300]}")
+            continue
+
+        rc, out, err = _run_git(["checkout", "-q", "-B", "main", "FETCH_HEAD"],
+                                 cwd=_GIT_SYNC_DIR, timeout=30)
+        if rc != 0:
+            log.error(f"shadow_engine: git-sync checkout попытка {attempt + 1}/{max_attempts} "
+                      f"не удалась: {err[:300]}")
+            continue
+
         try:
-            base = signal_journal._github_api_base()
-            headers = signal_journal._github_headers()
-            ref = requests.get(f"{base}/git/refs/heads/main", headers=headers, timeout=15)
-            ref.raise_for_status()
-            base_commit_sha = ref.json()["object"]["sha"]
-
-            base_commit = requests.get(f"{base}/git/commits/{base_commit_sha}", headers=headers, timeout=15)
-            base_commit.raise_for_status()
-            base_tree_sha = base_commit.json()["tree"]["sha"]
-
-            blob = requests.post(f"{base}/git/blobs", headers=headers, timeout=25, json={
-                "content": base64.b64encode(content.encode()).decode(),
-                "encoding": "base64",
-            })
-            blob.raise_for_status()
-            blob_sha = blob.json()["sha"]
-
-            tree = requests.post(f"{base}/git/trees", headers=headers, timeout=20, json={
-                "base_tree": base_tree_sha,
-                "tree": [{"path": GITHUB_SHADOW_PATH, "mode": "100644", "type": "blob", "sha": blob_sha}],
-            })
-            tree.raise_for_status()
-            new_tree_sha = tree.json()["sha"]
-
-            commit = requests.post(f"{base}/git/commits", headers=headers, timeout=20, json={
-                "message": f"shadow: {len(records)} записей",
-                "tree": new_tree_sha,
-                "parents": [base_commit_sha],
-            })
-            commit.raise_for_status()
-            new_commit_sha = commit.json()["sha"]
-
-            patch = requests.patch(f"{base}/git/refs/heads/main", headers=headers, timeout=15,
-                                    json={"sha": new_commit_sha})
-            patch.raise_for_status()
-            return True
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
         except Exception as e:
-            detail = getattr(getattr(e, "response", None), "text", "")
-            log.error(f"shadow_engine: Git Data API push попытка {attempt + 1}/{max_attempts} "
-                      f"не удалась ({e} {detail[:300]}) -- ретрай со свежим ref")
+            log.error(f"shadow_engine: git-sync запись рабочего файла не удалась: {e}")
+            continue
+
+        _run_git(["add", GITHUB_SHADOW_PATH], cwd=_GIT_SYNC_DIR, timeout=30)
+        rc, out, err = _run_git(["commit", "-q", "-m", f"shadow: {len(records)} записей"],
+                                 cwd=_GIT_SYNC_DIR, timeout=20)
+        if rc != 0:
+            if "nothing to commit" in (out + err).lower():
+                return True  # remote уже содержит идентичное содержимое
+            log.error(f"shadow_engine: git-sync commit попытка {attempt + 1}/{max_attempts} "
+                      f"не удалась: {err[:300]}")
+            continue
+
+        rc, out, err = _run_git(["push", "-q", remote_url, "HEAD:refs/heads/main"],
+                                 cwd=_GIT_SYNC_DIR, timeout=90)
+        if rc == 0:
+            return True
+        log.error(f"shadow_engine: git-sync push попытка {attempt + 1}/{max_attempts} "
+                  f"не удалась: {err[:300]} -- ретрай со свежего main")
     return False
 
 
@@ -448,12 +560,12 @@ def _sync_to_github_sync(new_record: dict = None, now: float = None) -> bool:
     сразу возвращает True БЕЗ сетевого вызова (локальная запись уже надёжна,
     догонит на следующем окне). `now` -- для тестируемости, None -> реальное время.
 
-    Владелец, ДА 2026-07-18 (GitHub-422 вариант C): запись переведена на
-    _github_put_shadow_via_data_api() (Git Data API, blob->tree->commit->ref)
-    -- см. её докстринг. Внешний ретрай-на-конфликт (раньше -- `for attempt in
-    range(2)` + "conflict" от Contents API) убран: ref-race теперь ретраится
-    ВНУТРИ _github_put_shadow_via_data_api() (5 попыток), одного цикла
-    GET+PUT здесь достаточно."""
+    Владелец, ДА 2026-07-21 (P0, рецидив 40МБ/GitHub-422): запись переведена
+    на _push_shadow_via_git_cli() (нативный git push, НЕ REST Git Data API --
+    та версия, введённая 2026-07-18, сама упёрлась в тот же класс лимита на
+    выросшем файле, см. её докстринг про 52МБ/422). Внешний ретрай-на-конфликт
+    не нужен -- ref-race/push-race ретраится ВНУТРИ _push_shadow_via_git_cli()
+    (5 попыток), одного цикла GET+PUSH здесь достаточно."""
     global _last_github_sync_attempt_ts
     now = now if now is not None else time.time()
     if now - _last_github_sync_attempt_ts < GITHUB_SYNC_MIN_INTERVAL_SEC:
@@ -470,7 +582,7 @@ def _sync_to_github_sync(new_record: dict = None, now: float = None) -> bool:
     missing = [r for r in local_records if _dedup_key(r) not in remote_keys]
     if not missing:
         return True  # уже всё синхронизировано (включая new_record, если был передан)
-    return _github_put_shadow_via_data_api(remote_records + missing)
+    return _push_shadow_via_git_cli(remote_records + missing)
 
 
 def compute_whale_confluence(classified_by_side: dict, whale_zones: dict) -> dict:
@@ -740,14 +852,20 @@ ROTATE_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "jou
 
 
 def _rotate_if_needed(now_ts: float = None) -> str:
-    """П-Ротация (владелец, 2026-07-14) -- см. докстринг у ROTATION_SIZE_BYTES
-    выше. Активный файл проверяется на размер (дешёвый os.path.getsize, без
-    чтения) на каждую запись; полный read+split+перезапись -- только когда
-    файл реально пересёк порог, что происходит редко относительно частоты
-    записи. Возвращает путь нового архивного файла при успешной ротации,
-    иначе "" (файл маленький / нечего архивировать в пределах keep-окна /
-    ошибка -- залогирована, ротация НЕ блокирует уже выполненную запись,
-    просто откладывается до следующего вызова).
+    """П-Ротация (владелец, 2026-07-14, порог ПЕРЕСМОТРЕН владельцем P0
+    2026-07-21 -- см. докстринг у ROTATION_MAX_ACTIVE_RECORDS выше). Активный
+    файл проверяется на ЧИСЛО ЗАПИСЕЙ (не размер в байтах, не время -- см.
+    находку выше про 3-суточное окно, растущее неограниченно с трафиком);
+    полный read+split+перезапись -- только когда файл реально пересёк порог.
+    Возвращает путь нового архивного файла при успешной ротации, иначе ""
+    (файл короче порога / ошибка -- залогирована, ротация НЕ блокирует уже
+    выполненную запись, просто откладывается до следующего вызова).
+
+    Keep-window -- ROTATION_KEEP_RECORDS САМЫХ НОВЫХ (по порядку в файле,
+    append-only -- последние N записей списка) записей, не "новее чем N
+    суток": простой срез `records[-ROTATION_KEEP_RECORDS:]` вместо
+    time-based cutoff, число записей в активном файле после ротации
+    предсказуемо независимо от объёма трафика.
 
     Владелец, приёмка v130 (2026-07-16): живая находка -- в окне Railway
     rolling-deploy старый и новый контейнер кратковременно ОБА живы на общем
@@ -779,15 +897,21 @@ def _rotate_if_needed(now_ts: float = None) -> str:
     try:
         if not os.path.exists(SHADOW_FILE):
             return ""
-        if os.path.getsize(SHADOW_FILE) < ROTATION_SIZE_BYTES:
+        records = _load_local()
+        if len(records) <= ROTATION_MAX_ACTIVE_RECORDS:
             return ""
         now_ts = now_ts if now_ts is not None else time.time()
-        cutoff = now_ts - ROTATION_KEEP_DAYS * 86400
-        records = _load_local()
-        to_archive = [r for r in records if (r.get("ts") or 0) < cutoff]
-        to_keep = [r for r in records if (r.get("ts") or 0) >= cutoff]
+        # ROTATION_KEEP_RECORDS=0 -- честно "ничего не оставлять" -- records[-0:]
+        # в Python НЕ означает "последние 0 элементов" (даёт весь список, `-0 == 0`),
+        # разветвляем явно, чтобы не архивировать 0 записей вместо всех.
+        if ROTATION_KEEP_RECORDS > 0:
+            to_archive = records[:-ROTATION_KEEP_RECORDS]
+            to_keep = records[-ROTATION_KEEP_RECORDS:]
+        else:
+            to_archive = records
+            to_keep = []
         if not to_archive:
-            return ""  # большой файл, но всё в пределах keep-окна -- архивировать нечего
+            return ""  # порог пересечён, но keep-окно покрывает всё -- нечего архивировать
         ts_values = [r["ts"] for r in to_archive if r.get("ts") is not None]
         from_date = datetime.utcfromtimestamp(min(ts_values)).strftime("%Y%m%d")
         to_date = datetime.utcfromtimestamp(max(ts_values)).strftime("%Y%m%d")
@@ -836,15 +960,22 @@ def _push_pending_archives_sync() -> dict:
     GET+sha+merge не нужен.
 
     НАМЕРЕННО НЕ вызывается из _write_local()/_sync_to_github_sync() (горячий
-    путь shadow-записи) -- П-Ротация (2026-07-14): архивация происходит редко
-    (раз в несколько тысяч записей), синка раз в рестарт процесса достаточно
-    для "без потери данных" (см. bot._startup_integrity_check, где эта
-    функция вызывается через run_in_executor). Отдельно это ещё и не даёт
-    существующим тестам shadow_engine (много которых монкипатчат
-    `_sync_to_github_sync` целиком заглушкой, но не знают об этой функции)
-    случайно попасть на реальный `journal/archive/` этого репозитория и
-    настоящий сетевой вызов -- держать пуш архива вне горячего пути делает
-    эту границу явной, а не полагается на то, что тесты её не заденут.
+    путь shadow-записи) -- вызывается при старте (bot._startup_integrity_check)
+    И периодически (см. push_pending_archives_async() ниже, scheduler.add_job
+    в bot.py). Отдельно это ещё и не даёт существующим тестам shadow_engine
+    (много которых монкипатчат `_sync_to_github_sync` целиком заглушкой, но не
+    знают об этой функции) случайно попасть на реальный `journal/archive/`
+    этого репозитория и настоящий сетевой вызов -- держать пуш архива вне
+    горячего пути делает эту границу явной, а не полагается на то, что тесты
+    её не заденут.
+
+    ЧЕСТНАЯ ПОПРАВКА (владелец, P0 2026-07-21, живая находка): исходное
+    допущение "архивация происходит редко, синка раз в рестарт достаточно"
+    оказалось НЕВЕРНЫМ при длительно живущем контейнере без рестарта -- за
+    ~2 суток без рестарта накопилось 738 архивных файлов (4291 запись)
+    ЛОКАЛЬНО, ни один не засинкан (манифест показывал 59/797), под реальным
+    риском потери. Периодический вызов (push_pending_archives_async(), не
+    только при старте) закрывает этот разрыв.
 
     Возвращает {"attempted": int, "succeeded": int} -- для startup-отчёта."""
     result = {"attempted": 0, "succeeded": 0}
@@ -873,6 +1004,20 @@ def _push_pending_archives_sync() -> dict:
         else:
             log.error(f"shadow_engine: пуш архива {name} в GitHub не удался, повтор на следующем синке")
     return result
+
+
+async def push_pending_archives_async(bot=None, run_in_executor_fn=None) -> dict:
+    """Джоб-обёртка для scheduler.add_job (см. bot.py) -- владелец, P0
+    2026-07-21: закрывает разрыв "архив синкается только при рестарте" (см.
+    честную поправку в докстринге _push_pending_archives_sync() выше).
+    `bot` -- не используется (эта задача ничего не шлёт в Telegram), принят
+    для единообразия с другими периодическими job-обёртками (см.
+    journal_persistence.sync_all, тот же паттерн args=[app.bot]).
+    `run_in_executor_fn` -- для тестов, в проде обычный loop.run_in_executor."""
+    if run_in_executor_fn is None:
+        loop = asyncio.get_event_loop()
+        run_in_executor_fn = lambda fn, *a: loop.run_in_executor(None, fn, *a)
+    return await run_in_executor_fn(_push_pending_archives_sync)
 
 
 # Владелец, 2026-07-16/17 (найдено при карте путей записи/восстановления

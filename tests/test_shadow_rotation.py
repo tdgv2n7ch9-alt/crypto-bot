@@ -1,10 +1,11 @@
 """
-pytest для П-Ротация (владелец, решение §3 утреннего брифа 2026-07-14): ротация
-journal/shadow_signals.json (12.5МБ живьём за 3 суток -- _write_local() читает-
-дописывает-перезаписывает ВЕСЬ файл на каждую новую запись, стоимость растёт
-линейно без ограничения) в journal/archive/shadow_signals_<от>_<до>.json, БЕЗ
-потери данных -- get_local_records() по умолчанию читает активный файл ПЛЮС
-все архивы.
+pytest для П-Ротация (владелец, решение §3 утреннего брифа 2026-07-14, порог
+ПЕРЕСМОТРЕН владельцем P0 2026-07-21 -- рецидив 40МБ/GitHub-422): ротация
+journal/shadow_signals.json в journal/archive/shadow_signals_<от>_<до>.json,
+БЕЗ потери данных -- get_local_records() по умолчанию читает активный файл
+ПЛЮС все архивы. Порог -- ЧИСЛО ЗАПИСЕЙ (ROTATION_MAX_ACTIVE_RECORDS/
+ROTATION_KEEP_RECORDS), не время/МБ -- см. докстринг констант в shadow_engine.py
+про находку "3-суточное окно росло неограниченно с трафиком".
 
 Все тесты monkeypatch'ат se.SHADOW_FILE/se.ARCHIVE_DIR/se.ARCHIVE_MANIFEST на
 tmp_path -- ни один тест не трогает реальный journal/ этого репозитория.
@@ -42,35 +43,38 @@ def test_rotate_noop_when_file_missing(monkeypatch, tmp_path):
     assert se._rotate_if_needed() == ""
 
 
-def test_rotate_noop_when_below_size_threshold(monkeypatch, tmp_path):
+def test_rotate_noop_when_below_record_threshold(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 10 * 1024 * 1024)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 1000)
     now = time.time()
-    _write_active(se.SHADOW_FILE, [_rec(ts=now - 100 * 86400)])  # старая запись, но файл маленький
+    _write_active(se.SHADOW_FILE, [_rec(ts=now - 100 * 86400)])  # старая запись, но записей мало
     assert se._rotate_if_needed(now_ts=now) == ""
     # активный файл не тронут
     with open(se.SHADOW_FILE) as f:
         assert len(json.load(f)["records"]) == 1
 
 
-def test_rotate_noop_when_nothing_older_than_keep_window(monkeypatch, tmp_path):
+def test_rotate_noop_when_keep_covers_everything(monkeypatch, tmp_path):
+    """Защитный случай (не должен встречаться при разумной конфигурации,
+    MAX_ACTIVE > KEEP_RECORDS) -- если keep-порог >= числа записей, архивировать
+    нечего даже после пересечения MAX_ACTIVE."""
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)  # тривиально маленький порог -- всегда "большой"
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 2)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 5)  # >= числа реальных записей
     now = time.time()
-    _write_active(se.SHADOW_FILE, [_rec(ts=now - 3600)])  # свежая запись, в пределах keep-окна
+    _write_active(se.SHADOW_FILE, [_rec(ts=now - 3600) for _ in range(3)])
     assert se._rotate_if_needed(now_ts=now) == ""
 
 
 def test_rotate_moves_old_records_to_archive_keeps_recent_in_active(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 2)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 1)
     now = time.time()
     old1 = _rec("BTCUSDT", now - 10 * 86400)
     old2 = _rec("ETHUSDT", now - 5 * 86400)
     recent = _rec("SOLUSDT", now - 1 * 3600)
-    _write_active(se.SHADOW_FILE, [old1, old2, recent])
+    _write_active(se.SHADOW_FILE, [old1, old2, recent])  # 3 записи > порога 2
 
     archive_path = se._rotate_if_needed(now_ts=now)
     assert archive_path != ""
@@ -78,22 +82,45 @@ def test_rotate_moves_old_records_to_archive_keeps_recent_in_active(monkeypatch,
 
     with open(se.SHADOW_FILE) as f:
         active_records = json.load(f)["records"]
-    assert active_records == [recent]
+    assert active_records == [recent]  # keep=1 -- только самая новая (последняя в файле)
 
     with open(archive_path) as f:
         archived_records = json.load(f)["records"]
     assert {r["symbol"] for r in archived_records} == {"BTCUSDT", "ETHUSDT"}
 
 
+def test_rotate_keeps_by_file_order_not_ts_sort(monkeypatch, tmp_path):
+    """Keep-набор -- последние N ЗАПИСЕЙ ФАЙЛА (append-order), не пересортировка
+    по ts -- append-only структура означает, что порядок в файле УЖЕ отражает
+    порядок записи, сортировка по ts не нужна и могла бы скрыть честные
+    out_of_order-записи."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 2)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 1)
+    now = time.time()
+    # третья запись в файле имеет МЕНЬШИЙ ts, чем вторая (out-of-order на практике),
+    # но она последняя ПО ПОРЯДКУ В ФАЙЛЕ -- должна остаться в keep-наборе.
+    r1 = _rec("A", now - 100)
+    r2 = _rec("B", now - 50)
+    r3 = _rec("C", now - 80)  # ts меньше r2, но записана позже
+    _write_active(se.SHADOW_FILE, [r1, r2, r3])
+
+    se._rotate_if_needed(now_ts=now)
+    with open(se.SHADOW_FILE) as f:
+        active_records = json.load(f)["records"]
+    assert active_records == [r3]
+
+
 def test_rotate_archive_filename_reflects_date_range(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 1)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 0)
     now = time.time()
     old = _rec("BTCUSDT", now - 10 * 86400)
+    recent = _rec("ETHUSDT", now)
     from datetime import datetime
     expected_date = datetime.utcfromtimestamp(old["ts"]).strftime("%Y%m%d")
-    _write_active(se.SHADOW_FILE, [old])
+    _write_active(se.SHADOW_FILE, [old, recent])
 
     archive_path = se._rotate_if_needed(now_ts=now)
     assert expected_date in os.path.basename(archive_path)
@@ -101,8 +128,8 @@ def test_rotate_archive_filename_reflects_date_range(monkeypatch, tmp_path):
 
 def test_rotate_no_data_loss_total_records_preserved(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 10)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 8)
     now = time.time()
     records = [_rec(f"SYM{i}USDT", now - i * 86400) for i in range(20)]
     _write_active(se.SHADOW_FILE, records)
@@ -123,8 +150,8 @@ def test_rotate_skips_when_lock_already_held(monkeypatch, tmp_path):
     отступает, ничего не архивирует, файл не трогает."""
     import fcntl
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 1)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 0)
     now = time.time()
     _write_active(se.SHADOW_FILE, [_rec("BTCUSDT", now - 10 * 86400)])
 
@@ -144,8 +171,8 @@ def test_rotate_skips_when_lock_already_held(monkeypatch, tmp_path):
 
 def test_rotate_succeeds_after_lock_released(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 1)
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 0)
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 0)
     now = time.time()
     _write_active(se.SHADOW_FILE, [_rec("BTCUSDT", now - 10 * 86400)])
 
@@ -219,30 +246,29 @@ def test_load_archives_ignores_manifest_file(monkeypatch, tmp_path):
 
 # ── _write_local() опционально ротирует ──────────────────────────────────────
 
-def test_write_local_triggers_rotation_when_size_crosses_threshold(monkeypatch, tmp_path):
+def test_write_local_triggers_rotation_when_count_crosses_threshold(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 200)  # маленький порог -- легко пересечь в тесте
-    monkeypatch.setattr(se, "ROTATION_KEEP_DAYS", 3)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 5)  # маленький порог -- легко пересечь в тесте
+    monkeypatch.setattr(se, "ROTATION_KEEP_RECORDS", 3)
     now = time.time()
     old_records = [_rec(f"SYM{i}USDT", now - 10 * 86400, pad="x" * 50) for i in range(5)]
     _write_active(se.SHADOW_FILE, old_records)
-    assert os.path.getsize(se.SHADOW_FILE) > 200
 
-    ok = se._write_local(_rec("NEWUSDT", now))
+    ok = se._write_local(_rec("NEWUSDT", now))  # 6-я запись -- пересекает порог 5
     assert ok is True
     assert os.path.isdir(se.ARCHIVE_DIR)
     archived = os.listdir(se.ARCHIVE_DIR)
     assert any(name.startswith("shadow_signals_") for name in archived)
-    # новая запись осталась в активном файле, старые -- в архиве
+    # новая запись осталась в активном файле, самые старые -- в архиве
     with open(se.SHADOW_FILE) as f:
         active = json.load(f)["records"]
     assert any(r["symbol"] == "NEWUSDT" for r in active)
     assert not any(r["symbol"] == "SYM0USDT" for r in active)
 
 
-def test_write_local_no_rotation_when_small(monkeypatch, tmp_path):
+def test_write_local_no_rotation_when_below_threshold(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(se, "ROTATION_SIZE_BYTES", 5 * 1024 * 1024)
+    monkeypatch.setattr(se, "ROTATION_MAX_ACTIVE_RECORDS", 1000)
     ok = se._write_local(_rec("BTCUSDT", time.time()))
     assert ok is True
     assert not os.path.isdir(se.ARCHIVE_DIR)
@@ -304,3 +330,31 @@ def test_push_pending_archives_failed_put_not_marked_retried_next_time(monkeypat
     assert result == {"attempted": 1, "succeeded": 0}
     # не помечен как отправленный -- следующий вызов повторит попытку
     assert se._load_pushed_archive_names() == set()
+
+
+# ── push_pending_archives_async() -- владелец, P0 2026-07-21 (периодический,
+# не только при старте, см. докстринг _push_pending_archives_sync) ──────────
+
+def test_push_pending_archives_async_uses_injected_executor(monkeypatch, tmp_path):
+    import asyncio
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(se, "_push_pending_archives_sync", lambda: {"attempted": 2, "succeeded": 2})
+
+    calls = []
+
+    async def fake_executor(fn, *a):
+        calls.append(fn)
+        return fn(*a)
+
+    result = asyncio.run(se.push_pending_archives_async(bot=None, run_in_executor_fn=fake_executor))
+    assert result == {"attempted": 2, "succeeded": 2}
+    assert calls == [se._push_pending_archives_sync]
+
+
+def test_push_pending_archives_async_real_executor_path(monkeypatch, tmp_path):
+    """Без injected executor -- реальный loop.run_in_executor, не крэшит."""
+    import asyncio
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(se, "_push_pending_archives_sync", lambda: {"attempted": 0, "succeeded": 0})
+    result = asyncio.run(se.push_pending_archives_async())
+    assert result == {"attempted": 0, "succeeded": 0}
