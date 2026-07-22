@@ -252,3 +252,83 @@ def test_golden_weak_setup_below_40_verdict_observe():
     assert "Наблюдение" in text
     assert text.count("⚠️") >= 2
     assert cv.check_signal_line_lengths(signal_lines) == []
+
+
+# --- Блок «риск оператора + L/S» (канон #292 этап а, ревизия — ночная очередь) ---
+
+def test_format_operator_risk_block_includes_oi_funding_ls():
+    lines = cv.format_operator_risk_block(
+        oi_text="OI 4ч +6.2% (рост)", funding_label="нейтральный (0.01%)",
+        ls_ratio=2.54, ls_text="лонги преобладают",
+    )
+    joined = "\n".join(lines)
+    assert "РИСК ОПЕРАТОРА" in joined
+    assert "OI 4ч +6.2% (рост)" in joined
+    assert "Funding: нейтральный (0.01%)" in joined
+    assert "L/S 2.54: лонги преобладают" in joined
+
+
+def test_format_operator_risk_block_omits_funding_line_when_absent():
+    """funding_label="" -- честно пропускает строку, не печатает "Funding: " пусто."""
+    lines = cv.format_operator_risk_block(
+        oi_text="OI н/д", funding_label="", ls_ratio=1.0, ls_text="нейтрально",
+    )
+    joined = "\n".join(lines)
+    assert "Funding:" not in joined
+
+
+def test_format_why_line_with_top_factor():
+    line = cv.format_why_line("Действовать", top_factor_label="Тренд 1D по направлению")
+    assert line == "💬 *Почему*: Тренд 1D по направлению → Действовать"
+
+
+def test_format_why_line_without_top_factor_falls_back_to_verdict_only():
+    line = cv.format_why_line("Наблюдение")
+    assert line == "💬 *Почему*: Наблюдение"
+
+
+# --- Канон-карточка assemble_card_v2_canon (#292 этап а, буквальный ТЗ-шаблон) ---
+
+def test_assemble_card_v2_canon_section_order_matches_spec():
+    """Порядок из TELEGRAM_PRODUCT_V2_DESIGN.md §2 (дословно): [шапка] / риск-план /
+    риск оператора+L/S / чеклист N/6 / «Почему» — по одному SEP между каждой секцией,
+    без лишних/недостающих разделителей."""
+    what_to_do_lines = ["📋 *ЧТО ДЕЛАТЬ*", "  Вход: 59000-59500"]
+    operator_risk_lines = cv.format_operator_risk_block("OI +1%", "нейтральный", 1.5, "нейтрально")
+    checklist_lines = ["  ✅ Тренд 1D", "  ❌ Killzone"]
+    why_line = cv.format_why_line("Действовать", "Тренд 1D по направлению")
+
+    text = cv.assemble_card_v2_canon(
+        traffic_light=cv.TRAFFIC_ENTRY_ACTUAL, symbol="BTCUSDT", direction="LONG",
+        phase_label="manipulation_bull", pd_label="above NY-midnight",
+        what_to_do_lines=what_to_do_lines, operator_risk_lines=operator_risk_lines,
+        checklist_lines=checklist_lines, why_line=why_line,
+    )
+
+    header, *rest = text.split(cv.SEP)
+    assert "BTCUSDT LONG · manipulation_bull · above NY-midnight" in header
+    # ровно 4 SEP-разделителя между 5 секциями (шапка/риск-план/операт.риск/чеклист/почему)
+    assert text.count(cv.SEP) == 4
+    assert "\n".join(what_to_do_lines) in text
+    assert "\n".join(operator_risk_lines) in text
+    assert "\n".join(checklist_lines) in text
+    assert why_line in text
+    # порядок: риск-план ДО риска оператора ДО чеклиста ДО "почему" (по индексу вхождения)
+    idx_plan = text.index(what_to_do_lines[0])
+    idx_risk = text.index("РИСК ОПЕРАТОРА")
+    idx_checklist = text.index(checklist_lines[0])
+    idx_why = text.index(why_line)
+    assert idx_plan < idx_risk < idx_checklist < idx_why
+
+
+def test_assemble_card_v2_canon_header_has_all_four_dot_separated_fields():
+    text = cv.assemble_card_v2_canon(
+        traffic_light=cv.TRAFFIC_WAIT_PRICE, symbol="ETHUSDT", direction="SHORT",
+        phase_label="dead_zone", pd_label="below NY-midnight",
+        what_to_do_lines=["x"], operator_risk_lines=["y"],
+        checklist_lines=["z"], why_line="w",
+    )
+    header = text.split("\n")[0]
+    assert "ETHUSDT" in header and "SHORT" in header
+    assert "dead_zone" in header and "below NY-midnight" in header
+    assert header.count("·") == 2  # направление·фаза и фаза·PD -- 2 точки-разделителя
