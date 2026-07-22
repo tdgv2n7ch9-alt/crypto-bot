@@ -76,6 +76,7 @@ from datetime import datetime
 
 import requests
 
+import cftc_cot
 import chart_patterns
 import signal_journal   # переиспользуем _github_configured/_validate_github_token/_github_headers/_github_api_base
 import ta_extra
@@ -914,6 +915,17 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
     # вложенности compute_shadow() уже даёт (те же имена, что fa_engine-путь).
     tz13 = result.get("tz13_shadow") or {}
 
+    # CFTC COT (BTC CME) -- владелец, ДА, ночная очередь 2026-07-22/23,
+    # CFTC_COT_INTEGRATION_PLAN.md. Flag OFF по умолчанию (cftc_cot.CFTC_COT_
+    # ENABLED) -- при выключенном флаге cftc_cot.get_shadow_snapshot() честный
+    # no-op ({"enabled": False}), сети не касается. Чисто informational --
+    # НЕ участвует в affected/discrepancy/gate_reasons/promoted выше.
+    cftc_snapshot = {"enabled": False}
+    try:
+        cftc_snapshot = cftc_cot.get_shadow_snapshot()
+    except Exception as e:
+        discrepancy.append(f"cftc_cot snapshot calc failed: {e}")
+
     return {
         "ts": time.time(),
         "symbol": symbol,
@@ -951,6 +963,7 @@ def compute_shadow(symbol: str, result: dict, bot_module, live_journal_id=None,
         # сейчас не считает sweep) -- не выдумываем данные там, где их нет.
         "sweep_1h": result.get("sweep_1h"),
         "sweep_4h": result.get("sweep_4h"),
+        "cftc_cot_snapshot": cftc_snapshot,
     }
 
 

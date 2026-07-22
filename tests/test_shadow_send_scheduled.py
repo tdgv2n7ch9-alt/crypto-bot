@@ -107,6 +107,32 @@ def test_compute_shadow_sweep_fields_default_to_none_when_absent():
     assert record["sweep_4h"] is None
 
 
+def test_compute_shadow_cftc_cot_snapshot_disabled_by_default(monkeypatch):
+    """Владелец, ДА (ночная очередь 2026-07-22/23): compute_shadow() прикрепляет
+    cftc_cot_snapshot -- flag OFF по умолчанию (cftc_cot.CFTC_COT_ENABLED=False),
+    honest {"enabled": False}, никакого сетевого вызова из compute_shadow()."""
+    monkeypatch.setattr(se.cftc_cot, "CFTC_COT_ENABLED", False)
+    result = {
+        "block11_trade_plan": {"direction": "long", "entry1": 100, "entry3": 98, "sl": 96,
+                                "tp1": 104, "tp2": 108, "tp3": 112, "rr_tp1": 2.0},
+        "candles_4h": [{"timestamp": 0, "open": 99, "high": 101, "low": 98, "close": 100}],
+    }
+    record = se.compute_shadow("BTCUSDT", result, _FakeBotModule())
+    assert record["cftc_cot_snapshot"] == {"enabled": False}
+
+
+def test_compute_shadow_cftc_cot_snapshot_present_when_enabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(se.cftc_cot, "CFTC_COT_ENABLED", True)
+    monkeypatch.setattr(se.cftc_cot, "STATE_FILE", str(tmp_path / "cftc_cot_btc.json"))
+    result = {
+        "block11_trade_plan": {"direction": "long", "entry1": 100, "entry3": 98, "sl": 96,
+                                "tp1": 104, "tp2": 108, "tp3": 112, "rr_tp1": 2.0},
+        "candles_4h": [{"timestamp": 0, "open": 99, "high": 101, "low": 98, "close": 100}],
+    }
+    record = se.compute_shadow("BTCUSDT", result, _FakeBotModule())
+    assert record["cftc_cot_snapshot"] == {"enabled": True, "available": False}
+
+
 def test_log_send_scheduled_shadow_async_writes_local_record(monkeypatch):
     captured = {}
 
