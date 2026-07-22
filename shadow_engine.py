@@ -70,6 +70,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime
 
@@ -569,6 +570,25 @@ def _push_shadow_via_git_cli(records: list, max_attempts: int = 5) -> bool:
 GITHUB_SYNC_MIN_INTERVAL_SEC = 90  # середина диапазона владельца 60-120с
 _last_github_sync_attempt_ts = 0.0
 
+# Владелец, ДА, 2026-07-22 (живая находка: git-sync push падал 5/5 систематически
+# часами, `railway logs` показал `cannot lock ref 'refs/heads/main': is at X but
+# expected Y` меняющийся на КАЖДОЙ из 5 попыток за ~9 секунд -- слишком быстро для
+# внешнего актора, реальная причина: 10 разных мест кода (auto_derivatives_shadow/
+# auto_options_shadow/auto_liquidation_shadow/auto_onchain_shadow и др.) зовут эту
+# функцию через `run_in_executor(None, ...)` -- РЕАЛЬНЫЕ ОС-потоки, не asyncio-
+# кооперативность -- а гейт `_last_github_sync_attempt_ts` читался/писался БЕЗ
+# лока. Несколько потоков проходили проверку гейта одновременно (TOCTOU) и запускали
+# СВОЙ полный fetch+checkout+commit+push в ОДНОМ общем `_GIT_SYNC_DIR` параллельно --
+# они гонялись друг с другом, не только с внешним pusher'ом (ретрай ВНУТРИ
+# _push_shadow_via_git_cli() был бессилен против этого: свежий fetch одного потока
+# устаревал раньше push'а, потому что СОСЕДНИЙ поток успевал пропихнуть свой коммит
+# между ними). Фикс -- threading.Lock на всю критическую секцию (гейт + GET/push),
+# делает ровно один git-sync активным одновременно во всём процессе.
+_git_sync_lock = threading.Lock()
+_consecutive_git_sync_failures = 0
+_git_sync_alert_sent = False
+GIT_SYNC_ALERT_THRESHOLD = 3  # подряд полных неудач (каждая >= GITHUB_SYNC_MIN_INTERVAL_SEC друг от друга) -- владелец, 2026-07-22
+
 
 def _sync_to_github_sync(new_record: dict = None, now: float = None) -> bool:
     """GET текущего состояния из GitHub, сравнивает с ЛОКАЛЬНЫМ активным файлом,
@@ -614,21 +634,75 @@ def _sync_to_github_sync(new_record: dict = None, now: float = None) -> bool:
     (5 попыток), одного цикла GET+PUSH здесь достаточно."""
     global _last_github_sync_attempt_ts
     now = now if now is not None else time.time()
-    if now - _last_github_sync_attempt_ts < GITHUB_SYNC_MIN_INTERVAL_SEC:
-        return True
-    _last_github_sync_attempt_ts = now
-    remote, sha = _github_get_shadow_sync()
-    if remote is False:
-        return False  # транзиентная ошибка GET -- НЕ пустой файл, синк прерван безопасно
-    if remote is None and sha is None and not signal_journal._github_configured():
-        return False  # GitHub не настроен -- локальная запись уже сделана, этого достаточно
-    remote_records = remote or []
-    remote_keys = {_dedup_key(r) for r in remote_records}
-    local_records = _load_local()
-    local_keys = {_dedup_key(r) for r in local_records}
-    if remote_keys == local_keys:
-        return True  # remote уже точно зеркалит активный файл (включая пост-ротацию)
-    return _push_shadow_via_git_cli(local_records)
+    # Владелец, ДА, 2026-07-22: весь гейт+GET+push -- ОДНА критическая секция под
+    # threading.Lock (см. докстринг _git_sync_lock выше про живую находку self-race
+    # между несколькими run_in_executor-потоками). Без лока проверка гейта ниже была
+    # TOCTOU -- несколько потоков проходили её одновременно и пускали параллельные
+    # git push в один _GIT_SYNC_DIR, гоняясь друг с другом.
+    with _git_sync_lock:
+        if now - _last_github_sync_attempt_ts < GITHUB_SYNC_MIN_INTERVAL_SEC:
+            return True
+        _last_github_sync_attempt_ts = now
+        remote, sha = _github_get_shadow_sync()
+        if remote is False:
+            return False  # транзиентная ошибка GET -- НЕ пустой файл, синк прерван безопасно
+        if remote is None and sha is None and not signal_journal._github_configured():
+            return False  # GitHub не настроен -- локальная запись уже сделана, этого достаточно
+        remote_records = remote or []
+        remote_keys = {_dedup_key(r) for r in remote_records}
+        local_records = _load_local()
+        local_keys = {_dedup_key(r) for r in local_records}
+        if remote_keys == local_keys:
+            _note_git_sync_outcome(True)
+            return True  # remote уже точно зеркалит активный файл (включая пост-ротацию)
+        ok = _push_shadow_via_git_cli(local_records)
+        _note_git_sync_outcome(ok)
+        return ok
+
+
+def _note_git_sync_outcome(ok: bool):
+    """Владелец, ДА, 2026-07-22: считает подряд идущие полные неудачи git-sync
+    (не единичный блип -- GITHUB_SYNC_MIN_INTERVAL_SEC=90с уже разносит попытки по
+    времени, так что GIT_SYNC_ALERT_THRESHOLD подряд неудач = минимум
+    ~threshold*90с устойчивого падения) и шлёт ОДИН owner-алерт за эпизод (не на
+    каждый повторный провал -- иначе спам при длительном сбое). Сбрасывается при
+    первом успехе. Вызывается ТОЛЬКО изнутри _git_sync_lock -- не нуждается в
+    собственной синхронизации."""
+    global _consecutive_git_sync_failures, _git_sync_alert_sent
+    if ok:
+        _consecutive_git_sync_failures = 0
+        _git_sync_alert_sent = False
+        return
+    _consecutive_git_sync_failures += 1
+    if _consecutive_git_sync_failures >= GIT_SYNC_ALERT_THRESHOLD and not _git_sync_alert_sent:
+        _git_sync_alert_sent = True
+        _alert_owner_git_sync_failure_sync(_consecutive_git_sync_failures)
+
+
+def _alert_owner_git_sync_failure_sync(consecutive_count: int):
+    """Синхронный, best-effort алерт владельцу через голый `requests.post` к Telegram
+    Bot API (НЕ через telegram.Bot/Application -- та связка логирует полный URL с
+    токеном на уровне INFO через httpx, см. CLAUDE.md "Верификация деплоя" п.4;
+    голый `requests`/`urllib3` этой проблемы не имеет). Вызывается из воркер-потока
+    run_in_executor -- НЕ async, нет доступа к event loop бота напрямую, поэтому
+    прямой HTTP-вызов, а не `await bot.send_message(...)`.
+
+    Никогда не поднимает исключение наружу -- сбой самого алерта не должен уронить
+    ни git-sync, ни вызывающий код. Токен никогда не логируется (даже при ошибке
+    самого запроса -- сообщение об ошибке не включает URL/токен)."""
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        return
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    text = (f"⚠️ shadow git-sync: {consecutive_count} циклов подряд не смогли "
+            f"запушить архив в GitHub (non-fast-forward race, см. `railway logs`). "
+            f"Локальные данные НЕ теряются (журнал пишется на диск независимо от "
+            f"git-sync), это только про GitHub-бэкап shadow-архива.")
+    try:
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                       json={"chat_id": owner_id, "text": text}, timeout=10)
+    except Exception:
+        log.error("shadow_engine: owner-алерт про git-sync не удался (сама попытка алерта, не сам sync)")
 
 
 def compute_whale_confluence(classified_by_side: dict, whale_zones: dict) -> dict:
