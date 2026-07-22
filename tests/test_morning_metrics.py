@@ -52,13 +52,42 @@ def test_build_morning_digest_down_source_uses_display_label_not_raw_key(monkeyp
 
 
 def test_build_morning_digest_health_section_has_even_underscore_count(monkeypatch, tmp_path):
-    """Прямая проверка условия живого сбоя: нечётное число "_" в тексте с
-    parse_mode="Markdown" -- telegram.error.BadRequest. Считаем по всему
-    итоговому тексту, не только по секции источников -- регрессия могла бы
-    прийти из любого места, тест ловит её честно на уровне контракта."""
+    """Прямая проверка условия живого сбоя: нечётное число НЕЭКРАНИРОВАННЫХ
+    "_" в тексте с parse_mode="Markdown" -- telegram.error.BadRequest.
+    Legacy Markdown учитывает `\\_` (экранированный) как литеральный символ,
+    НЕ как toggle italic-состояния -- поэтому сначала убираем экранированные
+    пары `\\_`, потом считаем чётность того, что осталось (сырой подсчёт без
+    учёта экранирования технически совпадал бы по чётности случайно, но не
+    отражал бы реальное правило Telegram -- живая находка 2026-07-22
+    (см. test_..._raw_identifiers_are_escaped ниже) поймала именно разницу
+    между "чётно по случайности" и "чётно по построению"). Считаем по всему
+    итоговому тексту -- регрессия могла бы прийти из любого места."""
     _patch_common(monkeypatch, tmp_path)
     text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
-    assert text.count("_") % 2 == 0, "нечётное число '_' -- сломает parse_mode=\"Markdown\" в Telegram"
+    unescaped = text.replace("\\_", "")
+    assert unescaped.count("_") % 2 == 0, \
+        "нечётное число НЕэкранированных '_' -- сломает parse_mode=\"Markdown\" в Telegram"
+
+
+def test_build_morning_digest_raw_technical_identifiers_are_escaped(monkeypatch, tmp_path):
+    """Живая находка (владелец, 2026-07-22): `send_morning_digest` в 08:30
+    упал `Can't parse entities` -- корень (после фикса backtick/asterisk
+    бага, см. тест ниже) был ОБЩИЙ нечётный счёт "_" -- сырые технические
+    идентификаторы (`send_scheduled`, `patches_affected`,
+    `check_watchlist_alerts_from_level_watch`, `ZONES_UNIFIED`,
+    `SHADOW_ANALYSIS.md`) вставлены как есть в bold/italic-текст, Legacy
+    Markdown токенизирует КАЖДЫЙ "_" во ВСЁМ сообщении последовательно,
+    независимо от того, что он "внутри слова" -- 11 сырых underscore на
+    живом срезе (нечётно). Исправлено экранированием `\\_` в каждом
+    источнике. Единственная НЕэкранированная пара -- намеренный italic
+    "_Итог ночи..._" в шапке."""
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    for raw in ("send_scheduled", "check_watchlist_alerts_from_level_watch",
+                "ZONES_UNIFIED", "SHADOW_ANALYSIS.md"):
+        assert raw not in text, f"{raw!r} должен быть экранирован (\\_), но найден как есть"
+        escaped = raw.replace("_", "\\_")
+        assert escaped in text, f"ожидался экранированный {escaped!r} в тексте дайджеста"
 
 
 def test_build_morning_digest_backtick_and_asterisk_balanced(monkeypatch, tmp_path):

@@ -229,6 +229,11 @@ def test_shadow_vs_live_top_discrepancy_honest_detail_when_no_discrepancy_text(t
     result = daily_metrics.shadow_vs_live_today(now_ts=now)
     td = result["top_discrepancy"]
     assert "нет" in td["detail"]  # честно, не выдумывает текст расхождения, которого нет
+    # Живая находка (владелец, 2026-07-22): этот fallback-текст уходит в
+    # parse_mode="Markdown" дайджесты (morning_metrics/daily_metrics) -- сырой
+    # "patches_affected" внёс нечётный "_" в реальный упавший 08:30-дайджест.
+    assert "patches_affected" not in td["detail"]
+    assert "patches\\_affected" in td["detail"]
 
 
 # ── build_daily_digest() (интеграционно, всё замокано) ──

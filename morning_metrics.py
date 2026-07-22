@@ -63,9 +63,9 @@ PACKET18_STATUS_TABLE = [
 # PACKET18_STATUS_TABLE выше.
 PACKET18_ITEM1_FINDING = (
     "БЫЛ -- BTC зона 61840.9-62285.0 касалась вечером 13.07, live-alert "
-    "прошёл через unified-путь check_watchlist_alerts_from_level_watch() "
+    "прошёл через unified-путь check\\_watchlist\\_alerts\\_from\\_level\\_watch() "
     "(не LEGACY -- код доказательно был недостижим без оверрайда "
-    "ZONES_UNIFIED на Railway, которого не было). LEGACY-ветка снесена."
+    "ZONES\\_UNIFIED на Railway, которого не было). LEGACY-ветка снесена."
 )
 
 # НОЧЬ#3 (владелец, Н4): "статус ночных блоков" -- Н1-Н4/Н8, та же логика
@@ -75,7 +75,7 @@ PACKET18_ITEM1_FINDING = (
 # быть общим шаблоном (в отличие от contour_readiness_lines()/
 # author_zones_lines(), которые живые и переиспользуются каждую ночь).
 NIGHT3_BLOCKS_STATUS = [
-    ("Н1", "✅ готово (SHADOW_ANALYSIS.md -- tz13/Патч05/Патч09/EMA-стек срезы)"),
+    ("Н1", "✅ готово (SHADOW\\_ANALYSIS.md -- tz13/Патч05/Патч09/EMA-стек срезы)"),
     ("Н2", "✅ готово (транскрибация подтверждена 100%, Блок 7 +2 файла в EVOLUTION.md)"),
     ("Н3", "✅ готово (EVENT-RADAR М5 -- сводка ликвидности в On-Chain карточке)"),
     ("Н4", "✅ готово (этот блок -- обязательные поля утренней сводки)"),
@@ -255,7 +255,7 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
     # Владелец "да" 2026-07-13 -- health-счётчик shadow-потока (та же честность про
     # None="с последнего рестарта ещё не было записи", что в /stats).
     last_shadow_ts = shadow_engine.get_last_send_scheduled_write_ts()
-    lines += ["", "🩺 *Shadow-поток (send_scheduled):*"]
+    lines += ["", "🩺 *Shadow-поток (send\\_scheduled):*"]
     if last_shadow_ts is None:
         lines.append("  Ни одной записи с последнего рестарта процесса")
     else:

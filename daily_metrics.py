@@ -102,7 +102,7 @@ def _format_top_discrepancy(records: list) -> dict:
     top = pool[0]
     discrepancy_list = top.get("discrepancy") or []
     detail = discrepancy_list[0] if discrepancy_list else (
-        "нет явного текстового расхождения (patches_affected: "
+        "нет явного текстового расхождения (patches\\_affected: "
         f"{', '.join(top.get('patches_affected') or []) or 'нет'})"
     )
     return {
