@@ -60,7 +60,7 @@
 
 - 🟢 4.1 S&P/NASDAQ · 4.2 DXY · 4.6 VIX · 4.7 Gold `живые`
 - 🟡 4.9 CME Gap `в методологии`
-- 🟡 4.10 Bitcoin ETF Netflow `приоритет ↑ (разведка): драйвер рынка` **↑PRIO**
+- 🟡 4.10 Bitcoin ETF Netflow `приоритет ↑ (разведка): драйвер рынка` **↑PRIO** -- IBIT-прокси источник подтверждён живьём 2026-07-22 (`INSIGHTS.md`), не заблокирован, дневной лаг; Fidelity/Grayscale/ARK по-прежнему за бот-защитой
 - 🟡 4.12 CFTC COT `приоритет ↑: рекорд крупных трейдеров CME` **↑PRIO**
 - ⚪ 4.3 US10Y · 4.4 FOMC · 4.5 CPI/PPI/NFP · 4.8 M2 · 4.11 Grayscale · 4.13 TGA/Repo · 4.14 China · 4.15 GDP/ISM · +15
 
