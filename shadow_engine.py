@@ -1117,7 +1117,15 @@ def _push_pending_archives_sync() -> dict:
             log.error(f"shadow_engine: не удалось прочитать архив для пуша {path}: {e}")
             continue
         result["attempted"] += 1
-        ok = signal_journal._github_put_backup_sync(f"{GITHUB_ARCHIVE_DIR}/{name}", payload)
+        # Владелец, ДА, 2026-07-22 (расширение живой находки git-sync self-race):
+        # этот PUT (GitHub Contents API) и _sync_to_github_sync() (native git push)
+        # мутируют ОДИН И ТОТ ЖЕ main-ref -- живой лог показал "пуш архива ...
+        # не удался" за 2.7с ДО каскада "cannot lock ref" в git-CLI пуше, т.е. эти
+        # два разных транспорта реально гонялись друг с другом на сервере GitHub,
+        # не только git-CLI сам с собой. Тот же _git_sync_lock не даёт архивному
+        # PUT и git-CLI пушу быть одновременно в полёте.
+        with _git_sync_lock:
+            ok = signal_journal._github_put_backup_sync(f"{GITHUB_ARCHIVE_DIR}/{name}", payload)
         if ok:
             _mark_archive_pushed(name)
             result["succeeded"] += 1
