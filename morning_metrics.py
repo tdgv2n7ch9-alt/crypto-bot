@@ -329,7 +329,7 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
     night_statuses = night_package_status_summary()
     lines += ["", "📦 *Ночной пакет (из PROGRESS.md, последние записи):*"]
     if not night_statuses:
-        lines.append("  н/д (не найдено записей `**Статус...**` в хвосте PROGRESS.md)")
+        lines.append("  н/д (не найдено записей вида «Статус...» в хвосте PROGRESS.md)")
     else:
         for s in night_statuses:
             lines.append(f"  {s}")

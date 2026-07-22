@@ -61,6 +61,38 @@ def test_build_morning_digest_health_section_has_even_underscore_count(monkeypat
     assert text.count("_") % 2 == 0, "нечётное число '_' -- сломает parse_mode=\"Markdown\" в Telegram"
 
 
+def test_build_morning_digest_backtick_and_asterisk_balanced(monkeypatch, tmp_path):
+    """Живая находка (владелец, 2026-07-22): `send_morning_digest` в 08:30
+    упал `telegram.error.BadRequest: Can't parse entities` -- корень был
+    захардкоженный fallback `night_package_status_summary()` (когда записей
+    "**Статус...**" не нашлось) -- он сам содержал `` `**Статус...**` `` --
+    обратные кавычки ВОКРУГ литеральных двойных звёздочек, что ломает Legacy
+    Markdown parse_mode при вложении в остальной bold/italic текст дайджеста.
+    Исправлено на обычные кавычки-«ёлочки» без markdown-спецсимволов.
+    Тот же принцип, что test_..._even_underscore_count выше -- считаем по
+    ВСЕМУ итоговому тексту (регрессия могла бы прийти из любой секции),
+    но для `` ` `` и `*` -- underscore-тест их не покрывал, отсюда и
+    пропущенный баг."""
+    _patch_common(monkeypatch, tmp_path)
+    text = morning_metrics.build_morning_digest(_FakeBotModule(), now_ts=1_000_000.0)
+    assert text.count("`") % 2 == 0, "нечётное число '`' -- сломает parse_mode=\"Markdown\" в Telegram"
+    assert text.count("*") % 2 == 0, "нечётное число '*' -- сломает parse_mode=\"Markdown\" в Telegram"
+
+
+def test_night_package_status_na_fallback_has_no_markdown_special_chars():
+    """Локальный замок на сам факт -- fallback-строка (когда записей не
+    найдено) не должна содержать `` ` `` или `*` вообще, не только чётное
+    число (проще и надёжнее, чем полагаться на баланс)."""
+    result = morning_metrics.night_package_status_summary(progress_md_path="/nonexistent/path.md")
+    assert result == []
+    # сама строка живёт в build_morning_digest() -- проверяем её текстом напрямую
+    import inspect
+    src = inspect.getsource(morning_metrics.build_morning_digest)
+    fallback_line = next(l for l in src.splitlines() if "не найдено записей" in l)
+    assert "`" not in fallback_line
+    assert "**" not in fallback_line
+
+
 def test_deploy_status_stale_main_ahead():
     class _StaleBotModule(_FakeBotModule):
         @staticmethod
