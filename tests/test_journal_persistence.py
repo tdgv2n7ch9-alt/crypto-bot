@@ -150,19 +150,45 @@ def test_sync_file_sync_honest_false_when_local_missing(monkeypatch, tmp_path):
     assert ok is False
 
 
-def test_sync_all_sync_includes_discovered_zone_alert_files(monkeypatch, tmp_path):
+def test_sync_all_sync_batches_all_existing_files_into_one_push_call(monkeypatch, tmp_path):
+    """Владелец, ДА, 2026-07-22: sync_all_sync() больше НЕ пушит файл-за-файлом через
+    sync_file_sync()/GitHub Contents API (было 7 отдельных PUT = 7 отдельных коммитов,
+    гонявшихся за main-ref с shadow-пушем) -- один батч-вызов _push_all_via_git_cli()
+    со ВСЕМИ существующими локально файлами разом."""
     _isolate(monkeypatch, tmp_path)
     journal_dir = tmp_path / "journal"
     journal_dir.mkdir()
     (journal_dir / "ake_setup_state.json").write_text(json.dumps({"stage": "armed"}))
     (journal_dir / "zone_alert_state_avaxusdt.json").write_text(json.dumps({"armed": {}}))
+    # bsc_wallet_events.json/bsc_wallet_monitor_state.json/pump_radar_state.json --
+    # намеренно НЕ создаём, sync_all_sync должен молча пропустить отсутствующие
+    # локально файлы (тот же контракт, что был у старого sync_file_sync).
 
-    monkeypatch.setattr(jp, "_get_file_sync", lambda repo_path: (None, None))
-    monkeypatch.setattr(jp, "_put_file_sync", lambda repo_path, obj, sha: "sha-new")
+    calls = []
 
+    def fake_push_all(files):
+        calls.append(files)
+        return {"synced": [p for p, _ in files]}
+
+    monkeypatch.setattr(jp, "_push_all_via_git_cli", fake_push_all)
     result = jp.sync_all_sync()
-    assert "journal/ake_setup_state.json" in result["synced"]
-    assert "journal/zone_alert_state_avaxusdt.json" in result["synced"]
+
+    assert len(calls) == 1, "должен быть РОВНО один батч-вызов, не по одному на файл"
+    pushed_paths = {p for p, _ in calls[0]}
+    assert pushed_paths == {"journal/ake_setup_state.json", "journal/zone_alert_state_avaxusdt.json"}
+    assert set(result["synced"]) == pushed_paths
+    assert result["attempted"] == len(list(jp.SYNCED_FILES)) + 1  # +1 -- обнаруженный zone_alert файл
+
+
+def test_sync_all_sync_reports_zero_synced_on_push_failure(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    journal_dir = tmp_path / "journal"
+    journal_dir.mkdir()
+    (journal_dir / "ake_setup_state.json").write_text(json.dumps({"stage": "armed"}))
+
+    monkeypatch.setattr(jp, "_push_all_via_git_cli", lambda files: {"synced": []})
+    result = jp.sync_all_sync()
+    assert result["synced"] == []
 
 
 # ── sync_all() (async wrapper) ───────────────────────────────────────────
