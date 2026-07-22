@@ -1,8 +1,16 @@
 """
 pytest -- владелец, 2026-07-21 (safety pause): PAUSE_LIVE_SIGNAL_EMISSION
-останавливает ТОЛЬКО генерацию/рассылку НОВЫХ живых сигналов
-(bot.send_scheduled / signal_loop.run_signal_loop). Реверсивно, env-var,
+останавливает генерацию/рассылку НОВЫХ живых сигналов
+(signal_loop.run_signal_loop, tz13/patch09-путь). Реверсивно, env-var,
 default true на момент введения (см. bot.py докстринг рядом с константой).
+
+Владелец, 2026-07-22 (OWNER GATE, узкое снятие паузы ТОЛЬКО для AUTO):
+`bot.send_scheduled()` (AUTO-контур) больше НЕ проверяет
+`PAUSE_LIVE_SIGNAL_EMISSION` -- у него теперь отдельный флаг
+`AUTO_LIVE_EMISSION_ENABLED` (см. тесты ниже и `test_auto_live_emission_
+gate.py` для AMD-фильтра/concurrent-limit/kill-switch). `signal_loop`-тесты
+ниже не менялись -- тот путь по-прежнему проверяет старый флаг САМ,
+без единого изменения.
 """
 import asyncio
 import logging
@@ -25,22 +33,46 @@ def test_pause_live_signal_emission_default_env_is_true():
     assert os.getenv("PAUSE_LIVE_SIGNAL_EMISSION", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
-def test_send_scheduled_paused_skips_subscribers_lookup(caplog):
-    with patch.object(bot, "PAUSE_LIVE_SIGNAL_EMISSION", True), \
+def test_send_scheduled_auto_disabled_skips_subscribers_lookup(caplog):
+    with patch.object(bot, "AUTO_LIVE_EMISSION_ENABLED", False), \
          patch.object(bot.subscribers, "active_chat_ids") as mock_ids:
         with caplog.at_level(logging.WARNING):
             _run(bot.send_scheduled(MagicMock()))
     mock_ids.assert_not_called()
-    assert bot._last_auto_scan["status"] == "пауза: PAUSE_LIVE_SIGNAL_EMISSION активен"
-    assert any("live emission paused" in r.message for r in caplog.records)
+    assert bot._last_auto_scan["status"] == "пауза: AUTO_LIVE_EMISSION_ENABLED=false"
+    assert any("AUTO_LIVE_EMISSION_ENABLED=false" in r.message for r in caplog.records)
 
 
-def test_send_scheduled_unpaused_proceeds_to_subscribers_lookup():
-    with patch.object(bot, "PAUSE_LIVE_SIGNAL_EMISSION", False), \
+def test_send_scheduled_auto_enabled_proceeds_to_subscribers_lookup():
+    with patch.object(bot, "AUTO_LIVE_EMISSION_ENABLED", True), \
+         patch.object(bot, "_auto_emission_kill_switch_triggered", return_value=False), \
          patch.object(bot.subscribers, "active_chat_ids", return_value=[]) as mock_ids:
         _run(bot.send_scheduled(MagicMock()))
     mock_ids.assert_called_once()
     assert bot._last_auto_scan["status"] == "пропуск: нет подписчиков"
+
+
+def test_send_scheduled_kill_switch_triggered_skips_subscribers_lookup():
+    with patch.object(bot, "AUTO_LIVE_EMISSION_ENABLED", True), \
+         patch.object(bot, "_auto_emission_kill_switch_triggered", return_value=True), \
+         patch.object(bot, "_maybe_alert_auto_kill_switch", new=AsyncMock()) as mock_alert, \
+         patch.object(bot.subscribers, "active_chat_ids") as mock_ids:
+        _run(bot.send_scheduled(MagicMock()))
+    mock_ids.assert_not_called()
+    mock_alert.assert_awaited_once()
+    assert "kill-switch" in bot._last_auto_scan["status"]
+
+
+def test_send_scheduled_no_longer_checks_pause_live_signal_emission():
+    """Владелец, 2026-07-22: узкое снятие паузы -- AUTO больше не читает
+    PAUSE_LIVE_SIGNAL_EMISSION вообще, даже если он True (signal_loop
+    продолжает его проверять отдельно, не через этот код)."""
+    with patch.object(bot, "PAUSE_LIVE_SIGNAL_EMISSION", True), \
+         patch.object(bot, "AUTO_LIVE_EMISSION_ENABLED", True), \
+         patch.object(bot, "_auto_emission_kill_switch_triggered", return_value=False), \
+         patch.object(bot.subscribers, "active_chat_ids", return_value=[]) as mock_ids:
+        _run(bot.send_scheduled(MagicMock()))
+    mock_ids.assert_called_once()
 
 
 def test_run_signal_loop_paused_skips_stage1_screen(caplog):

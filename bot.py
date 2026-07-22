@@ -3213,6 +3213,88 @@ PRECISION_FA_MIGRATED = os.getenv("PRECISION_FA_MIGRATED", "true").strip().lower
 # подтверждения владельца.
 PAUSE_LIVE_SIGNAL_EMISSION = os.getenv("PAUSE_LIVE_SIGNAL_EMISSION", "true").strip().lower() in ("1", "true", "yes", "on")
 
+# Владелец, 2026-07-22 (OWNER GATE, узкое снятие паузы ТОЛЬКО для AUTO):
+# AMD_FILTER_SHADOW.md подтвердил на n=88 (полная история, все 3 источника
+# сигналов согласованно) -- AMD-фаза "accumulation" на входе даёт 0 побед
+# из 22. Цель узкого эксперимента -- добрать честные live-исходы AUTO-
+# контура (n=13 -> 20) под уже доказанное направление. `send_scheduled()`
+# (AUTO) теперь проверяет ТОЛЬКО этот флаг, НЕ `PAUSE_LIVE_SIGNAL_EMISSION`
+# выше -- та константа остаётся `true` и по-прежнему стопорит ИСКЛЮЧИТЕЛЬНО
+# `signal_loop.run_signal_loop()` (tz13/patch09-путь, НЕ валидирован,
+# трогать нельзя) без единого изменения в её собственном гейте. default
+# true -- эксперимент активен сразу на этом деплое; откат =
+# `AUTO_LIVE_EMISSION_ENABLED=false` в Railway env (мгновенно, без
+# редеплоя), либо срабатывает kill-switch ниже автоматически.
+AUTO_LIVE_EMISSION_ENABLED = os.getenv("AUTO_LIVE_EMISSION_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# Владелец, 2026-07-22: предохранитель "не набирать пачку на непроверенной
+# по live-исходам величине" -- максимум одновременно ОТКРЫТЫХ (status
+# "active") AUTO-позиций (TOP_LONG_SIGNALS+TOP_SHORT_SIGNALS вместе), пока
+# идёт узкий эксперимент. Владелец предложил диапазон 2-3, выбрано верхнее
+# значение диапазона.
+AUTO_LIVE_MAX_CONCURRENT = 3
+
+# Владелец, 2026-07-22: риск 1% от депозита на сделку -- ТЕКСТОВАЯ пометка
+# на карточке узкого AUTO-пилота (бот не исполняет сделки сам, программного
+# контроля размера позиции нет и не может быть -- см. AUTO_DATA_COLLECTION_
+# PLAN.md, та же честная оговорка).
+AUTO_LIVE_RISK_PCT = 1.0
+
+# Владелец, 2026-07-22: якорь начала узкого эксперимента -- kill-switch
+# смотрит ТОЛЬКО на AUTO-сделки, закрывшиеся ПОСЛЕ этого момента (иначе
+# исторические докризисные исходы ложно засчитались бы в "первые 5 новых").
+# Фиксированная константа (момент написания этого кода/деплоя), НЕ
+# `time.time()` -- иначе обнулялась бы на каждом рестарте контейнера.
+AUTO_EMISSION_EXPERIMENT_START_TS = 1784712842.0  # 2026-07-22 09:34:02 UTC
+
+AUTO_LIVE_SOURCES = ("TOP_LONG_AUTO", "TOP_SHORT_AUTO")
+AUTO_LIVE_OUTCOME_STATUSES = {"TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT"}
+
+_auto_kill_switch_alerted = False
+
+
+def _auto_emission_kill_switch_triggered() -> bool:
+    """Владелец, 2026-07-22: kill-switch -- если из ПЕРВЫХ 5 закрытых
+    live-AUTO-сделок узкого эксперимента (после `AUTO_EMISSION_EXPERIMENT_
+    START_TS`) 4 или больше оказались убытками, останавливаем эмиссию
+    автоматически, не дожидаясь честных n=20. Читает `signal_journal._journal`
+    заново при каждом вызове -- ничего не кэширует, переживает рестарт
+    автоматически (журнал уже персистентен сам по себе), не нужен отдельный
+    файл состояния. Честно `False`, если ещё не набралось 5 закрытых."""
+    trades = [r for r in signal_journal._journal.values()
+              if r.get("source") in AUTO_LIVE_SOURCES
+              and (r.get("ts") or 0) >= AUTO_EMISSION_EXPERIMENT_START_TS
+              and r.get("outcome") in AUTO_LIVE_OUTCOME_STATUSES]
+    trades.sort(key=lambda r: r.get("outcome_ts") or 0)
+    first_five = trades[:5]
+    if len(first_five) < 5:
+        return False
+    losses = sum(1 for r in first_five if r["outcome"] == "SL_HIT")
+    return losses >= 4
+
+
+async def _maybe_alert_auto_kill_switch(bot: Bot):
+    """Алерт владельцу ОДИН раз при срабатывании kill-switch -- тот же
+    паттерн, что уже применён в `run_watchdog()` (2026-07-19): сброс флага
+    при сбое отправки, чтобы следующий тик честно повторил попытку."""
+    global _auto_kill_switch_alerted
+    if _auto_kill_switch_alerted:
+        return
+    _auto_kill_switch_alerted = True
+    try:
+        await send_system(
+            bot,
+            "🛑 AUTO kill-switch сработал: из первых 5 закрытых live-AUTO-сделок "
+            "узкого эксперимента (AMD-фильтр, снятие паузы 2026-07-22) минимум 4 "
+            "оказались убытками -- эмиссия остановлена автоматически, не дожидаясь "
+            "n=20. Нужно решение владельца перед возобновлением "
+            "(`AUTO_LIVE_EMISSION_ENABLED=false` уже фактически в силе).",
+            critical=True,
+        )
+    except Exception as e:
+        log.error(f"[AUTO] kill-switch алерт не отправлен: {e}")
+        _auto_kill_switch_alerted = False
+
 
 def main_kb_v2():
     # Пакет 18, п.13 (владелец, финально): "⭐ ЛИМИТКИ" -- первым разделом,
@@ -7229,9 +7311,20 @@ async def send_scheduled(bot: Bot):
     структурной модели entry/SL/TP (в отличие от лонга/шорта) -- нечего чинить по тому же
     принципу, там никогда не было реального сетапа за фиксированными процентами."""
     _last_auto_scan["ts"] = time.time()
-    if PAUSE_LIVE_SIGNAL_EMISSION:
-        log.warning("live emission paused: shadow pipeline broken + base WR drifting, pending fix")
-        _last_auto_scan["status"] = "пауза: PAUSE_LIVE_SIGNAL_EMISSION активен"
+    # Владелец, 2026-07-22 (OWNER GATE): AUTO больше НЕ проверяет общий
+    # PAUSE_LIVE_SIGNAL_EMISSION -- узкое снятие паузы ТОЛЬКО для этого
+    # контура, см. докстринг AUTO_LIVE_EMISSION_ENABLED выше.
+    # signal_loop.run_signal_loop() (tz13/patch09) продолжает проверять
+    # старый флаг САМОСТОЯТЕЛЬНО, без единого изменения здесь.
+    if not AUTO_LIVE_EMISSION_ENABLED:
+        log.warning("[AUTO] live emission disabled (AUTO_LIVE_EMISSION_ENABLED=false)")
+        _last_auto_scan["status"] = "пауза: AUTO_LIVE_EMISSION_ENABLED=false"
+        return
+    if _auto_emission_kill_switch_triggered():
+        log.error("[AUTO] KILL-SWITCH сработал -- эмиссия остановлена (см. "
+                   "_auto_emission_kill_switch_triggered)")
+        _last_auto_scan["status"] = "СТОП: kill-switch (>=4/5 первых live-исходов в минус)"
+        await _maybe_alert_auto_kill_switch(bot)
         return
     chat_ids = subscribers.active_chat_ids()
     if not chat_ids:
@@ -7345,6 +7438,12 @@ async def send_scheduled(bot: Bot):
                 gate_reasons.append("counter_trend")
             if not a.get("rr_gate_pass"):
                 gate_reasons.append("rr_gate")
+            # Владелец, 2026-07-22 (OWNER GATE, AMD_FILTER_SHADOW.md):
+            # accumulation-фаза на входе -- 0 побед из 22 на полной истории.
+            # Живой гейт -- ТОЛЬКО для AUTO (та же валидированная популяция).
+            amd_phase = _amd_accumulation_phase(a)
+            if amd_phase == "accumulation":
+                gate_reasons.append("amd_accumulation")
             promoted = not gate_reasons
             mode = "long" if is_long else "short"
 
@@ -7435,6 +7534,14 @@ async def send_scheduled(bot: Bot):
             if not promoted:
                 continue
 
+            # Считается заново на каждого кандидата (не один раз в начале
+            # цикла) -- сделки, уже добавленные ВЫШЕ в ЭТОМ ЖЕ проходе,
+            # тоже учитываются.
+            if _auto_concurrent_limit_reached():
+                log.info(f"[AUTO] {sym}: пропуск -- лимит одновременных AUTO-позиций "
+                          f"(>={AUTO_LIVE_MAX_CONCURRENT}) уже достигнут")
+                continue
+
             slug = coin.get("slug", sym.lower())
             try:
                 liq_line = await _fetch_auto_liq_line(sym, a, mode=mode)
@@ -7442,6 +7549,11 @@ async def send_scheduled(bot: Bot):
                 log.error(f"[AUTO] liq-cluster line (не блокирует сигнал) {sym}: {e}")
                 liq_line = None
             text = _build_signal_post(sym, a, {}, mode=mode, liq_line=liq_line)
+            text += (
+                f"\n\n⚠️ *Пилотный запуск AUTO* (снятие паузы 2026-07-22, "
+                f"AMD-фильтр): риск {AUTO_LIVE_RISK_PCT:.0f}% от депозита на сделку, "
+                f"максимум {AUTO_LIVE_MAX_CONCURRENT} открытых AUTO-позиций одновременно."
+            )
             target_dict = TOP_LONG_SIGNALS if is_long else TOP_SHORT_SIGNALS
             target_dict[sym] = {
                 "time": datetime.now(TZ), "entry": a["price"],
@@ -7480,6 +7592,22 @@ async def send_scheduled(bot: Bot):
                     await send_coin(bot, cid, sym, slug, a, text)
                 except Exception as e:
                     log.error(f"[AUTO {'LONG' if is_long else 'SHORT'}] {sym} -> {cid}: {e}")
+
+            # Владелец, 2026-07-22: отдельный алерт на КАЖДУЮ live-AUTO-сделку
+            # узкого эксперимента -- символ, подтверждение фазы (не accumulation),
+            # R:R, риск -- отдельно от самой карточки, чтобы решение было легко
+            # отследить/сверить по мере добора n к 20.
+            try:
+                await send_system(
+                    bot,
+                    f"🧪 AUTO-пилот: {sym} {mode.upper()} -- фаза входа: {amd_phase} "
+                    f"(не accumulation, подтверждено), R:R {a.get('rr')}, риск "
+                    f"{AUTO_LIVE_RISK_PCT:.0f}% от депозита.",
+                    critical=False,
+                )
+            except Exception as e:
+                log.error(f"[AUTO] пилот-алерт владельцу не отправлен для {sym}: {e}")
+
             await asyncio.sleep(1.0)
 
         log.info(f"[AUTO] итог: {sent_long} лонг, {sent_short} шорт "
@@ -11194,6 +11322,29 @@ def _counter_trend_blocked(a: dict, direction: str) -> bool:
         if not strong_bear:
             return False
         return not _fresh_confirmed_sweep("sweep_low")
+
+
+def _amd_accumulation_phase(a: dict) -> str:
+    """Владелец, 2026-07-22 (OWNER GATE, `AMD_FILTER_SHADOW.md`): AMD-фаза
+    входа через `ta_extra.classify_amd_phase()` -- ТА ЖЕ функция, что уже
+    считает shadow-поле `amd_phase_methodology` (проверено на n=88 полной
+    истории: accumulation даёт 0 побед из 22, согласованно по всем 3
+    источникам сигналов). Возвращает саму строку фазы (не bool) -- нужна
+    и для гейта (`== "accumulation"`), и для текста пилот-алерта
+    владельцу (какая фаза подтверждена)."""
+    return ta_extra.classify_amd_phase(a.get("candles_4h") or []).get("phase")
+
+
+def _auto_concurrent_limit_reached() -> bool:
+    """Владелец, 2026-07-22 (предохранитель "лимит открытых позиций"):
+    не эмитить больше `AUTO_LIVE_MAX_CONCURRENT` одновременно открытых
+    (`status == "active"`) AUTO-позиций -- не набирать пачку на
+    непроверенной по live-исходам величине, пока идёт добор n к 20."""
+    active_auto_count = (
+        sum(1 for v in TOP_LONG_SIGNALS.values() if v.get("status") == "active")
+        + sum(1 for v in TOP_SHORT_SIGNALS.values() if v.get("status") == "active")
+    )
+    return active_auto_count >= AUTO_LIVE_MAX_CONCURRENT
 
 
 _JOURNAL_FOOTER_SOURCES = {
