@@ -101,6 +101,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from datetime import datetime, timedelta, timezone
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import pytz
@@ -1757,6 +1758,27 @@ def trend_arrow(ch):
 
 def cmc_link(slug):  return f"https://coinmarketcap.com/currencies/{slug}/"
 def tv_link(symbol): return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}USDT"
+
+
+def _format_entry_time_line(v: dict) -> str:
+    """Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.4, живая находка):
+    "Вход в позицию: — UTC+3" при отсутствии `v["time"]` (напр. вручную
+    добавленные "watching"-записи TOP_SHORT_SIGNALS с `time: null`) читалось
+    как сломанный таймстамп. Честное "не вошла" -- запись существует, но
+    момент фактического входа в позицию не зафиксирован, не выдумываем дату."""
+    return f"{v['time'].strftime('%d.%m %H:%M')} UTC+3" if v.get("time") else "не вошла"
+
+
+def _format_closed_time_line(v: dict) -> str:
+    """Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.4б): "Закрытые" раньше
+    показывал ТОЛЬКО время входа под меткой без даты закрытия (сам момент
+    закрытия нигде не фиксировался). Теперь читает `closed_ts` (пишется в
+    момент перехода в status="done", см. выше) -- честное "н/д" для записей,
+    закрытых ДО этого фикса (нет `closed_ts` -- не выдумываем время)."""
+    closed_ts = v.get("closed_ts")
+    if not closed_ts:
+        return "н/д"
+    return datetime.fromtimestamp(closed_ts, TZ).strftime("%d.%m %H:%M") + " UTC+3"
 
 
 def top_trades_long_status(entry: float, cur: float, tp1: float, tp2: float, tp3: float,
@@ -4618,6 +4640,29 @@ async def _limitki_row_text(item: dict) -> str:
     return "\n".join(lines)
 
 
+def _limitki_group_index(items: list) -> list:
+    """Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.2 -- живая находка
+    "BTC LONG ×3/AKE SHORT ×2" на кнопках Исполнения): `_limitki_collect_
+    zones()` честно возвращает ОДНУ строку НА ЗОНУ, не на символ (у одного
+    символа+стороны может быть НЕСКОЛЬКО зон автора -- легитимный лестничный
+    вход, не баг) -- но кнопки были ПОЛНОСТЬЮ идентичны (без цены/индекса),
+    неотличимы друг от друга до тапа. Возвращает список (item, idx, group_
+    size) -- idx = позиция ВНУТРИ группы того же (symbol, side), 1-based
+    (не персистентный id из журнала -- зоны автора его не имеют, честный
+    порядковый номер для разметки на кнопке при group_size > 1)."""
+    sizes = {}
+    for it in items:
+        key = (it["symbol"], it["zone"]["side"])
+        sizes[key] = sizes.get(key, 0) + 1
+    counters = {}
+    result = []
+    for it in items:
+        key = (it["symbol"], it["zone"]["side"])
+        counters[key] = counters.get(key, 0) + 1
+        result.append((it, counters[key], sizes[key]))
+    return result
+
+
 async def _mv2_render_limitki(bot, chat_id, message_id):
     items = _limitki_collect_zones()
     lines = ["⭐ *ЛИМИТКИ*", "",
@@ -4625,7 +4670,7 @@ async def _mv2_render_limitki(bot, chat_id, message_id):
     kb_rows = []
     if not items:
         lines.append("Активных зон автора нет.")
-    for it in items:
+    for it, idx, group_size in _limitki_group_index(items):
         try:
             lines.append(await _limitki_row_text(it))
         except Exception as e:
@@ -4634,8 +4679,17 @@ async def _mv2_render_limitki(bot, chat_id, message_id):
         # зоны получают префикс 🚫 в лейбле кнопки вместо 🎯 -- видно ДО тапа,
         # что зона неактивна, не только после открытия карточки.
         btn_icon = "🚫" if it["zone"].get("cancelled") else "🎯"
+        # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.2): формат кнопки
+        # "СИМВОЛ НАПРАВЛЕНИЕ · вход X · #N" вместо неотличимых дублей --
+        # "вход" = ближняя к текущему входу граница зоны (lo для LONG, hi
+        # для SHORT -- тот же принцип entry1, что card_v2/build_trade_from_
+        # structure), "#N" -- порядковый номер ТОЛЬКО когда зон > 1 у этого
+        # символа+стороны (одна зона -- без индекса, не нужен).
+        side = it["zone"]["side"]
+        anchor_price = it["zone"]["lo"] if side == "LONG" else it["zone"]["hi"]
+        idx_txt = f" · #{idx}" if group_size > 1 else ""
         kb_rows.append([InlineKeyboardButton(
-            f"{btn_icon} Исполнение {it['symbol']} {it['zone']['side']}",
+            f"{btn_icon} {it['symbol']} {side} · вход {fp(anchor_price)}{idx_txt}",
             callback_data=f"mv2_limitki_card_{it['symbol']}_{it['zone']['side']}_"
                           f"{it['zone']['lo']}_{it['zone']['hi']}")])
         lines.append("")
@@ -5093,13 +5147,20 @@ async def _mv2_render_rynok(q):
         if btc_ctx.get("fear_greed") is not None:
             lines.append(f"Fear&Greed: {btc_ctx['fear_greed']:.0f}")
     except Exception as e:
-        lines.append(f"BTC-контекст: н/д ({e})")
+        # ФИКС (владелец, 2026-07-23, FIXLIST_INTERFACE.md п.1 -- живая находка):
+        # str(e) сюда попадает НАПРЯМУЮ в Markdown-текст -- HTTPError от CoinGecko
+        # 429 несёт полный URL с кучей "_" (vs_currency, market_cap_desc и т.п.),
+        # что и ломало парсинг Markdown при отправке (РЫНОК выглядела "мёртвой"
+        # кнопкой). sanitize_markdown_free_text() -- та же функция, что уже чинит
+        # этот класс бага в event_radar.py/morning_metrics.py.
+        lines.append(f"BTC-контекст: н/д ({morning_metrics.sanitize_markdown_free_text(str(e))})")
 
     lines.append("")
     try:
-        lines.append(onchain_metrics.format_onchain_card_text("BTC"))
+        lines.append(morning_metrics.sanitize_markdown_free_text(
+            onchain_metrics.format_onchain_card_text("BTC")))
     except Exception as e:
-        lines.append(f"On-Chain: н/д ({e})")
+        lines.append(f"On-Chain: н/д ({morning_metrics.sanitize_markdown_free_text(str(e))})")
 
     lines.append("")
     lines.append("_Институционал и подробный тренд -- пока отдельными экранами (см. кнопки)._")
@@ -5731,7 +5792,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 tp3   = v.get("tp3", entry * 1.08)
                 sl    = v.get("sl",  entry * 0.85)
                 move  = (cur - entry) / entry * 100 if entry > 0 else 0
-                t     = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 tv    = tv_link(sym)
 
                 # Найдено ночной сессией: раньше при пробое SL/TP3 запись НИКОГДА не
@@ -5744,6 +5804,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 if terminal_result:
                     v["status"] = "done"
                     v["result"] = terminal_result
+                    # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.4б): момент
+                    # закрытия -- раньше не фиксировался вообще, "Закрытые" мог
+                    # показать только время ВХОДА под меткой без даты закрытия.
+                    v["closed_ts"] = time.time()
                     continue  # ушла в архив -- покажет блок "Закрытые" ниже
 
                 source = v.get("note") or signal_journal.get_latest_source(sym, "long") or "источник неизвестен"
@@ -5754,7 +5818,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"  TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  TP3 `{fp(tp3)}`  SL `{fp(sl)}`",
                     f"  Статус: {status}",
                     f"  Источник: {source}",
-                    f"  Вход в позицию: {t} UTC+3",
+                    f"  Вход в позицию: {_format_entry_time_line(v)}",
                     "",
                 ]
 
@@ -5774,7 +5838,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 tp2   = v.get("tp2", entry * 0.96)
                 sl    = v.get("sl",  entry * 1.15)
                 move  = (entry - cur) / entry * 100 if entry > 0 else 0
-                t     = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 tv    = tv_link(sym)
 
                 # Тот же принцип авто-архивации, что и у LONG выше — см. top_trades_short_status().
@@ -5783,6 +5846,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 if terminal_result:
                     v["status"] = "done"
                     v["result"] = terminal_result
+                    v["closed_ts"] = time.time()  # FIXLIST_INTERFACE.md п.4б
                     continue
 
                 source = v.get("note") or signal_journal.get_latest_source(sym, "short") or "источник неизвестен"
@@ -5793,7 +5857,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"  TP1 `{fp(tp1)}`  TP2 `{fp(tp2)}`  SL `{fp(sl)}`",
                     f"  Статус: {status}",
                     f"  Источник: {source}",
-                    f"  Вход в позицию: {t} UTC+3",
+                    f"  Вход в позицию: {_format_entry_time_line(v)}",
                     "",
                 ]
 
@@ -5802,7 +5866,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             has_signals = True
             for sym, v in TOP_SPOT_SIGNALS.items():
                 tv     = tv_link(sym)
-                t      = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 buy_lo = v.get("buy_zone_lo", v["entry"])
                 buy_hi = v.get("buy_zone_hi", v["entry"])
                 sell_t = v.get("sell_target", 0)
@@ -5812,7 +5875,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"  Зона покупки: `{fp(buy_lo)}`–`{fp(buy_hi)}`",
                     f"  Цель продажи: `{fp(sell_t)}`",
                     f"  Источник: {source}",
-                    f"  Вход в позицию: {t} UTC+3",
+                    f"  Вход в позицию: {_format_entry_time_line(v)}",
                     "",
                 ]
 
@@ -5825,14 +5888,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines.append("📁 *Закрытые (последние):*")
             for sym, v in list(done_l.items())[-5:]:
                 tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 result = v.get("result", "?")
-                lines.append(f"  [{sym}USDT]({tv}) — {result}, вход {t} UTC+3")
+                lines.append(f"  [{sym}USDT]({tv}) — {result}, закрыта {_format_closed_time_line(v)}")
             for sym, v in list(done_s.items())[-5:]:
                 tv = tv_link(sym)
-                t  = v["time"].strftime("%d.%m %H:%M") if v.get("time") else "—"
                 result = v.get("result", "?")
-                lines.append(f"  [{sym}USDT]({tv}) — {result}, вход {t} UTC+3")
+                lines.append(f"  [{sym}USDT]({tv}) — {result}, закрыта {_format_closed_time_line(v)}")
 
         if not has_signals:
             lines += [
@@ -12073,6 +12134,20 @@ async def cmd_x100_scanner(update, ctx):
         _scan_busy["x100"] = False
 
 
+# Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.3а/б -- КРИТИЧНО): чёрный
+# список методологии для x100. Источники (не выдумано, задокументировано):
+# BANK -- монитор мёртв, `knowledge/METHODOLOGY_CORE.md` §22 (разлок уже на
+# CEX, сетап шёл через STAGE_INVALIDATED без живого монитора); AKE -- wash-
+# класс, `WASH_FILTER_SHADOW.md` (jid=482, `full_analysis`, SL_HIT −1.0R,
+# 2026-07-22, тот же структурный паттерн, что и MIRA-кейс в NO_TRADE_
+# OBSERVATIONS.md). Символ здесь -> исключён из выдачи x100, счётчик в
+# футере отчёта ("отфильтровано по методологии: N"). Список -- владелец
+# расширяет вручную по мере новых задокументированных случаев, не
+# автоматический скан NO_TRADE_OBSERVATIONS.md (там нарративные кейсы, не
+# структурированный список символов).
+X100_METHODOLOGY_BLACKLIST = {"BANK", "AKE"}
+
+
 async def _cmd_x100_scanner_body(update, ctx):
     msg = update.message
     try:
@@ -12091,9 +12166,14 @@ async def _cmd_x100_scanner_body(update, ctx):
             all_coins = get_all_coins()
             stables = {"USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDP","FRAX","LUSD","GUSD","USDD","PYUSD","WBTC","WETH","CBBTC"}
             candidates = []
+            blacklisted_symbols = set()
             for c in all_coins:
                 sym = c.get("symbol", "")
                 if sym in stables: continue
+                # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.3а/б).
+                if sym in X100_METHODOLOGY_BLACKLIST:
+                    blacklisted_symbols.add(sym)
+                    continue
                 q = c.get("quote", {}).get("USDT", {})
                 price = q.get("price", 0) or 0
                 mcap  = q.get("market_cap", 0) or 0
@@ -12163,6 +12243,7 @@ async def _cmd_x100_scanner_body(update, ctx):
             rejected_x100 = 0
             skipped_x100 = 0
             no_structure_x100 = 0
+            contradiction_x100 = 0
             if top:
                 for c in top:
                     grade = "🔥" if c["score"] >= 9 else ("💎" if c["score"] >= 7 else "📈")
@@ -12203,6 +12284,18 @@ async def _cmd_x100_scanner_body(update, ctx):
                         if ema_ctx_x100["tf_1h"] is None and ema_ctx_x100["tf_4h"] is None:
                             log.info(f"[SKIP] x100: {c['sym']} -- нет EMA-данных (1h и 4h)")
                             skipped_x100 += 1
+                            continue
+
+                        # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.3в -- живая
+                        # находка "AKE #3": карточка сама детектит манипуляцию "ликвидность
+                        # в шорт" (свежий sweep_high), но x100 всё равно эмитит LONG --
+                        # внутреннее противоречие. x100 строит ТОЛЬКО LONG-сделки (см.
+                        # build_trade_from_structure("long", ...) ниже) -- если самый
+                        # свежий свип медвежий (sweep_high), карточка не эмитится вообще.
+                        if ta_extra.freshest_sweep_direction(sweep_1h_x100, sweep_4h_x100) == "short":
+                            log.info(f"[SKIP] x100: {c['sym']} -- манипуляция «ликвидность в "
+                                     f"шорт» противоречит LONG-направлению карточки")
+                            contradiction_x100 += 1
                             continue
 
                         zones_x100 = ta_extra.find_sr_zones(candles_1h_x100, candles_4h_x100,
@@ -12356,15 +12449,25 @@ async def _cmd_x100_scanner_body(update, ctx):
             _x100_skip_note = f", {skipped_x100} skip без live-цены/EMA" if skipped_x100 else ""
             _x100_struct_note = (f", {no_structure_x100} без структурной зоны (см. карточки ниже)"
                                   if no_structure_x100 else "")
+            # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.3в).
+            _x100_contra_note = (f", {contradiction_x100} отброшено (манипуляция против LONG)"
+                                  if contradiction_x100 else "")
             if card_blocks:
                 lines.append(f"\n💎 *Найдено: {shown_x100} кандидатов*"
-                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note}{_x100_struct_note})_"
-                                 if (rejected_x100 or skipped_x100 or no_structure_x100) else "") + "\n")
+                              + (f" _(ещё {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note}"
+                                 f"{_x100_struct_note}{_x100_contra_note})_"
+                                 if (rejected_x100 or skipped_x100 or no_structure_x100 or contradiction_x100) else "") + "\n")
                 lines += card_blocks
-            elif rejected_x100 or skipped_x100:
-                lines.append(f"\n❌ Кандидатов не найдено -- {rejected_x100} отброшено по R:R < 1:1.5{_x100_skip_note}")
+            elif rejected_x100 or skipped_x100 or contradiction_x100:
+                lines.append(f"\n❌ Кандидатов не найдено -- {rejected_x100} отброшено по R:R < "
+                              f"1:1.5{_x100_skip_note}{_x100_contra_note}")
             else:
                 lines.append("\n❌ Кандидатов не найдено")
+            # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.3а/б -- КРИТИЧНО):
+            # чёрный список методологии, отдельная строка в конце отчёта.
+            if blacklisted_symbols:
+                lines.append(f"\n🚫 Отфильтровано по методологии: {len(blacklisted_symbols)} "
+                              f"({', '.join(sorted(blacklisted_symbols))})")
             lines += ["", SEP, "⚠️ SL обязателен • Проверяй фундаментал!"]
             kb = attach_home_row(
                 [[InlineKeyboardButton("🔄 Обновить", callback_data="x100_scan"),
@@ -13847,8 +13950,13 @@ async def _zones_screen_text(offset: int = 0) -> tuple:
     (text, has_more)."""
     from live_prices import resolve_price
     config = level_watch.load_watch_zones()
-    updated = config.get("updated") or "нет данных"
-    source = config.get("source") or "нет данных"
+    # ФИКС (владелец, 2026-07-23, FIXLIST_INTERFACE.md п.1 -- живая находка):
+    # "source"/"updated" -- свободный текст из watch_zones.json (задаётся при
+    # ручной разметке), непарный _/*/`/[/] в нём ломал парсинг Markdown при
+    # отправке экрана "Зоны" (выглядело как мёртвая кнопка). Та же функция,
+    # что уже чинит этот класс бага в event_radar.py/morning_metrics.py.
+    updated = morning_metrics.sanitize_markdown_free_text(config.get("updated") or "нет данных")
+    source = morning_metrics.sanitize_markdown_free_text(config.get("source") or "нет данных")
     items = _zones_collect_all()
 
     try:
@@ -14752,6 +14860,70 @@ async def _start_pump_detector(app):
     # (не подставляет "ок" туда, где проверка не делалась -- см. Протокол правды).
     await _startup_integrity_check(app.bot, owner_id)
 
+
+# Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.1 -- живая находка: РЫНОК/
+# Зоны/Мои разметки "мёртвые" кнопки -- корень оказался НЕ except:pass в
+# нашем коде, а ДВА структурных пробела разом: (а) нигде не зарегистрирован
+# `app.add_error_handler()`, поэтому необработанное исключение в ЛЮБОМ
+# callback-хендлере просто логируется PTB как "No error handlers are
+# registered" и исчезает с точки зрения владельца (spinner гаснет, ничего не
+# меняется); (б) сам класс ошибки в обоих случаях -- `telegram.error.
+# BadRequest: Can't parse entities` (непарный _/*/`` `` ``/[/] в свободном
+# тексте, интерполированном в Markdown-карточку) -- тот же класс, что уже
+# чинили ТОЧЕЧНО в event_radar.py/morning_metrics.py. Вместо очередной
+# точечной правки -- системный фикс на уровне самого Bot-инстанса: ЛЮБОЙ
+# send_message/edit_message_text с parse_mode="Markdown", упавший на этой
+# ошибке, автоматически повторяется БЕЗ parse_mode (обычный текст без
+# форматирования, но видимый пользователю) -- покрывает CALLBACK_HANDLER И
+# reply_text (у CallbackQuery/Message нет своих HTTP-вызовов, оба идут через
+# `self.get_bot().send_message/edit_message_text()` -- один патч на уровне
+# Bot-инстанса покрывает оба пути автоматически, без правки каждого места).
+def _wrap_markdown_retry(bound_method, method_name: str):
+    """Оборачивает bound-метод Bot-инстанса (send_message/edit_message_text):
+    при `BadRequest: Can't parse entities` и `parse_mode` в kwargs -- один
+    повтор без parse_mode. Любая другая ошибка (включая повторный сбой
+    plain-text retry) пробрасывается как есть -- не глотает исключения
+    молча, просто даёт шанс показать хоть что-то пользователю вместо тишины."""
+    async def _wrapped(*args, **kwargs):
+        try:
+            return await bound_method(*args, **kwargs)
+        except BadRequest as e:
+            if kwargs.get("parse_mode") and "can't parse entities" in str(e).lower():
+                log.error(f"[MD-SAFE] {method_name}: не удалось распарсить Markdown, "
+                          f"повтор без форматирования -- {e}")
+                kwargs["parse_mode"] = None
+                return await bound_method(*args, **kwargs)
+            raise
+    return _wrapped
+
+
+def _install_markdown_retry_wrappers(bot_instance):
+    """Патчит send_message/edit_message_text ОДНОГО Bot-инстанса (тот же,
+    что используют ВСЕ CallbackQuery.edit_message_text()/Message.reply_text()
+    через self.get_bot()) -- системная защита, не per-caller."""
+    bot_instance.send_message = _wrap_markdown_retry(bot_instance.send_message, "send_message")
+    bot_instance.edit_message_text = _wrap_markdown_retry(
+        bot_instance.edit_message_text, "edit_message_text")
+
+
+async def _global_error_handler(update, context):
+    """`app.add_error_handler()` -- раньше в bot.py НЕ БЫЛО ни одного (grep по
+    всему файлу подтвердил), из-за чего необработанное исключение в ЛЮБОМ
+    хендлере просто исчезало с точки зрения владельца. Best-effort: логирует
+    честно + пробует показать пользователю короткое "ошибка" сообщение (не
+    падает повторно, если и это не получилось -- защита от каскада)."""
+    log.error(f"[UNHANDLED] {context.error}", exc_info=context.error)
+    try:
+        chat = getattr(update, "effective_chat", None)
+        if chat is not None:
+            await context.bot.send_message(
+                chat.id,
+                "Произошла ошибка при обработке -- уже в логах. Попробуйте /start."
+            )
+    except Exception as e:
+        log.error(f"[UNHANDLED] fallback-сообщение об ошибке тоже не отправилось: {e}")
+
+
 def main():
     # concurrent_updates=True -- иначе PTB диспетчит апдейты СТРОГО последовательно и не
     # начнёт обрабатывать новый (например /start), пока не завершится ТЕКУЩИЙ хендлер
@@ -14762,6 +14934,11 @@ def main():
            .post_init(_start_pump_detector)
            .concurrent_updates(True)
            .build())
+    # Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.1) -- системная защита
+    # от "молча мёртвых кнопок": error_handler + Markdown-retry на уровне
+    # Bot-инстанса, см. докстринги обеих функций выше.
+    _install_markdown_retry_wrappers(app.bot)
+    app.add_error_handler(_global_error_handler)
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("stop",      cmd_stop))
     app.add_handler(CommandHandler("myid",      cmd_myid))

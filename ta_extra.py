@@ -359,6 +359,26 @@ def format_sweep_line(sweep_1h, sweep_4h, price_fmt=None) -> str:
     return f"⚠️ Манипуляция: {kind_str} ({tf_label}, {sweep['bars_ago']} баров назад, {vol_str}) — {liq_str}"
 
 
+def freshest_sweep_direction(sweep_1h, sweep_4h):
+    """Владелец, ДА, 2026-07-23 (FIXLIST_INTERFACE.md п.3в -- внутреннее
+    противоречие x100: карточка детектит манипуляцию "ликвидность в шорт"
+    (sweep_high), но всё равно эмитит LONG -- живой кейс "AKE #3"). Тот же
+    отбор свежего свипа (свежесть/выбор ТФ), что `format_sweep_line()`
+    использует для текста -- вынесено отдельной функцией, чтобы гейт-логика
+    (не эмитить LONG при sweep_high) не дублировала правило свежести
+    вручную. Возвращает "short" (sweep_high -- ликвидность в шорт, медвежий
+    implication), "long" (sweep_low), либо None (свежего свипа нет)."""
+    candidates = []
+    if sweep_1h and sweep_1h["bars_ago"] <= FRESH_SWEEP_BARS:
+        candidates.append(("1h", sweep_1h))
+    if sweep_4h and sweep_4h["bars_ago"] <= FRESH_SWEEP_BARS:
+        candidates.append(("4h", sweep_4h))
+    if not candidates:
+        return None
+    _, sweep = min(candidates, key=lambda x: x[1]["bars_ago"])
+    return "short" if sweep["type"] == "sweep_high" else "long"
+
+
 # ── Зоны поддержки/сопротивления + построение сделки от структуры ────────────
 
 def _calc_atr_simple(candles: list, period: int = SR_ATR_PERIOD) -> float:

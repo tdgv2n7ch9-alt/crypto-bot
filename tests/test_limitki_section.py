@@ -219,6 +219,92 @@ def test_render_limitki_with_real_watch_zones_symbols(monkeypatch):
         assert sym in text
 
 
+# ── _limitki_group_index() / кнопки Исполнения -- дедуп (FIXLIST_INTERFACE.md
+# п.2, владелец, ДА, 2026-07-23, живая находка "BTC LONG ×3/AKE SHORT ×2") ──
+
+def test_group_index_single_zone_no_index():
+    items = [{"symbol": "ETH", "zone": _zone("LONG", 1600, 1700)}]
+    result = bot._limitki_group_index(items)
+    assert result == [(items[0], 1, 1)]
+
+
+def test_group_index_multi_zone_same_symbol_side_gets_sequential_index():
+    items = [
+        {"symbol": "BTC", "zone": _zone("LONG", 60000, 61000)},
+        {"symbol": "BTC", "zone": _zone("LONG", 58000, 59000)},
+        {"symbol": "BTC", "zone": _zone("LONG", 55000, 56000)},
+    ]
+    result = bot._limitki_group_index(items)
+    indices = [idx for _, idx, _ in result]
+    sizes = [size for _, _, size in result]
+    assert indices == [1, 2, 3]
+    assert sizes == [3, 3, 3]
+
+
+def test_group_index_different_side_same_symbol_separate_groups():
+    items = [
+        {"symbol": "BTC", "zone": _zone("LONG", 60000, 61000)},
+        {"symbol": "BTC", "zone": _zone("SHORT", 65000, 66000)},
+    ]
+    result = bot._limitki_group_index(items)
+    assert [(idx, size) for _, idx, size in result] == [(1, 1), (1, 1)]
+
+
+def test_render_limitki_button_shows_entry_and_index_when_multiple_zones(monkeypatch):
+    config = {
+        "updated": "x", "source": "y",
+        "BTCUSDT": [
+            _zone("LONG", 60000, 61000, prio=1),
+            _zone("LONG", 58000, 59000, prio=2),
+        ],
+    }
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    monkeypatch.setattr(bot, "get_top500", lambda: [])
+    monkeypatch.setattr(live_prices, "get_live_price", lambda sym: (None, None))
+
+    class _Q:
+        def __init__(self):
+            self.calls = []
+
+        async def edit_message_text(self, chat_id, message_id, text, reply_markup=None, **kw):
+            self.calls.append((text, reply_markup))
+
+    q = _Q()
+    asyncio.run(bot._mv2_render_limitki(q, 1, 1))
+    _, kb = q.calls[0]
+    labels = [row[0].text for row in kb.inline_keyboard if row[0].callback_data.startswith("mv2_limitki_card_")]
+    assert len(labels) == 2
+    assert "BTC LONG · вход 60,000" in labels[0] or "вход" in labels[0]
+    assert "#1" in labels[0]
+    assert "#2" in labels[1]
+    # старый неотличимый формат ушёл
+    assert not any(lbl == "🎯 Исполнение BTC LONG" for lbl in labels)
+
+
+def test_render_limitki_button_no_index_when_single_zone(monkeypatch):
+    config = {
+        "updated": "x", "source": "y",
+        "ETHUSDT": [_zone("LONG", 1600, 1700, prio=1)],
+    }
+    monkeypatch.setattr(bot.level_watch, "load_watch_zones", lambda: config)
+    monkeypatch.setattr(bot, "get_top500", lambda: [])
+    monkeypatch.setattr(live_prices, "get_live_price", lambda sym: (None, None))
+
+    class _Q:
+        def __init__(self):
+            self.calls = []
+
+        async def edit_message_text(self, chat_id, message_id, text, reply_markup=None, **kw):
+            self.calls.append((text, reply_markup))
+
+    q = _Q()
+    asyncio.run(bot._mv2_render_limitki(q, 1, 1))
+    _, kb = q.calls[0]
+    labels = [row[0].text for row in kb.inline_keyboard if row[0].callback_data.startswith("mv2_limitki_card_")]
+    assert len(labels) == 1
+    assert "#" not in labels[0]
+
+
 def test_menu_v2_has_limitki_button_first():
     kb = bot.main_kb_v2()
     first_row = kb.inline_keyboard[0]
@@ -403,7 +489,9 @@ def test_render_limitki_cancelled_zone_gets_warning_button_icon(monkeypatch):
     asyncio.run(bot._mv2_render_limitki(q, 1, 1))
     kb = q.calls[0]
     btn_texts = [b.text for row in kb.inline_keyboard for b in row]
-    assert any(t.startswith("🚫 Исполнение") for t in btn_texts)
+    # формат кнопки обновлён (FIXLIST_INTERFACE.md п.2, 2026-07-23):
+    # "🚫 СИМВОЛ СТОРОНА · вход X" вместо "🚫 Исполнение СИМВОЛ СТОРОНА"
+    assert any(t.startswith("🚫 BTC LONG") for t in btn_texts)
 
 
 # ── _check_author_zone_conflict() ───────────────────────────────────────────
