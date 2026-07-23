@@ -285,71 +285,52 @@ def _make_zones_handler(bot_module, cache: _TTLCache):
 
 
 def _make_signals_handler(bot_module, cache: _TTLCache):
-    """`/api/v1/signals` -- источник: TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS (те же
-    живые модульные глобалы, что читает текстовый экран "Монеты в работе",
-    bot.py:4800/4844) + top_trades_long_status()/top_trades_short_status() (те
-    же чистые функции статуса, вынесенные из cmd_top_trades ради тестируемости
-    -- см. их докстринги) + get_binance_24h() (тот же источник живой цены, что
-    текстовый экран). Ничего не пересчитывает заново.
+    """`/api/v1/signals` -- ФИКС (владелец, 2026-07-23, живая находка): раньше
+    читал TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS -- эфемерные словари, персистентные
+    ТОЛЬКО в /tmp/best_trade_signals.json без бэкапа в GitHub (тот же класс
+    бага, что уже чинили в AUTO-гейте лимита -- см. _auto_concurrent_limit_
+    reached()). Показывал старые вручную добавленные "watching"-записи
+    (BTC/SOL/ETH short, `time: null`) вместо реальных ENTERED-позиций
+    (US/ETHFI/GMX) -- панель "Активные сигналы" должна быть о РЕАЛЬНОМ
+    капитале в риске, не о произвольном сохранённом словаре.
 
-    Честно НЕ покрыто в этой версии (см. PROGRESS.md "П-MiniApp /api/signals"):
-    Rocket Score разложение, чеклист, POI/сессия/тип сетапа,
-    строка ликвидаций, МЕМКОИН-бейдж -- эти поля существуют только в РЕНДЕРЕ
-    текстового сообщения на момент отправки сигнала (_build_signal_post()),
-    не персистентны в TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS структурированно для
-    уже отправленных сигналов. Дать их честно можно только из journal/
-    signals.json (там есть rocket_score/ema_stack/sweep/grade) -- отдельное
-    расширение, не в этом инкременте."""
+    Теперь читает ПЕРСИСТЕНТНЫЙ signal_journal._journal, только status ==
+    "ENTERED" -- реальные открытые позиции с уже зафиксированной entered_
+    price (капитал в риске прямо сейчас). Живая цена -- get_binance_24h(),
+    тот же источник, что раньше. Статус берётся из самого журнала (уже
+    отслеживается run_tracker()), не пересчитывается заново."""
     async def _handle(request: web.Request) -> web.Response:
         cached = cache.get()
         if cached is not None:
             return _json_response(cached)
         try:
+            import signal_journal
             signals = []
-            for sym, v in bot_module.TOP_LONG_SIGNALS.items():
-                if v.get("status") == "done":
+            for rec in signal_journal._journal.values():
+                if rec.get("status") != "ENTERED":
                     continue
-                entry = v["entry"]
-                tp1 = v.get("tp1", entry * 1.02)
-                tp2 = v.get("tp2", entry * 1.04)
-                tp3 = v.get("tp3", entry * 1.08)
-                sl = v.get("sl", entry * 0.85)
+                sym = rec.get("symbol")
+                direction = rec.get("direction")
+                entry = rec.get("entered_price")
                 try:
                     stats = bot_module.get_binance_24h(sym)
                     cur = stats.get("last", entry) if stats else entry
-                except Exception:
+                except Exception as e:
+                    log.error(f"[MINIAPP-API] signals price lookup {sym}: {e}")
                     cur = entry
                 cur = cur or entry
-                status, terminal_result = bot_module.top_trades_long_status(entry, cur, tp1, tp2, tp3, sl)
+                move_pct = None
+                if entry:
+                    if direction == "long":
+                        move_pct = round((cur - entry) / entry * 100, 3)
+                    else:
+                        move_pct = round((entry - cur) / entry * 100, 3)
                 signals.append({
-                    "symbol": sym, "direction": "long", "entry": entry,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3, "sl": sl, "rr": v.get("rr"),
-                    "current_price": cur,
-                    "move_pct": round((cur - entry) / entry * 100, 3) if entry else None,
-                    "status_text": status, "terminal_result": terminal_result,
-                    "time": v["time"].isoformat() if v.get("time") else None,
-                })
-            for sym, v in bot_module.TOP_SHORT_SIGNALS.items():
-                if v.get("status") == "done":
-                    continue
-                entry = v["entry"]
-                tp1 = v.get("tp1", entry * 0.98)
-                tp2 = v.get("tp2", entry * 0.96)
-                sl = v.get("sl", entry * 1.15)
-                try:
-                    stats = bot_module.get_binance_24h(sym)
-                    cur = stats.get("last", entry) if stats else entry
-                except Exception:
-                    cur = entry
-                cur = cur or entry
-                status, terminal_result = bot_module.top_trades_short_status(entry, cur, tp1, tp2, sl)
-                signals.append({
-                    "symbol": sym, "direction": "short", "entry": entry,
-                    "tp1": tp1, "tp2": tp2, "tp3": None, "sl": sl, "rr": v.get("rr"),
-                    "current_price": cur,
-                    "move_pct": round((entry - cur) / entry * 100, 3) if entry else None,
-                    "status_text": status, "terminal_result": terminal_result,
-                    "time": v["time"].isoformat() if v.get("time") else None,
+                    "id": rec.get("id"), "symbol": sym, "direction": direction,
+                    "entry": entry, "tp1": rec.get("tp1"), "tp2": rec.get("tp2"),
+                    "tp3": rec.get("tp3"), "sl": rec.get("sl"), "rr": rec.get("rr"),
+                    "current_price": cur, "move_pct": move_pct,
+                    "status_text": rec.get("status"), "source": rec.get("source"),
                 })
         except Exception as e:
             log.error(f"[MINIAPP-API] signals build failed: {e}")

@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import miniapp_api as ma
+import signal_journal
 
 BOT_TOKEN = "123456:FAKE-TOKEN-FOR-TESTS-ONLY"
 
@@ -461,14 +462,22 @@ def test_rate_limit_enforced_over_http(monkeypatch):
 
 # ── /api/v1/signals ──────────────────────────────────────────────────────
 
-def test_signals_endpoint_long_active_schema():
-    from datetime import datetime
-    top_long = {"BTC": {"time": datetime(2026, 7, 15, 3, 0), "entry": 60000,
-                         "tp1": 61200, "tp2": 62400, "tp3": 64800, "sl": 51000,
-                         "rr": 3.2, "status": "active"}}
+# Живая находка (владелец, 2026-07-23): /api/v1/signals раньше читал
+# эфемерные TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS (persist только в /tmp,
+# без бэкапа в GitHub -- тот же класс бага, что AUTO-гейт лимита) --
+# показывал старые вручную добавленные "watching"-записи вместо реальных
+# ENTERED-позиций. Теперь читает ПЕРСИСТЕНТНЫЙ signal_journal._journal,
+# только status=="ENTERED" -- тесты патчат signal_journal._journal
+# напрямую, не bot_module.TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS.
+
+def test_signals_endpoint_long_active_schema(monkeypatch):
+    journal = {1: {"id": 1, "symbol": "BTC", "direction": "long", "entered_price": 60000,
+                   "tp1": 61200, "tp2": 62400, "tp3": 64800, "sl": 51000,
+                   "rr": 3.2, "status": "ENTERED", "source": "TOP_LONG_AUTO"}}
+    monkeypatch.setattr(signal_journal, "_journal", journal)
 
     async def go():
-        app = ma.build_app(_FakeBotModule(top_long=top_long, binance_prices={"BTC": 60300}))
+        app = ma.build_app(_FakeBotModule(binance_prices={"BTC": 60300}))
         init_data = _build_init_data()
         from aiohttp.test_utils import TestClient, TestServer
         async with TestClient(TestServer(app)) as client:
@@ -483,18 +492,21 @@ def test_signals_endpoint_long_active_schema():
             assert row["direction"] == "long"
             assert row["entry"] == 60000
             assert row["current_price"] == 60300
-            assert row["status_text"] == "🟢 В плюсе"
             assert row["rr"] == 3.2
     _run(go())
 
 
-def test_signals_endpoint_excludes_done_status():
-    from datetime import datetime
-    top_long = {"BTC": {"time": datetime(2026, 7, 15), "entry": 60000, "tp1": 61200,
-                         "tp2": 62400, "tp3": 64800, "sl": 51000, "status": "done"}}
+def test_signals_endpoint_excludes_non_entered_status(monkeypatch):
+    journal = {
+        1: {"id": 1, "symbol": "BTC", "direction": "long", "entered_price": 60000,
+            "tp1": 61200, "tp2": 62400, "tp3": 64800, "sl": 51000, "status": "PENDING"},
+        2: {"id": 2, "symbol": "ETH", "direction": "long", "entered_price": 3000,
+            "tp1": 3100, "tp2": 3200, "tp3": 3300, "sl": 2800, "status": "SL_HIT"},
+    }
+    monkeypatch.setattr(signal_journal, "_journal", journal)
 
     async def go():
-        app = ma.build_app(_FakeBotModule(top_long=top_long))
+        app = ma.build_app(_FakeBotModule())
         init_data = _build_init_data()
         from aiohttp.test_utils import TestClient, TestServer
         async with TestClient(TestServer(app)) as client:
@@ -505,13 +517,14 @@ def test_signals_endpoint_excludes_done_status():
     _run(go())
 
 
-def test_signals_endpoint_short_direction():
-    from datetime import datetime
-    top_short = {"ETH": {"time": datetime(2026, 7, 15), "entry": 3000, "tp1": 2940,
-                          "tp2": 2880, "sl": 3450, "rr": 2.1, "status": "active"}}
+def test_signals_endpoint_short_direction(monkeypatch):
+    journal = {1: {"id": 1, "symbol": "ETH", "direction": "short", "entered_price": 3000,
+                   "tp1": 2940, "tp2": 2880, "tp3": None, "sl": 3450, "rr": 2.1,
+                   "status": "ENTERED", "source": "TOP_SHORT_AUTO"}}
+    monkeypatch.setattr(signal_journal, "_journal", journal)
 
     async def go():
-        app = ma.build_app(_FakeBotModule(top_short=top_short, binance_prices={"ETH": 2950}))
+        app = ma.build_app(_FakeBotModule(binance_prices={"ETH": 2950}))
         init_data = _build_init_data()
         from aiohttp.test_utils import TestClient, TestServer
         async with TestClient(TestServer(app)) as client:
@@ -525,7 +538,9 @@ def test_signals_endpoint_short_direction():
     _run(go())
 
 
-def test_signals_endpoint_empty_when_no_active_signals():
+def test_signals_endpoint_empty_when_no_active_signals(monkeypatch):
+    monkeypatch.setattr(signal_journal, "_journal", {})
+
     async def go():
         app = ma.build_app(_FakeBotModule())
         init_data = _build_init_data()

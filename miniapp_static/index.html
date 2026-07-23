@@ -301,6 +301,13 @@ async function loadZones() {
 
 async function refreshAll() {
   const results = await Promise.allSettled([loadHealthTs(), loadMacro(), loadTrackRecord(), loadSignals(), loadZones()]);
+  // Владелец, ДА, 2026-07-23: "обновлено --:--:--" не должно виснуть навсегда,
+  // даже если ИМЕННО /api/v1/health не ответил -- реальный timestamp с
+  // сервера в приоритете (loadHealthTs), но клиентское время -- честный
+  // фоллбек вместо вечного "--:--:--" (сам факт попытки обновления всё
+  // равно осмысленный сигнал для владельца).
+  const healthOk = results[0].status === 'fulfilled' && results[0].value === true;
+  if (!healthOk) { lastApiTs = Date.now() / 1000; }
   renderUpd();
   const errs = results.filter(r => r.status === 'rejected').length;
   document.getElementById('footErr').textContent = errs ? `${errs} панели не обновились` : '';
