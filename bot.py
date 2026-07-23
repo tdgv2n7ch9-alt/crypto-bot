@@ -9456,6 +9456,24 @@ def get_btc_market_context() -> dict:
         result["btc_price"] = btc_price
         result["btc_ch24h"] = round(ch24h, 2)
 
+        # ФИКС (владелец, 2026-07-23, живая находка -- "Доминация 0.0%" в Mini
+        # App /panel, тот же битый маппинг что кормит и текстовый экран РЫНОК,
+        # см. bot.py:5145): "dominance"/"fear_greed" были захардкожены в
+        # дефолтах result{} выше и НИКОГДА не пересчитывались в этой функции --
+        # реальный источник (тот же, что честно работает в "Обзор рынка"/
+        # "Тренд", gm.get("btc_dominance")) просто не был подключён сюда.
+        try:
+            gm = get_global_metrics()
+            result["dominance"] = round(gm.get("btc_dominance", 0) or 0, 1)
+        except Exception as e:
+            log.info(f"[BTC-CTX] dominance: {e}")
+        try:
+            import requests as _r_ctx
+            fg = _r_ctx.get("https://api.alternative.me/fng/?limit=1", timeout=5).json()
+            result["fear_greed"] = int(fg["data"][0]["value"])
+        except Exception as e:
+            log.info(f"[BTC-CTX] fear_greed: {e}")
+
         # BTC OHLC for trend/EMA (Binance, may be empty on Railway)
         c1h = get_binance_ohlc("BTC", "1h", 50)  or []
         c4h = get_binance_ohlc("BTC", "4h", 100) or []

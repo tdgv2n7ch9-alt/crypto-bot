@@ -5,33 +5,58 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>BEST TRADE — Панель (owner)</title>
 <style>
+/* Владелец, ДА, 2026-07-23: редизайн палитры в стиле CoinMarketCap.
+   Design tokens -- ни одного хардкода цвета вне :root/[data-theme], оба
+   набора переключаются JS-ом (Telegram.WebApp.colorScheme авто + ручной
+   тумблер, localStorage). @media-фоллбек -- на случай открытия вне
+   Telegram/до отработки JS. */
 :root{
-  --ink:#0A0E14;--panel:#10161F;--line:#1C2733;
-  --amber:#FFB454;--text:#D7DEE8;--muted:#71808F;
-  --up:#5BE38B;--dn:#FF6B6B;
+  --bg:#FFFFFF;--panel:#F8FAFD;--line:#EFF2F5;
+  --text:#0D1421;--muted:#616E85;
+  --accent:#3861FB;--up:#16C784;--down:#EA3943;
+  --up-bg:rgba(22,199,132,.11);--down-bg:rgba(234,57,67,.11);
+  --warn:#F3A712;--warn-bg:rgba(243,167,18,.12);
+}
+:root[data-theme="dark"]{
+  --bg:#0D1421;--panel:#17171A;--line:#262A33;
+  --text:#FFFFFF;--muted:#A1A7BB;
+  --accent:#3861FB;--up:#16C784;--down:#EA3943;
+  --up-bg:rgba(22,199,132,.14);--down-bg:rgba(234,57,67,.14);
+  --warn:#F3A712;--warn-bg:rgba(243,167,18,.16);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1421;--panel:#17171A;--line:#262A33;
+    --text:#FFFFFF;--muted:#A1A7BB;
+    --accent:#3861FB;--up:#16C784;--down:#EA3943;
+    --up-bg:rgba(22,199,132,.14);--down-bg:rgba(234,57,67,.14);
+    --warn:#F3A712;--warn-bg:rgba(243,167,18,.16);
+  }
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--ink);color:var(--text);font-family:-apple-system,Inter,system-ui,sans-serif;font-size:14px;line-height:1.5}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;transition:background .15s,color .15s}
 .wrap{max-width:1100px;margin:0 auto;padding:0 16px 40px}
 header{padding:14px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
-.logo{font-weight:700;font-size:17px}
+.logo{font-weight:700;font-size:17px;color:var(--text)}
 .logo small{color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-left:8px}
+.hdr-right{display:flex;align-items:center;gap:12px}
 .upd{display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)}
 .upd i{width:8px;height:8px;border-radius:50%;background:var(--up)}
-.upd i.stale{background:var(--amber)}
+.upd i.stale{background:var(--warn)}
 .upd b{color:var(--text);font-weight:500}
+.theme-toggle{background:var(--panel);border:1px solid var(--line);border-radius:8px;width:32px;height:32px;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text)}
 
 .macro{display:flex;gap:20px;flex-wrap:wrap;margin:14px 0;font-family:monospace;font-size:12.5px;color:var(--muted)}
 .macro b{color:var(--text)}
-.macro .u{color:var(--up)}.macro .d{color:var(--dn)}
+.macro .u{color:var(--up)}.macro .d{color:var(--down)}
 
 .kpis{display:flex;gap:24px;margin:18px 0;flex-wrap:wrap;font-family:monospace}
-.kpi b{display:block;font-size:20px;font-weight:600}
+.kpi b{display:block;font-size:20px;font-weight:600;color:var(--text)}
 .kpi span{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
-.nd{color:var(--amber)}
+.nd{color:var(--warn)}
 
 .panel{margin:20px 0;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
-.panel h2{font-size:14px;font-weight:600;padding:12px 14px;border-bottom:1px solid var(--line)}
+.panel h2{font-size:14px;font-weight:600;padding:12px 14px;border-bottom:1px solid var(--line);color:var(--text)}
 .panel .body{padding:12px 14px}
 .placeholder{color:var(--muted);font-size:12.5px;font-family:monospace;border:1px dashed var(--line);border-radius:6px;padding:10px}
 
@@ -39,22 +64,25 @@ header{padding:14px 0;display:flex;align-items:center;justify-content:space-betw
 table{width:100%;border-collapse:collapse;min-width:640px}
 th{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 th:first-child,td:first-child{text-align:left}
-td{font-family:monospace;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+td{font-family:monospace;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;color:var(--text)}
 tr:last-child td{border-bottom:0}
-.u{color:var(--up)}.d{color:var(--dn)}.mut{color:var(--muted)}
+.u{color:var(--up)}.d{color:var(--down)}.mut{color:var(--muted)}
 .badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px}
-.b-long{color:var(--up);background:rgba(91,227,139,.12)}
-.b-short{color:var(--dn);background:rgba(255,107,107,.12)}
+.b-long{color:var(--up);background:var(--up-bg)}
+.b-short{color:var(--down);background:var(--down-bg)}
 
 footer{padding:20px 0;color:var(--muted);font-size:11px;border-top:1px solid var(--line);margin-top:12px}
-.err{color:var(--dn);font-size:12px;font-family:monospace}
+.err{color:var(--down);font-size:12px;font-family:monospace}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
   <div class="logo">BEST TRADE <small>owner-панель</small></div>
-  <div class="upd"><i id="updDot"></i>обновлено <b id="updTime">--:--:--</b></div>
+  <div class="hdr-right">
+    <div class="upd"><i id="updDot"></i>обновлено <b id="updTime">--:--:--</b></div>
+    <button class="theme-toggle" id="themeToggle" title="Светлая/тёмная тема">🌙</button>
+  </div>
 </header>
 
 <div class="macro" id="macro">н/д — загрузка...</div>
@@ -120,13 +148,44 @@ const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 const initData = tg ? tg.initData : "";
 
-let lastOkTs = 0;
+// ── тема: сохранённый выбор > Telegram.WebApp.colorScheme > OS-медиа ──
+const THEME_KEY = 'bt_theme_pref';
+function getStoredTheme() {
+  try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
+}
+function setStoredTheme(theme) {
+  try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+}
+function systemTheme() {
+  if (tg && tg.colorScheme) return tg.colorScheme;
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+let currentTheme = getStoredTheme() || systemTheme();
+applyTheme(currentTheme);
+document.getElementById('themeToggle').addEventListener('click', () => {
+  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  setStoredTheme(currentTheme);
+  applyTheme(currentTheme);
+});
+if (tg && tg.onEvent) {
+  tg.onEvent('themeChanged', () => {
+    if (!getStoredTheme()) { currentTheme = systemTheme(); applyTheme(currentTheme); }
+  });
+}
+
+let lastApiTs = 0;
 function renderUpd(){
   const dot = document.getElementById('updDot');
   const el = document.getElementById('updTime');
-  if (lastOkTs) {
-    el.textContent = new Date(lastOkTs).toLocaleTimeString('ru-RU');
-    dot.classList.toggle('stale', (Date.now() - lastOkTs) > 180000);
+  if (lastApiTs) {
+    el.textContent = new Date(lastApiTs * 1000).toLocaleTimeString('ru-RU');
+    dot.classList.toggle('stale', (Date.now() - lastApiTs * 1000) > 180000);
   }
 }
 
@@ -139,6 +198,19 @@ async function apiGet(path) {
 function fmtNum(v, digits) {
   if (v === null || v === undefined) return 'н/д';
   return Number(v).toFixed(digits === undefined ? 4 : digits);
+}
+
+// Владелец, ДА, 2026-07-23: "обновлено --:--:--" -- реальный timestamp С
+// СЕРВЕРА (/api/v1/health.ts, честное серверное время), не просто "когда
+// последний fetch прошёл успешно на клиенте" как раньше.
+async function loadHealthTs() {
+  try {
+    const resp = await apiGet('/api/v1/health');
+    if (resp.ts) { lastApiTs = resp.ts; return true; }
+    return false;
+  } catch (e) {
+    return false;
+  }
 }
 
 async function loadMacro() {
@@ -228,9 +300,7 @@ async function loadZones() {
 }
 
 async function refreshAll() {
-  const results = await Promise.allSettled([loadMacro(), loadTrackRecord(), loadSignals(), loadZones()]);
-  const anyOk = results.some(r => r.status === 'fulfilled');
-  if (anyOk) { lastOkTs = Date.now(); }
+  const results = await Promise.allSettled([loadHealthTs(), loadMacro(), loadTrackRecord(), loadSignals(), loadZones()]);
   renderUpd();
   const errs = results.filter(r => r.status === 'rejected').length;
   document.getElementById('footErr').textContent = errs ? `${errs} панели не обновились` : '';
