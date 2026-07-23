@@ -208,6 +208,10 @@ def test_ttl_cache_expires_after_ttl():
 
 class _FakeBotModule:
     BOT_TOKEN = BOT_TOKEN
+    # Владелец, ДА, 2026-07-23: /api/v1/signals scope -- те же константы,
+    # что bot.py использует для AUTO-пилота (_auto_concurrent_limit_reached()).
+    AUTO_LIVE_SOURCES = ("TOP_LONG_AUTO", "TOP_SHORT_AUTO")
+    AUTO_EMISSION_EXPERIMENT_START_TS = 1784712842.0
 
     def __init__(self, zones=None, coins=None, top_long=None, top_short=None, binance_prices=None,
                  btc_ctx=None, btc_ctx_boom=False, onchain_text="on-chain OK", onchain_boom=False):
@@ -473,7 +477,8 @@ def test_rate_limit_enforced_over_http(monkeypatch):
 def test_signals_endpoint_long_active_schema(monkeypatch):
     journal = {1: {"id": 1, "symbol": "BTC", "direction": "long", "entered_price": 60000,
                    "tp1": 61200, "tp2": 62400, "tp3": 64800, "sl": 51000,
-                   "rr": 3.2, "status": "ENTERED", "source": "TOP_LONG_AUTO"}}
+                   "rr": 3.2, "status": "ENTERED", "source": "TOP_LONG_AUTO",
+                   "ts": _FakeBotModule.AUTO_EMISSION_EXPERIMENT_START_TS + 100}}
     monkeypatch.setattr(signal_journal, "_journal", journal)
 
     async def go():
@@ -517,10 +522,43 @@ def test_signals_endpoint_excludes_non_entered_status(monkeypatch):
     _run(go())
 
 
+def test_signals_endpoint_excludes_non_pilot_entered_records(monkeypatch):
+    """Регресс-тест self-caught бага (владелец, 2026-07-23, live-verify):
+    ENTERED-записи ВНЕ AUTO-пилота (не тот source, или до старта эксперимента)
+    -- НЕ должны попадать в "Активные сигналы" (иначе панель отдаёт всю
+    историю журнала -- десятки символов вместо реальных 3 позиций пилота,
+    и таймаутит на get_binance_24h() по каждому)."""
+    START = _FakeBotModule.AUTO_EMISSION_EXPERIMENT_START_TS
+    journal = {
+        1: {"id": 1, "symbol": "TRUMP", "direction": "long", "entered_price": 1.6,
+            "status": "ENTERED", "source": "TOP_SPOT_AUTO", "ts": START + 100},
+        2: {"id": 2, "symbol": "LTC", "direction": "long", "entered_price": 44.9,
+            "status": "ENTERED", "source": "full_analysis", "ts": START + 100},
+        3: {"id": 3, "symbol": "CAKE", "direction": "long", "entered_price": 1.4,
+            "status": "ENTERED", "source": "TOP_LONG_AUTO", "ts": START - 1000},  # до старта пилота
+        4: {"id": 4, "symbol": "US", "direction": "long", "entered_price": 0.044,
+            "status": "ENTERED", "source": "TOP_LONG_AUTO", "ts": START + 100},  # реальный пилот
+    }
+    monkeypatch.setattr(signal_journal, "_journal", journal)
+
+    async def go():
+        app = ma.build_app(_FakeBotModule(binance_prices={"US": 0.045}))
+        init_data = _build_init_data()
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/v1/signals",
+                                     headers={"X-Telegram-Init-Data": init_data})
+            body = await resp.json()
+            symbols = [s["symbol"] for s in body["data"]]
+            assert symbols == ["US"]
+    _run(go())
+
+
 def test_signals_endpoint_short_direction(monkeypatch):
     journal = {1: {"id": 1, "symbol": "ETH", "direction": "short", "entered_price": 3000,
                    "tp1": 2940, "tp2": 2880, "tp3": None, "sl": 3450, "rr": 2.1,
-                   "status": "ENTERED", "source": "TOP_SHORT_AUTO"}}
+                   "status": "ENTERED", "source": "TOP_SHORT_AUTO",
+                   "ts": _FakeBotModule.AUTO_EMISSION_EXPERIMENT_START_TS + 100}}
     monkeypatch.setattr(signal_journal, "_journal", journal)
 
     async def go():

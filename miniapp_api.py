@@ -294,11 +294,17 @@ def _make_signals_handler(bot_module, cache: _TTLCache):
     (US/ETHFI/GMX) -- панель "Активные сигналы" должна быть о РЕАЛЬНОМ
     капитале в риске, не о произвольном сохранённом словаре.
 
-    Теперь читает ПЕРСИСТЕНТНЫЙ signal_journal._journal, только status ==
-    "ENTERED" -- реальные открытые позиции с уже зафиксированной entered_
-    price (капитал в риске прямо сейчас). Живая цена -- get_binance_24h(),
-    тот же источник, что раньше. Статус берётся из самого журнала (уже
-    отслеживается run_tracker()), не пересчитывается заново."""
+    Теперь читает ПЕРСИСТЕНТНЫЙ signal_journal._journal, status=="ENTERED".
+
+    ВТОРОЙ self-caught баг (live-verify этого же фикса, несколько минут
+    спустя): без scope по source/времени возвращал ВООБЩЕ ВСЕ ENTERED-записи
+    за всю историю журнала (TOP_SPOT_AUTO/full_analysis/signal_loop, недели
+    данных) -- десятки символов вместо реальных 3 позиций пилота, и вызывал
+    get_binance_24h() на КАЖДЫЙ из них последовательно -> таймаут ответа
+    (>15с). Тот же scope, что уже использует _auto_concurrent_limit_
+    reached()/_auto_emission_kill_switch_triggered() -- AUTO_LIVE_SOURCES +
+    AUTO_EMISSION_EXPERIMENT_START_TS -- "Активные сигналы" здесь означает
+    ИМЕННО живые позиции узкого AUTO-пилота, не всю историю бота."""
     async def _handle(request: web.Request) -> web.Response:
         cached = cache.get()
         if cached is not None:
@@ -308,6 +314,10 @@ def _make_signals_handler(bot_module, cache: _TTLCache):
             signals = []
             for rec in signal_journal._journal.values():
                 if rec.get("status") != "ENTERED":
+                    continue
+                if rec.get("source") not in bot_module.AUTO_LIVE_SOURCES:
+                    continue
+                if (rec.get("ts") or 0) < bot_module.AUTO_EMISSION_EXPERIMENT_START_TS:
                     continue
                 sym = rec.get("symbol")
                 direction = rec.get("direction")
