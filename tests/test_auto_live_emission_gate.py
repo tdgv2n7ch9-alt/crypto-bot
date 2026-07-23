@@ -66,41 +66,62 @@ def test_gate_reasons_passes_non_accumulation_signal():
 
 # ---------------------------------------------------------------------------
 # _auto_concurrent_limit_reached() -- предохранитель "лимит открытых позиций"
+#
+# Владелец, ФИКС 2026-07-23 (живая находка -- RSR id=485 прошёл эмиссию при
+# 3/3 занятых слотах US/ETHFI/GMX): счётчик теперь читает ПЕРСИСТЕНТНЫЙ
+# signal_journal._journal (ENTERED+PENDING по AUTO_LIVE_SOURCES), не
+# эфемерные TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS -- тесты ниже переписаны под
+# новый источник данных, старые (патчившие TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS)
+# тестировали как раз БАГОВОЕ поведение.
 # ---------------------------------------------------------------------------
 
+def _mk_open_record(source="TOP_LONG_AUTO", status="ENTERED"):
+    return {"source": source, "status": status}
+
+
 def test_concurrent_limit_not_reached_when_below_max():
-    long_signals = {"BTC": {"status": "active"}, "ETH": {"status": "watching"}}
-    short_signals = {"SOL": {"status": "active"}}
-    with patch.object(bot, "TOP_LONG_SIGNALS", long_signals), \
-         patch.object(bot, "TOP_SHORT_SIGNALS", short_signals), \
+    journal = {1: _mk_open_record(), 2: _mk_open_record(source="TOP_SHORT_AUTO")}
+    with patch.object(bot.signal_journal, "_journal", journal), \
          patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
         assert bot._auto_concurrent_limit_reached() is False
 
 
 def test_concurrent_limit_reached_at_exact_max():
-    long_signals = {"BTC": {"status": "active"}, "ETH": {"status": "active"}}
-    short_signals = {"SOL": {"status": "active"}}
-    with patch.object(bot, "TOP_LONG_SIGNALS", long_signals), \
-         patch.object(bot, "TOP_SHORT_SIGNALS", short_signals), \
+    journal = {1: _mk_open_record(), 2: _mk_open_record(status="PENDING"),
+               3: _mk_open_record(source="TOP_SHORT_AUTO")}
+    with patch.object(bot.signal_journal, "_journal", journal), \
          patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
         assert bot._auto_concurrent_limit_reached() is True
 
 
 def test_concurrent_limit_reached_above_max():
-    long_signals = {"BTC": {"status": "active"}, "ETH": {"status": "active"},
-                     "BNB": {"status": "active"}, "XRP": {"status": "active"}}
-    with patch.object(bot, "TOP_LONG_SIGNALS", long_signals), \
-         patch.object(bot, "TOP_SHORT_SIGNALS", {}), \
+    journal = {i: _mk_open_record() for i in range(4)}
+    with patch.object(bot.signal_journal, "_journal", journal), \
          patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
         assert bot._auto_concurrent_limit_reached() is True
 
 
-def test_concurrent_limit_ignores_non_active_statuses():
-    long_signals = {"BTC": {"status": "watching"}, "ETH": {"status": "closed"}}
-    with patch.object(bot, "TOP_LONG_SIGNALS", long_signals), \
-         patch.object(bot, "TOP_SHORT_SIGNALS", {}), \
+def test_concurrent_limit_ignores_non_auto_sources_and_closed_statuses():
+    journal = {
+        1: _mk_open_record(source="full_analysis"),  # не AUTO-источник
+        2: _mk_open_record(status="SL_HIT"),          # уже закрыта
+        3: _mk_open_record(status="EXPIRED"),         # уже закрыта
+    }
+    with patch.object(bot.signal_journal, "_journal", journal), \
          patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
         assert bot._auto_concurrent_limit_reached() is False
+
+
+def test_concurrent_limit_survives_empty_ephemeral_dicts():
+    """Регресс-тест П.1 (владелец, 2026-07-23): рестарт контейнера обнуляет
+    /tmp/best_trade_signals.json (TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS) -- счётчик
+    ДОЛЖЕН при этом всё равно показывать 3/3 по персистентному журналу, не 0/3."""
+    journal = {i: _mk_open_record() for i in range(3)}
+    with patch.object(bot.signal_journal, "_journal", journal), \
+         patch.object(bot, "TOP_LONG_SIGNALS", {}), \
+         patch.object(bot, "TOP_SHORT_SIGNALS", {}), \
+         patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
+        assert bot._auto_concurrent_limit_reached() is True
 
 
 # ---------------------------------------------------------------------------

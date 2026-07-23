@@ -11375,13 +11375,26 @@ def _amd_accumulation_phase(a: dict) -> str:
 def _auto_concurrent_limit_reached() -> bool:
     """Владелец, 2026-07-22 (предохранитель "лимит открытых позиций"):
     не эмитить больше `AUTO_LIVE_MAX_CONCURRENT` одновременно открытых
-    (`status == "active"`) AUTO-позиций -- не набирать пачку на
-    непроверенной по live-исходам величине, пока идёт добор n к 20."""
-    active_auto_count = (
-        sum(1 for v in TOP_LONG_SIGNALS.values() if v.get("status") == "active")
-        + sum(1 for v in TOP_SHORT_SIGNALS.values() if v.get("status") == "active")
+    AUTO-позиций -- не набирать пачку на непроверенной по live-исходам
+    величине, пока идёт добор n к 20.
+
+    Владелец, ФИКС 2026-07-23 (живая находка -- RSR id=485 прошёл эмиссию
+    при 3/3 уже занятых слотах US/ETHFI/GMX): раньше считал `status ==
+    "active"` в TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS -- эфемерных словарях,
+    персистентных ТОЛЬКО в /tmp/best_trade_signals.json без бэкапа в
+    GitHub. Любой рестарт контейнера обнулял /tmp -> счётчик падал до 0
+    независимо от реальных открытых позиций в журнале, гейт молча
+    пропускал эмиссии сверх лимита. Теперь считает ПЕРСИСТЕНТНЫЙ
+    `signal_journal._journal` (ENTERED + PENDING по AUTO_LIVE_SOURCES) --
+    тот же паттерн чтения журнала "начисто" при каждом вызове, что уже
+    использует `_auto_emission_kill_switch_triggered()` выше: ничего не
+    кэширует, переживает рестарт автоматически (журнал сам персистентен
+    через GitHub, `startup_sync()`)."""
+    open_auto_count = sum(
+        1 for r in signal_journal._journal.values()
+        if r.get("source") in AUTO_LIVE_SOURCES and r.get("status") in ("ENTERED", "PENDING")
     )
-    return active_auto_count >= AUTO_LIVE_MAX_CONCURRENT
+    return open_auto_count >= AUTO_LIVE_MAX_CONCURRENT
 
 
 _JOURNAL_FOOTER_SOURCES = {
