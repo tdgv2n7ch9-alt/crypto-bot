@@ -608,9 +608,37 @@ def test_build_rpc_providers_falls_back_to_blastapi_only_when_unset(monkeypatch)
     assert providers[0]["url"] == "https://bsc-mainnet.public.blastapi.io"
 
 
-def test_max_blocks_per_tick_is_50():
-    """Владелец, 2026-07-16: возвращено на 50 после перехода на QuickNode."""
-    assert bwm.MAX_BLOCKS_PER_TICK == 50
+def test_max_blocks_per_tick_covers_one_hour_of_bsc_blocks():
+    """Владелец, ДА, 2026-07-24: POLL_INTERVAL_SEC 60->3600 (1 скан/час) требует
+    пропорционально большего MAX_BLOCKS_PER_TICK, иначе монитор отстаёт от
+    цепи (~1200 блоков/час при ~3с/блок BSC) -- регресс, уже найденный живьём
+    (knowledge/AKE_DOSSIER.md: ~42 дня/1.2M блоков отставания со старым 50)."""
+    assert bwm.POLL_INTERVAL_SEC == 3600
+    assert bwm.MAX_BLOCKS_PER_TICK == 1200
+    assert bwm.REDUCED_MAX_BLOCKS_PER_TICK == 300
+
+
+def test_alert_threshold_lowered_to_50k():
+    """Владелец, ДА, 2026-07-24: "любой исходящий >$50K с watch-list
+    кошелька -> алерт" -- понижено с $200K, компенсировано сужением watch-
+    list до 3 кошельков AKE топ-кластера (не разгоняет частоту алертов)."""
+    assert bwm.ALERT_THRESHOLD_USD == 50_000
+
+
+def test_watch_list_narrowed_to_ake_top_cluster():
+    """Владелец, ДА, 2026-07-24 (сужение скоупа "вариант 1"): только
+    роутер-отправитель + 2 перезагруженных кошелька (прокладки убраны --
+    однодневки, слили всё ещё 2026-07-16, наблюдение не даёт новой инфы)."""
+    assert len(bwm.AKE_WATCHED_WALLETS) == 3
+    assert "0x73d8bd54f7cf5fab43fe4ef40a62d390644946db" in bwm.AKE_WATCHED_WALLETS
+    assert "0x561beec8614eaa3038f03bce7cb4f72b3d271d8e" not in bwm.AKE_WATCHED_WALLETS
+    assert "0x0a960739374ffb06772a4bb0d1ef96c5a8ae8e17" not in bwm.AKE_WATCHED_WALLETS
+
+
+def test_watched_recipients_updated_to_gate_deposit_wallet():
+    """Владелец, ДА, 2026-07-24: получатель разгрузки AKE подтверждён
+    (BscScan "Gate: Deposit Funder") -- заменяет старый recipient-адрес."""
+    assert bwm.AKE_WATCHED_RECIPIENTS == ["0x4a7063961ad7b449d607bc51d6000c290f2165df"]
 
 
 # ── бюджет-контроль QuickNode credits (владелец, 2026-07-16) ───────────────
