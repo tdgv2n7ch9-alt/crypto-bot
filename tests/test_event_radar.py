@@ -450,3 +450,43 @@ def test_format_event_digest_section_events_dir_none_uses_module_global(monkeypa
     er.append_event_log({**_event(kind="listing", eid="l1", symbols=["LINK"]), "ts": now}, events_dir=events_dir)
     text = er.format_event_digest_section(hours=12, now=now + 10)
     assert "Листингов: 1" in text
+
+
+# --- Санитизация заголовка биржи (владелец, ДА, 2026-07-23, живой сбой:
+# send_morning_digest не доставлен -- непарный "_"/"*"/"`"/"[" в реальном
+# заголовке листинга ломает parse_mode="Markdown" telegram.error.BadRequest
+# "Can't parse entities") ---
+
+def test_sanitize_free_text_neutralizes_markdown_special_chars():
+    raw = "New_listing *BOLD* `code` [bracket"
+    out = er._sanitize_free_text(raw)
+    assert "_" not in out
+    assert "*" not in out
+    assert "`" not in out
+    assert "[" not in out
+
+
+def test_sanitize_free_text_honest_noop_on_empty():
+    assert er._sanitize_free_text("") == ""
+    assert er._sanitize_free_text(None) is None
+
+
+def test_format_event_digest_section_neutralizes_unbalanced_title_chars(tmp_path):
+    """Регресс на живой сбой: заголовок с непарным "_" (реалистичный вид --
+    биржи часто пишут тикеры/пары через подчёркивание) не должен попасть в
+    вывод как есть -- иначе parse_mode="Markdown" сломается на реальной
+    отправке (не проверяется здесь напрямую -- см. test_morning_metrics.py
+    для проверки самой отправки/фолбэка)."""
+    events_dir = str(tmp_path / "events")
+    now = time.time()
+    bad_title = "Binance Will List NEW_COIN_USDT *Perpetual* [Contract]"
+    e = {**_event(kind="listing", eid="l1", symbols=["NEWCOIN"]), "ts": now, "title": bad_title}
+    er.append_event_log(e, events_dir=events_dir)
+    text = er.format_event_digest_section(hours=12, events_dir=events_dir, now=now + 10)
+    title_line = next(l for l in text.split("\n") if "NEW COIN" in l or "NEW_COIN" in l)
+    # заголовок легитимно использует "*" для bold (шапка секции) -- проверяем
+    # ИМЕННО строку с заголовком листинга, не весь текст целиком
+    assert "_" not in title_line
+    assert "*" not in title_line
+    assert "[" not in title_line
+    assert "NEW COIN USDT" in title_line  # содержание сохранено, только опасные символы заменены

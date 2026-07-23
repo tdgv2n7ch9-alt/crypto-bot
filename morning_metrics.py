@@ -28,6 +28,43 @@ import shadow_outcome_analysis
 import signal_journal
 
 MORNING_HOUR_UTC3 = 8
+
+# Владелец, ДА, 2026-07-23 -- живой сбой: send_morning_digest сегодня в 08:30 НЕ
+# доставлен (telegram.error.BadRequest "Can't parse entities" на неизвестном
+# офсете). Тот же класс, что уже чинили ТОЧЕЧНО трижды раньше (ПАКЕТ 19 П0 --
+# health-ключи с "_", welcome_text_v2, /radar_status, /health -- см. bot.py:637-
+# 645, SOURCE_DISPLAY_LABELS) -- каждый раз новый узкий словарь-замена для ОДНОГО
+# конкретного известного поля, не общее решение. Сегодняшний сбой -- НОВОЕ поле
+# (заголовок листинга/делистинга с биржи, event_radar.format_event_digest_
+# section(), полностью внешний неконтролируемый текст -- underscore/asterisk/
+# backtick/скобка в реальном заголовке биржи не редкость), которое предыдущие
+# точечные фиксы не покрывали и не могли покрыть по построению.
+#
+# Общее решение -- ДВЕ независимые линии защиты, не одна:
+# 1. sanitize_markdown_free_text() -- применяется к ЛЮБОМУ произвольному внешнему
+#    тексту перед интерполяцией в Markdown-строку (не экранирование через `\` --
+#    в legacy parse_mode="Markdown" это ненадёжно для непредсказуемого внешнего
+#    текста, см. историю трёх точечных фиксов выше -- вместо этого замена на
+#    похожие безопасные символы, тот же принцип, что уже применён для health-
+#    ключей через SOURCE_DISPLAY_LABELS, но универсальный, не per-поле словарь).
+# 2. Обязательный фолбэк в send_morning_digest() (см. ниже) -- если ДАЖЕ ПОСЛЕ
+#    санитизации Telegram всё равно вернёт "Can't parse entities" (неизвестный
+#    сегодня, будущий класс проблемы) -- повторная отправка БЕЗ parse_mode
+#    (голый текст), чтобы дайджест НИКОГДА не пропадал молча.
+_MD_UNSAFE_TRANSLATION = str.maketrans({
+    "_": " ", "*": " ", "`": "'", "[": "(", "]": ")",
+})
+
+
+def sanitize_markdown_free_text(text: str) -> str:
+    """Заменяет символы, ломающие parse_mode="Markdown" (legacy) при непарном
+    вхождении, НА похожие безопасные -- для ЛЮБОГО произвольного/внешнего текста
+    (заголовки бирж, свободные описания расхождений и т.п.), не для собственной
+    Markdown-разметки сообщения (её строит вызывающий код явно, не через эту
+    функцию). Честный no-op на пустой/None вход."""
+    if not text:
+        return text
+    return text.translate(_MD_UNSAFE_TRANSLATION)
 MORNING_MINUTE_UTC3 = 30
 MORNING_WINDOW_SEC = 12 * 3600
 
@@ -250,7 +287,8 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
         td = shadow.get("top_discrepancy")
         if td:
             mark = "✅ promoted" if td["promoted_live"] else "теневой"
-            lines.append(f"  Топ-1 расхождение ({mark}): {td['symbol']} {td['direction']} — {td['detail']}")
+            detail = sanitize_markdown_free_text(td["detail"])
+            lines.append(f"  Топ-1 расхождение ({mark}): {td['symbol']} {td['direction']} — {detail}")
 
     # Владелец "да" 2026-07-13 -- health-счётчик shadow-потока (та же честность про
     # None="с последнего рестарта ещё не было записи", что в /stats).
@@ -342,10 +380,30 @@ def build_morning_digest(bot_module, now_ts: float = None) -> str:
 
 async def send_morning_digest(bot, owner_id: int) -> None:
     """Точка входа для scheduler.add_job(..., "cron", hour=8, minute=30). `bot`
-    (Telegram Bot instance) передаётся тем же способом, что send_daily_digest."""
+    (Telegram Bot instance) передаётся тем же способом, что send_daily_digest.
+
+    Владелец, ДА, 2026-07-23 -- обязательный фолбэк (живой сбой сегодня: дайджест
+    НЕ дошёл молча из-за telegram.error.BadRequest "Can't parse entities" на
+    неизвестном поле). sanitize_markdown_free_text()/event_radar._sanitize_
+    free_text() закрывают известные сегодня источники непарных символов, но
+    это НЕ гарантия против ЛЮБОГО будущего нового поля -- если Markdown-отправка
+    ВСЁ РАВНО падает на BadRequest про entities, повторная отправка ТОГО ЖЕ
+    текста БЕЗ parse_mode (голый текст, форматирование потеряется, но
+    содержание дойдёт) -- дайджест никогда не пропадает молча."""
     import bot as bot_module  # локальный импорт -- избегаем цикла bot.py <-> morning_metrics.py
+    from telegram.error import BadRequest
+    text = build_morning_digest(bot_module)
     try:
-        text = build_morning_digest(bot_module)
         await bot.send_message(owner_id, text, parse_mode="Markdown")
+    except BadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            log.error(f"morning_metrics: send_morning_digest Markdown-парсинг упал "
+                      f"({e}), фолбэк на голый текст без parse_mode")
+            try:
+                await bot.send_message(owner_id, text)
+            except Exception as e2:
+                log.error(f"morning_metrics: send_morning_digest фолбэк тоже упал: {e2}")
+        else:
+            log.error(f"morning_metrics: send_morning_digest failed: {e}")
     except Exception as e:
         log.error(f"morning_metrics: send_morning_digest failed: {e}")

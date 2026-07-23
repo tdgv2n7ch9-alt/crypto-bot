@@ -93,6 +93,24 @@ BINANCE_ANNOUNCEMENT_URL = "https://www.binance.com/bapi/composite/v1/public/cms
 BYBIT_TYPE_LISTING = "new_crypto"
 BYBIT_TYPE_DELISTING = "delistings"
 BINANCE_CATALOG_LISTING = 48
+# Владелец, ДА, 2026-07-23 -- живой сбой: заголовок листинга/делистинга с биржи
+# (полностью внешний, неконтролируемый текст) прямо интерполировался в Markdown-
+# сообщение утренней сводки (format_event_digest_section() ниже) без санитизации --
+# непарный "_"/"*"/"`"/"[" в реальном заголовке биржи ломает telegram.error.
+# BadRequest "Can't parse entities" (тот же класс, что трижды раньше чинили
+# точечно для health-ключей, см. bot.py:637-645) -- здесь защита у ИСТОЧНИКА
+# (не в morning_metrics.py, чтобы каждый вызывающий format_event_digest_section()
+# получал уже безопасный текст, не только утренняя сводка).
+_MD_UNSAFE_TRANSLATION = str.maketrans({"_": " ", "*": " ", "`": "'", "[": "(", "]": ")"})
+
+
+def _sanitize_free_text(text: str) -> str:
+    """Замена символов, ломающих parse_mode="Markdown" (legacy), на похожие
+    безопасные -- для произвольного внешнего текста (заголовки бирж и т.п.),
+    не для собственной разметки сообщения."""
+    return text.translate(_MD_UNSAFE_TRANSLATION) if text else text
+
+
 BINANCE_CATALOG_DELISTING = 161
 
 SEEN_IDS_PATH = "data/event_radar/seen_ids.json"
@@ -528,5 +546,6 @@ def format_event_digest_section(hours: float = 12.0, events_dir: str = None,
     for e in recent:
         icon = "🔴" if e.get("kind") == "delisting" else "🟢"
         symbols_str = ", ".join(e.get("symbols", [])) or "н/д"
-        lines.append(f"  {icon} {e.get('exchange', '?').upper()} {symbols_str} — {e.get('title', '')[:60]}")
+        title = _sanitize_free_text(e.get("title", "")[:60])
+        lines.append(f"  {icon} {e.get('exchange', '?').upper()} {symbols_str} — {title}")
     return "\n".join(lines)
