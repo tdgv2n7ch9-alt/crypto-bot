@@ -14898,12 +14898,21 @@ def _wrap_markdown_retry(bound_method, method_name: str):
 
 
 def _install_markdown_retry_wrappers(bot_instance):
-    """Патчит send_message/edit_message_text ОДНОГО Bot-инстанса (тот же,
-    что используют ВСЕ CallbackQuery.edit_message_text()/Message.reply_text()
-    через self.get_bot()) -- системная защита, не per-caller."""
-    bot_instance.send_message = _wrap_markdown_retry(bot_instance.send_message, "send_message")
-    bot_instance.edit_message_text = _wrap_markdown_retry(
-        bot_instance.edit_message_text, "edit_message_text")
+    """Патчит send_message/edit_message_text -- НЕ инстанса (живая находка,
+    CRASHED-деплой 2026-07-23: `telegram.ext.ExtBot` использует `__slots__`
+    через `TelegramObject.__setattr__`, `bot_instance.send_message = ...`
+    бросает `AttributeError: Attribute send_message of class ExtBot can't be
+    set!` -- падает на КАЖДОМ старте процесса, не только один раз). Патчит
+    КЛАСС (`type(bot_instance)`) -- `__slots__` ограничивает атрибуты
+    ИНСТАНСА, не мешает переопределить метод на самом классе (обычное
+    Python-наследование поведения). Идемпотентно (маркер на классе) --
+    повторный вызов не оборачивает уже обёрнутый метод дважды."""
+    cls = type(bot_instance)
+    if getattr(cls, "_md_safe_retry_installed", False):
+        return
+    cls.send_message = _wrap_markdown_retry(cls.send_message, "send_message")
+    cls.edit_message_text = _wrap_markdown_retry(cls.edit_message_text, "edit_message_text")
+    cls._md_safe_retry_installed = True
 
 
 async def _global_error_handler(update, context):
