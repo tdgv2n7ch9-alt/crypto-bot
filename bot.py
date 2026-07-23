@@ -3227,6 +3227,19 @@ PAUSE_LIVE_SIGNAL_EMISSION = os.getenv("PAUSE_LIVE_SIGNAL_EMISSION", "true").str
 # редеплоя), либо срабатывает kill-switch ниже автоматически.
 AUTO_LIVE_EMISSION_ENABLED = os.getenv("AUTO_LIVE_EMISSION_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 
+# Владелец, ДА, 2026-07-23 (сборка нового интерфейса, Шаг 1/3, OWNER-ONLY):
+# карточка канона #292 (`card_v2.assemble_card_v2_canon()`, уже реализована и
+# протестирована) параллельно старому формату -- ТОЛЬКО в чат владельца
+# (OWNER_CHAT_ID), подписчицкие каналы НЕ трогаются (см. `_maybe_send_card_v2_
+# owner_preview()` ниже, вызывается ПОСЛЕ уже существующей отправки старого
+# формата, никогда не заменяет её). default true -- превью активно сразу на
+# этом деплое (владелец тапает с телефона, даёт замечания); откат =
+# `CARD_V2_OWNER_PREVIEW=false` в Railway env (мгновенно, без редеплоя).
+# Публичное включение (снятие owner-only) -- отдельное "да" после PF>1, по
+# `CONNECTION_DAY_CHECKLIST.md` -- эта константа НЕ является тем гейтом,
+# только сам факт показа владельцу нового формата параллельно старому.
+CARD_V2_OWNER_PREVIEW = os.getenv("CARD_V2_OWNER_PREVIEW", "true").strip().lower() in ("1", "true", "yes", "on")
+
 # Владелец, 2026-07-22: предохранитель "не набирать пачку на непроверенной
 # по live-исходам величине" -- максимум одновременно ОТКРЫТЫХ (status
 # "active") AUTO-позиций (TOP_LONG_SIGNALS+TOP_SHORT_SIGNALS вместе), пока
@@ -7608,6 +7621,12 @@ async def send_scheduled(bot: Bot):
             except Exception as e:
                 log.error(f"[AUTO] пилот-алерт владельцу не отправлен для {sym}: {e}")
 
+            # Владелец, ДА, 2026-07-23 -- Шаг 1/3 сборки нового интерфейса
+            # (OWNER-ONLY превью канон-карточки #292, параллельно старому
+            # формату выше, см. CARD_V2_OWNER_PREVIEW). Best-effort, не влияет
+            # на боевой сигнал/подписчиков -- см. докстринг функции.
+            await _maybe_send_card_v2_owner_preview(bot, sym, a, mode, amd_phase)
+
             await asyncio.sleep(1.0)
 
         log.info(f"[AUTO] итог: {sent_long} лонг, {sent_short} шорт "
@@ -11797,6 +11816,117 @@ def _build_signal_post(symbol: str, a: dict, stats_24h: dict,
     ]
 
     return "\n".join(lines)
+
+
+def _build_canon_preview_card(symbol: str, a: dict, mode: str, amd_phase: str) -> str:
+    """Владелец, ДА, 2026-07-23 (Шаг 1/3 сборки нового интерфейса) -- адаптер
+    `real_full_analysis()` -> `card_v2.assemble_card_v2_canon()` (канон #292 §2).
+    ТОЛЬКО для OWNER-ONLY превью (см. `CARD_V2_OWNER_PREVIEW`) -- НЕ заменяет
+    `_build_signal_post()`, чистая функция без сети (все данные уже есть в `a`,
+    либо переданы явно, сетевые OI/funding/L-S получает вызывающая сторона
+    ДО этого вызова через run_in_executor, см. `_maybe_send_card_v2_owner_
+    preview()` ниже).
+
+    Честная оговорка (адаптер, не 1:1): `real_full_analysis()` использует
+    СВОЙ набор из 5 факторов (RSI/MACD/Тренд/Supertrend/EMA, та же логика,
+    что `_build_signal_post()` считает локально) -- не идентичен 6-пунктовому
+    `block5_checklist` движка `fa_engine`/tz13. Здесь пересчитаны ТЕ ЖЕ 5
+    факторов explicitly (не импортированы из `_build_signal_post()`, у неё
+    нет отдельного возврата этих значений) + R:R-гейт как 6-й пункт -- честный
+    адаптер под канон-формат "чеклист N/6", не выдуманные данные."""
+    is_long = mode == "long"
+    price = a["price"]
+    sl, tp1, tp2, tp3 = a["sl"], a["tp1"], a["tp2"], a["tp3"]
+    entry1, entry3 = a.get("entry1", price), a.get("entry3", price)
+    rr = a.get("rr", 0)
+
+    entry_lo, entry_hi = (entry3, entry1) if is_long else (entry1, entry3)
+    traffic = card_v2.compute_traffic_light(price, entry_lo, entry_hi)
+
+    # PD (положение цены относительно суточного якоря) -- та же функция, что
+    # уже посчитана для amd_phase выше (_amd_accumulation_phase), пересчёт
+    # здесь тоже чистый (без сети, candles_4h уже в `a`) -- только чтобы забрать
+    # поле price_vs_nymidnight, которое _amd_accumulation_phase() отбрасывает.
+    amd_full = ta_extra.classify_amd_phase(a.get("candles_4h") or [])
+    pd_label = {"above": "above NY-midnight", "below": "below NY-midnight"}.get(
+        amd_full.get("price_vs_nymidnight"), "н/д")
+
+    entries = [(entry1, 50), (a.get("entry2", (entry1 + entry3) / 2), 30), (entry3, 20)]
+    sl_risk_pct = abs(entry1 - sl) / entry1 * 100 if entry1 else 0
+    capital_table = card_v2.compute_capital_table(entry1, sl)
+    deposit_1000 = {pct: capital_table[1000][pct] for pct in card_v2.RISK_PCTS}
+    tps = [{"price": tp1, "sell_pct": 50, "stop_note": "б/у"},
+           {"price": tp2, "sell_pct": 30, "stop_note": None},
+           {"price": tp3, "sell_pct": 20, "stop_note": None}]
+    what_to_do = card_v2.format_what_to_do(
+        "LONG" if is_long else "SHORT", entries, sl, sl_risk_pct, tps, deposit_1000,
+        invalidation_note="закрытие 4H-свечи за пределами зоны",
+        valid_until_note="24ч от публикации")
+
+    oi = a.get("_owner_preview_oi") or {}
+    funding = a.get("_owner_preview_funding") or {}
+    ls_ratio = a.get("_owner_preview_ls_ratio", 1.0)
+    oi_text = f"OI {oi.get('signal', 'н/д').strip()}" if oi.get("ok") else "OI н/д"
+    funding_label = funding.get("signal", "").strip() if funding.get("ok") else ""
+    ls_text = "лонги преобладают" if ls_ratio >= 1 else "шорты преобладают"
+    operator_risk_lines = card_v2.format_operator_risk_block(oi_text, funding_label, ls_ratio, ls_text)
+
+    rsi_4h = a["rsi_4h"]
+    trend_4h = a.get("trend_4h", "neutral")
+    supertrend_bull = a.get("supertrend_bull")
+    macd_ok = a.get("macd_bullish") if is_long else a.get("macd_bearish")
+    trend_ok = (trend_4h == "bullish") if is_long else (trend_4h == "bearish")
+    st_ok = (supertrend_bull is True) if is_long else (supertrend_bull is False)
+    ema_ok = (a.get("above_ema200") or a.get("above_ema50")) if is_long else not a.get("above_ema200")
+    rsi_ok = (rsi_4h < 50) if is_long else (rsi_4h > 55)
+    checklist_items = [
+        ("RSI в пользу направления", rsi_ok),
+        ("MACD в пользу направления", bool(macd_ok)),
+        ("Тренд 4H в пользу направления", trend_ok),
+        ("Supertrend в пользу направления", st_ok),
+        ("Выше/ниже EMA (по направлению)", bool(ema_ok)),
+        ("R:R по структуре ≥ 1:1.5", bool(a.get("rr_gate_pass"))),
+    ]
+    score = a.get("rocket", 0)
+    checklist_lines = card_v2.format_strength_block(score, checklist_items)[1:]
+
+    verdict = card_v2.compute_verdict(score)
+    ok_factors = [label for label, ok in checklist_items if ok]
+    why_line = card_v2.format_why_line(verdict["label"], ok_factors[0] if ok_factors else None)
+
+    return card_v2.assemble_card_v2_canon(
+        traffic_light=traffic, symbol=f"{symbol}USDT", direction="LONG" if is_long else "SHORT",
+        phase_label=amd_phase or "н/д", pd_label=pd_label,
+        what_to_do_lines=what_to_do["all_lines"], operator_risk_lines=operator_risk_lines,
+        checklist_lines=checklist_lines, why_line=why_line,
+    )
+
+
+async def _maybe_send_card_v2_owner_preview(bot: Bot, symbol: str, a: dict, mode: str, amd_phase: str):
+    """Владелец, ДА, 2026-07-23 -- вызывается ИЗ `send_scheduled()` ПОСЛЕ уже
+    существующей отправки старого формата всем `chat_ids`, никогда её не
+    заменяет. Best-effort: любая ошибка здесь НЕ должна повлиять на боевой
+    сигнал (тот же принцип, что shadow_engine-вызовы в этом же цикле) --
+    исключение только логируется. Flag OFF (`CARD_V2_OWNER_PREVIEW=false`) --
+    честный no-op, ни одного сетевого вызова (OI/funding/L-S) не делается."""
+    if not CARD_V2_OWNER_PREVIEW:
+        return
+    try:
+        loop = asyncio.get_event_loop()
+        oi = await loop.run_in_executor(None, get_open_interest, symbol)
+        funding = await loop.run_in_executor(None, get_funding_rate, symbol)
+        ls_ratio = await loop.run_in_executor(None, _get_ls_ratio, symbol)
+        a = {**a, "_owner_preview_oi": oi, "_owner_preview_funding": funding,
+             "_owner_preview_ls_ratio": ls_ratio}
+        canon_text = _build_canon_preview_card(symbol, a, mode, amd_phase)
+        owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+        await bot.send_message(
+            owner_id,
+            "🧪 *CARD_V2 PREVIEW* (owner-only, параллельно старому формату)\n\n" + canon_text,
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        log.error(f"[CARD_V2_PREVIEW] {symbol}: {e}")
 
 
 # BACKWARD COMPAT alias
