@@ -11389,10 +11389,22 @@ def _auto_concurrent_limit_reached() -> bool:
     тот же паттерн чтения журнала "начисто" при каждом вызове, что уже
     использует `_auto_emission_kill_switch_triggered()` выше: ничего не
     кэширует, переживает рестарт автоматически (журнал сам персистентен
-    через GitHub, `startup_sync()`)."""
+    через GitHub, `startup_sync()`).
+
+    Найдено САМИМ СОБОЙ при live-verify этого же фикса (2026-07-23,
+    несколько минут спустя): без scope по `AUTO_EMISSION_EXPERIMENT_START_
+    TS` счётчик считает ВСЕ AUTO-сорсed ENTERED/PENDING записи когда-либо
+    в журнале, включая позиции ДО начала узкого пилота (например CAKE
+    id=178 от 2026-07-14) -- живых таких набралось 18 против лимита 3,
+    гейт оказался НАВСЕГДА заблокирован (18 >= 3 всегда), обратная сторона
+    той же ошибки -- слишком строго вместо слишком мягко. Тот же scope,
+    что уже использует `_auto_emission_kill_switch_triggered()` -- считать
+    только записи узкого пилота, не всю историю AUTO-сигналов бота."""
     open_auto_count = sum(
         1 for r in signal_journal._journal.values()
-        if r.get("source") in AUTO_LIVE_SOURCES and r.get("status") in ("ENTERED", "PENDING")
+        if r.get("source") in AUTO_LIVE_SOURCES
+        and r.get("status") in ("ENTERED", "PENDING")
+        and (r.get("ts") or 0) >= AUTO_EMISSION_EXPERIMENT_START_TS
     )
     return open_auto_count >= AUTO_LIVE_MAX_CONCURRENT
 

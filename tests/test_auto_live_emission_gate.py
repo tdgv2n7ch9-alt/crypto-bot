@@ -69,14 +69,18 @@ def test_gate_reasons_passes_non_accumulation_signal():
 #
 # Владелец, ФИКС 2026-07-23 (живая находка -- RSR id=485 прошёл эмиссию при
 # 3/3 занятых слотах US/ETHFI/GMX): счётчик теперь читает ПЕРСИСТЕНТНЫЙ
-# signal_journal._journal (ENTERED+PENDING по AUTO_LIVE_SOURCES), не
-# эфемерные TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS -- тесты ниже переписаны под
-# новый источник данных, старые (патчившие TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS)
-# тестировали как раз БАГОВОЕ поведение.
+# signal_journal._journal (ENTERED+PENDING по AUTO_LIVE_SOURCES, scoped по
+# AUTO_EMISSION_EXPERIMENT_START_TS -- вторая живая находка САМИМ СОБОЙ при
+# live-verify: без scope счётчик считал ВСЕ AUTO-записи когда-либо в журнале,
+# включая позиции до начала пилота, гейт оказался НАВСЕГДА заблокирован
+# 18>=3), не эфемерные TOP_LONG_SIGNALS/TOP_SHORT_SIGNALS -- тесты ниже
+# переписаны под новый источник данных, старые (патчившие TOP_LONG_SIGNALS/
+# TOP_SHORT_SIGNALS) тестировали как раз БАГОВОЕ поведение.
 # ---------------------------------------------------------------------------
 
-def _mk_open_record(source="TOP_LONG_AUTO", status="ENTERED"):
-    return {"source": source, "status": status}
+def _mk_open_record(source="TOP_LONG_AUTO", status="ENTERED", ts=None):
+    return {"source": source, "status": status,
+            "ts": ts if ts is not None else bot.AUTO_EMISSION_EXPERIMENT_START_TS + 10}
 
 
 def test_concurrent_limit_not_reached_when_below_max():
@@ -122,6 +126,33 @@ def test_concurrent_limit_survives_empty_ephemeral_dicts():
          patch.object(bot, "TOP_SHORT_SIGNALS", {}), \
          patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
         assert bot._auto_concurrent_limit_reached() is True
+
+
+def test_concurrent_limit_ignores_records_before_experiment_start():
+    """Регресс-тест п.2 живой находки (владелец, 2026-07-23, self-caught при
+    live-verify): записи ДО начала узкого пилота (например старые AUTO-позиции
+    от 2026-07-14, до AUTO_EMISSION_EXPERIMENT_START_TS) не должны занимать
+    "слоты" пилота -- без этого фильтра гейт навсегда заблокирован (реально
+    найдено 18 таких старых открытых записей против лимита 3)."""
+    old_ts = bot.AUTO_EMISSION_EXPERIMENT_START_TS - 1000
+    journal = {i: _mk_open_record(ts=old_ts) for i in range(10)}
+    with patch.object(bot.signal_journal, "_journal", journal), \
+         patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
+        assert bot._auto_concurrent_limit_reached() is False
+
+
+def test_concurrent_limit_mixes_old_and_new_records_correctly():
+    old_ts = bot.AUTO_EMISSION_EXPERIMENT_START_TS - 1000
+    journal = {i: _mk_open_record(ts=old_ts) for i in range(10)}
+    journal[100] = _mk_open_record()
+    journal[101] = _mk_open_record()
+    with patch.object(bot.signal_journal, "_journal", journal), \
+         patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
+        assert bot._auto_concurrent_limit_reached() is False  # только 2 из пилота
+    journal[102] = _mk_open_record()
+    with patch.object(bot.signal_journal, "_journal", journal), \
+         patch.object(bot, "AUTO_LIVE_MAX_CONCURRENT", 3):
+        assert bot._auto_concurrent_limit_reached() is True  # 3 из пилота -- лимит
 
 
 # ---------------------------------------------------------------------------
