@@ -34,8 +34,15 @@
   }
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;transition:background .15s,color .15s}
-.wrap{max-width:1100px;margin:0 auto;padding:0 16px 40px}
+/* Владелец, ДА, 2026-07-23 (UX-критично): свайп вверх/вниз тянул само окно
+   Mini App (WebView перехватывал жест) вместо скролла контента. html/body --
+   фиксированная высота, overflow:hidden (внешний контейнер не скроллится
+   вообще); .wrap -- СВОЙ overflow-y:auto, скроллится только он. Плюс
+   Telegram.WebApp.disableVerticalSwipes() в JS ниже (Bot API 7.7+, с
+   проверкой версии) -- двойная защита штатными средствами + CSS. */
+html,body{height:100%;overscroll-behavior-y:none}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;transition:background .15s,color .15s;overflow:hidden}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px 40px;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch}
 header{padding:14px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
 .logo{font-weight:700;font-size:17px;color:var(--text)}
 .logo small{color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-left:8px}
@@ -145,7 +152,20 @@ footer{padding:20px 0;color:var(--muted);font-size:11px;border-top:1px solid var
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) {
+  tg.ready();
+  tg.expand();
+  // Владелец, ДА, 2026-07-23: disableVerticalSwipes() -- Bot API 7.7+,
+  // штатный способ запретить WebView перехватывать вертикальный свайп как
+  // жест закрытия/сворачивания окна. Проверка версии -- на старых клиентах
+  // метода может не быть, тихий пропуск (CSS overscroll-behavior -- вторая,
+  // независимая линия защиты на этот случай).
+  try {
+    if (tg.isVersionAtLeast && tg.isVersionAtLeast('7.7') && tg.disableVerticalSwipes) {
+      tg.disableVerticalSwipes();
+    }
+  } catch (e) { /* best-effort, не блокирует остальную страницу */ }
+}
 const initData = tg ? tg.initData : "";
 
 // ── тема: сохранённый выбор > Telegram.WebApp.colorScheme > OS-медиа ──

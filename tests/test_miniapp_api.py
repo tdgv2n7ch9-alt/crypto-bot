@@ -701,6 +701,19 @@ def test_app_static_page_no_auth_required():
     _run(go())
 
 
+def test_app_static_page_no_cache():
+    """Живая находка (владелец, 2026-07-23): без Cache-Control страница
+    могла кэшироваться Telegram WebView неограниченно -- будущие фиксы JS/CSS
+    не долетали бы до клиента. no-store гарантирует свежую версию каждый раз."""
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/app")
+            assert "no-store" in resp.headers.get("Cache-Control", "")
+    _run(go())
+
+
 def test_app_static_page_missing_file_returns_honest_500(tmp_path, monkeypatch):
     """Файл отсутствует -- честная 500 с "н/д", не голый traceback наружу."""
     monkeypatch.setattr(ma, "_MINIAPP_INDEX_PATH", str(tmp_path / "missing_index.html"))

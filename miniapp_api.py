@@ -53,7 +53,13 @@ def _make_static_index_handler():
         except OSError as e:
             log.error(f"[MINIAPP-API] static index read failed: {e}")
             return web.Response(text="н/д (страница недоступна)", status=500)
-        return web.Response(text=html, content_type="text/html")
+        # Владелец, ДА, 2026-07-23 (живая находка -- "обновлено --:--:--" не
+        # обновлялся даже ПОСЛЕ фикса кода): страница отдавалась вообще БЕЗ
+        # Cache-Control -- Telegram WebView мог кэшировать старую версию
+        # JS/CSS неограниченно долго, любой будущий фикс не долетал бы до
+        # клиента без явного запрета кэша.
+        return web.Response(text=html, content_type="text/html",
+                             headers={"Cache-Control": "no-store, must-revalidate"})
     return _handle
 
 # Раздел 6 ТЗ: whitelist chat_id (v1 -- только владелец). Поле оставлено как
