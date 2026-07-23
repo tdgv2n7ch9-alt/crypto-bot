@@ -11994,6 +11994,40 @@ async def cmd_calc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                      reply_markup=attach_home_row(None))
 
 
+# Владелец, ДА, 2026-07-23 (сборка нового интерфейса, Шаг 3/3, VITRINA_SPEC.md
+# §3): публичного Railway-домена у сервиса нет (см. CLAUDE.md "Railway CLI --
+# команды с побочными эффектами" -- `railway domain` без явного read-only
+# аргумента СОЗДАЁТ домен, это отдельное owner-решение, не принимается молча
+# из кода). Пока MINIAPP_PUBLIC_URL не задан -- честное "не готово", БЕЗ
+# кнопки web_app (Telegram требует https:// URL, локальный адрес не работает
+# внутри клиента).
+MINIAPP_PUBLIC_URL = os.getenv("MINIAPP_PUBLIC_URL", "").rstrip("/")
+
+
+async def cmd_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only (VITRINA_SPEC.md §3, Шаг 3/3): `/panel` -- открыть Mini App
+    (owner-only панель, miniapp_static/index.html поверх /api/v1/* эндпоинтов
+    miniapp_api.py). Тот же owner-гейт, что `cmd_health()`/`cmd_calc()`."""
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    if not MINIAPP_PUBLIC_URL:
+        await update.message.reply_text(
+            "📊 *Mini App панель*\n\n"
+            "Код готов (страница + /api/v1/* эндпоинты), но публичного домена "
+            "у сервиса нет -- Telegram Mini App требует https://-адрес, локальный "
+            "адрес не работает внутри клиента. Создание домена -- отдельное решение "
+            "владельца (см. CLAUDE.md про побочные эффекты `railway domain`), "
+            "код молча его не создаёт.",
+            parse_mode="Markdown", reply_markup=attach_home_row(None))
+        return
+    from telegram import WebAppInfo
+    kb = attach_home_row([[
+        InlineKeyboardButton("📊 Открыть панель", web_app=WebAppInfo(url=f"{MINIAPP_PUBLIC_URL}/app")),
+    ]])
+    await update.message.reply_text("📊 *Mini App панель* (owner-only)", parse_mode="Markdown", reply_markup=kb)
+
+
 # BACKWARD COMPAT alias
 _old_build_signal_post = _build_signal_post
 
@@ -14720,6 +14754,8 @@ def main():
     # Владелец, ДА, 2026-07-23 (сборка нового интерфейса, Шаг 2/3, VITRINA_
     # SPEC.md §2, калькулятор позиции) -- owner-only, тот же гейт, что /health.
     app.add_handler(CommandHandler("calc",         cmd_calc))
+    # Владелец, ДА, 2026-07-23 (Шаг 3/3, VITRINA_SPEC.md §3, Mini App) -- owner-only.
+    app.add_handler(CommandHandler("panel",        cmd_panel))
     app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))
     app.add_handler(CommandHandler("stats",     cmd_stats))

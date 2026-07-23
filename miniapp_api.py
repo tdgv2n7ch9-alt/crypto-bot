@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 from urllib.parse import parse_qsl
 
@@ -35,6 +36,25 @@ log = logging.getLogger(__name__)
 
 MINIAPP_API_PORT_ENV = "MINIAPP_API_PORT"
 DEFAULT_PORT = 8080
+
+# П-MiniApp Шаг 3/3 (владелец, ДА 2026-07-23): статическая owner-only
+# страница `miniapp_static/index.html` -- HTML-шелл БЕЗ секретов (auth --
+# только на /api/v1/* через middleware выше), поэтому сама страница
+# отдаётся без проверки initData (тот же паттерн, что /api/v1/health).
+_MINIAPP_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miniapp_static")
+_MINIAPP_INDEX_PATH = os.path.join(_MINIAPP_STATIC_DIR, "index.html")
+
+
+def _make_static_index_handler():
+    async def _handle(request: web.Request) -> web.Response:
+        try:
+            with open(_MINIAPP_INDEX_PATH, "r", encoding="utf-8") as f:
+                html = f.read()
+        except OSError as e:
+            log.error(f"[MINIAPP-API] static index read failed: {e}")
+            return web.Response(text="н/д (страница недоступна)", status=500)
+        return web.Response(text=html, content_type="text/html")
+    return _handle
 
 # Раздел 6 ТЗ: whitelist chat_id (v1 -- только владелец). Поле оставлено как
 # множество (не одиночная константа), чтобы будущий allowed_ids (клуб, ТЗ
@@ -162,7 +182,7 @@ def _json_response(payload: dict, status: int = 200) -> web.Response:
 def _auth_middleware_factory(bot_module):
     @web.middleware
     async def _auth_middleware(request: web.Request, handler):
-        if request.path == "/api/v1/health":
+        if request.path == "/api/v1/health" or request.path == "/app":
             return await handler(request)
 
         init_data = request.headers.get("X-Telegram-Init-Data", "")
@@ -404,6 +424,7 @@ def build_app(bot_module) -> web.Application:
     app.router.add_get("/api/v1/glossary", _make_glossary_handler(app["glossary_cache"]))
     app.router.add_get("/api/v1/signals", _make_signals_handler(bot_module, app["signals_cache"]))
     app.router.add_get("/api/v1/dashboard", _make_dashboard_handler(bot_module, app["dashboard_cache"]))
+    app.router.add_get("/app", _make_static_index_handler())
     return app
 
 

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>BEST TRADE — Панель (owner)</title>
+<style>
+:root{
+  --ink:#0A0E14;--panel:#10161F;--line:#1C2733;
+  --amber:#FFB454;--text:#D7DEE8;--muted:#71808F;
+  --up:#5BE38B;--dn:#FF6B6B;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--text);font-family:-apple-system,Inter,system-ui,sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px 40px}
+header{padding:14px 0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
+.logo{font-weight:700;font-size:17px}
+.logo small{color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-left:8px}
+.upd{display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted)}
+.upd i{width:8px;height:8px;border-radius:50%;background:var(--up)}
+.upd i.stale{background:var(--amber)}
+.upd b{color:var(--text);font-weight:500}
+
+.macro{display:flex;gap:20px;flex-wrap:wrap;margin:14px 0;font-family:monospace;font-size:12.5px;color:var(--muted)}
+.macro b{color:var(--text)}
+.macro .u{color:var(--up)}.macro .d{color:var(--dn)}
+
+.kpis{display:flex;gap:24px;margin:18px 0;flex-wrap:wrap;font-family:monospace}
+.kpi b{display:block;font-size:20px;font-weight:600}
+.kpi span{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.nd{color:var(--amber)}
+
+.panel{margin:20px 0;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+.panel h2{font-size:14px;font-weight:600;padding:12px 14px;border-bottom:1px solid var(--line)}
+.panel .body{padding:12px 14px}
+.placeholder{color:var(--muted);font-size:12.5px;font-family:monospace;border:1px dashed var(--line);border-radius:6px;padding:10px}
+
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:640px}
+th{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+td{font-family:monospace;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.u{color:var(--up)}.d{color:var(--dn)}.mut{color:var(--muted)}
+.badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 7px;border-radius:99px}
+.b-long{color:var(--up);background:rgba(91,227,139,.12)}
+.b-short{color:var(--dn);background:rgba(255,107,107,.12)}
+
+footer{padding:20px 0;color:var(--muted);font-size:11px;border-top:1px solid var(--line);margin-top:12px}
+.err{color:var(--dn);font-size:12px;font-family:monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="logo">BEST TRADE <small>owner-панель</small></div>
+  <div class="upd"><i id="updDot"></i>обновлено <b id="updTime">--:--:--</b></div>
+</header>
+
+<div class="macro" id="macro">н/д — загрузка...</div>
+
+<div class="kpis" id="kpis">
+  <div class="kpi"><b id="kpiClosed">--</b><span>закрыто в журнале</span></div>
+  <div class="kpi"><b id="kpiWr">--</b><span>винрейт (live)</span></div>
+  <div class="kpi"><b id="kpiSignals">--</b><span>активных сигналов</span></div>
+  <div class="kpi"><b id="kpiZones">--</b><span>лимиток автора</span></div>
+</div>
+
+<div class="panel">
+  <h2>Конвейер PD-Score (Зарождение → Манипуляция → Живой поток → Дамп)</h2>
+  <div class="body">
+    <div class="placeholder">н/д — этот конвейер не реализован как отдельная сигнальная логика бота (нет
+    расчёта Wash-Score/Gini/CVD/Book-Imbalance по фазам). Визуальный дизайн одобрен (best_trade_radar_v2.html),
+    но публикация с реальными цифрами требует отдельного сигнального модуля и одобрения владельца —
+    не показываем здесь ничего, кроме честного "не реализовано", протокол правды важнее красивого макета.</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Активные сигналы (ТОП ЛОНГ / ТОП ШОРТ)</h2>
+  <div class="body tbl-wrap">
+    <table>
+      <thead><tr>
+        <th>Символ</th><th>Напр.</th><th>Вход</th><th>Сейчас</th><th>Δ%</th>
+        <th>TP1</th><th>TP2</th><th>SL</th><th>R:R</th><th>Статус</th>
+      </tr></thead>
+      <tbody id="signalsBody"><tr><td colspan="10" class="mut">загрузка...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Лимитки автора (⭐ разметки)</h2>
+  <div class="body tbl-wrap">
+    <table>
+      <thead><tr>
+        <th>Символ</th><th>Сторона</th><th>Зона</th><th>Цена</th><th>До зоны %</th><th>Статус</th><th>Note</th>
+      </tr></thead>
+      <tbody id="zonesBody"><tr><td colspan="7" class="mut">загрузка...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Протокол правды — трек-рекорд по контурам</h2>
+  <div class="body tbl-wrap">
+    <table>
+      <thead><tr><th>Контур</th><th>Закрыто</th><th>Винрейт</th><th>PF</th><th>Гейт (min 20)</th></tr></thead>
+      <tbody id="trackBody"><tr><td colspan="5" class="mut">загрузка...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<footer>owner-only панель · не является финансовым советом · <span id="footErr"></span></footer>
+</div>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const initData = tg ? tg.initData : "";
+
+let lastOkTs = 0;
+function renderUpd(){
+  const dot = document.getElementById('updDot');
+  const el = document.getElementById('updTime');
+  if (lastOkTs) {
+    el.textContent = new Date(lastOkTs).toLocaleTimeString('ru-RU');
+    dot.classList.toggle('stale', (Date.now() - lastOkTs) > 180000);
+  }
+}
+
+async function apiGet(path) {
+  const r = await fetch(path, { headers: { 'X-Telegram-Init-Data': initData } });
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  return await r.json();
+}
+
+function fmtNum(v, digits) {
+  if (v === null || v === undefined) return 'н/д';
+  return Number(v).toFixed(digits === undefined ? 4 : digits);
+}
+
+async function loadMacro() {
+  const el = document.getElementById('macro');
+  try {
+    const resp = await apiGet('/api/v1/dashboard');
+    const ctx = resp.data && resp.data.btc_context;
+    if (!ctx || !ctx.ok) { el.textContent = 'BTC-контекст: н/д'; return; }
+    const chCls = ctx.btc_ch24h >= 0 ? 'u' : 'd';
+    el.innerHTML = `BTC <b>${fmtNum(ctx.btc_price, 0)}</b> <span class="${chCls}">${ctx.btc_ch24h > 0 ? '+' : ''}${fmtNum(ctx.btc_ch24h, 2)}%</span>` +
+      ` &nbsp;·&nbsp; Доминация <b>${fmtNum(ctx.dominance, 1)}%</b>` +
+      ` &nbsp;·&nbsp; Fear&amp;Greed <b>${ctx.fear_greed !== null && ctx.fear_greed !== undefined ? ctx.fear_greed : 'н/д'}</b>` +
+      ` &nbsp;·&nbsp; Сигнал <b>${ctx.label || ctx.signal || 'н/д'}</b>`;
+  } catch (e) {
+    el.textContent = 'BTC-контекст: н/д (' + e.message + ')';
+  }
+}
+
+async function loadTrackRecord() {
+  try {
+    const resp = await apiGet('/api/v1/track-record');
+    const report = resp.data;
+    const live = report.live;
+    document.getElementById('kpiClosed').textContent = live.closed;
+    document.getElementById('kpiWr').textContent = live.ready
+      ? (live.win_rate_pct !== null ? live.win_rate_pct + '%' : 'н/д')
+      : 'калибруется';
+    const order = ['live', 'tz13', 'patch05_bpr', 'patch09_oi'];
+    const labels = {live: 'Live (все сделки)', tz13: 'tz13', patch05_bpr: 'П05 BPR', patch09_oi: 'П09 OI'};
+    const rows = order.map(key => {
+      const row = report[key];
+      if (!row) return '';
+      const wr = row.win_rate_pct !== null && row.win_rate_pct !== undefined ? row.win_rate_pct + '%' : 'н/д';
+      const gate = row.ready ? 'готово' : `осталось ${row.remaining}`;
+      return `<tr><td>${labels[key] || key}</td><td>${row.closed}</td><td>${wr}</td><td>${row.pf_label}</td><td>${gate}</td></tr>`;
+    }).join('');
+    document.getElementById('trackBody').innerHTML = rows || '<tr><td colspan="5" class="mut">н/д</td></tr>';
+    return true;
+  } catch (e) {
+    document.getElementById('trackBody').innerHTML = `<tr><td colspan="5" class="err">н/д (${e.message})</td></tr>`;
+    return false;
+  }
+}
+
+async function loadSignals() {
+  try {
+    const resp = await apiGet('/api/v1/signals');
+    const signals = resp.data || [];
+    document.getElementById('kpiSignals').textContent = signals.length;
+    if (!signals.length) {
+      document.getElementById('signalsBody').innerHTML = '<tr><td colspan="10" class="mut">нет активных сигналов</td></tr>';
+      return;
+    }
+    document.getElementById('signalsBody').innerHTML = signals.map(s => {
+      const dirCls = s.direction === 'long' ? 'b-long' : 'b-short';
+      const moveCls = (s.move_pct || 0) >= 0 ? 'u' : 'd';
+      return `<tr><td>${s.symbol}</td><td><span class="badge ${dirCls}">${s.direction}</span></td>` +
+        `<td>${fmtNum(s.entry)}</td><td>${fmtNum(s.current_price)}</td>` +
+        `<td class="${moveCls}">${s.move_pct !== null ? (s.move_pct > 0 ? '+' : '') + fmtNum(s.move_pct, 2) + '%' : 'н/д'}</td>` +
+        `<td>${fmtNum(s.tp1)}</td><td>${s.tp2 !== null ? fmtNum(s.tp2) : 'н/д'}</td><td>${fmtNum(s.sl)}</td>` +
+        `<td>${s.rr !== null && s.rr !== undefined ? fmtNum(s.rr, 2) : 'н/д'}</td><td class="mut">${s.status_text || 'н/д'}</td></tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('signalsBody').innerHTML = `<tr><td colspan="10" class="err">н/д (${e.message})</td></tr>`;
+  }
+}
+
+async function loadZones() {
+  try {
+    const resp = await apiGet('/api/v1/zones');
+    const zones = resp.data || [];
+    document.getElementById('kpiZones').textContent = zones.length;
+    if (!zones.length) {
+      document.getElementById('zonesBody').innerHTML = '<tr><td colspan="7" class="mut">нет активных лимиток</td></tr>';
+      return;
+    }
+    document.getElementById('zonesBody').innerHTML = zones.map(z => {
+      const sideCls = z.side === 'long' ? 'b-long' : 'b-short';
+      return `<tr><td>${z.symbol}</td><td><span class="badge ${sideCls}">${z.side}</span></td>` +
+        `<td>${fmtNum(z.lo)}–${fmtNum(z.hi)}</td><td>${z.price !== null ? fmtNum(z.price) : 'н/д'}</td>` +
+        `<td>${z.distance_pct !== null && z.distance_pct !== undefined ? fmtNum(z.distance_pct, 2) + '%' : 'н/д'}</td>` +
+        `<td class="mut">${z.status || 'н/д'}</td><td class="mut">${z.note || ''}</td></tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('zonesBody').innerHTML = `<tr><td colspan="7" class="err">н/д (${e.message})</td></tr>`;
+  }
+}
+
+async function refreshAll() {
+  const results = await Promise.allSettled([loadMacro(), loadTrackRecord(), loadSignals(), loadZones()]);
+  const anyOk = results.some(r => r.status === 'fulfilled');
+  if (anyOk) { lastOkTs = Date.now(); }
+  renderUpd();
+  const errs = results.filter(r => r.status === 'rejected').length;
+  document.getElementById('footErr').textContent = errs ? `${errs} панели не обновились` : '';
+}
+
+refreshAll();
+setInterval(refreshAll, 20000);
+setInterval(renderUpd, 10000);
+</script>
+</body>
+</html>

@@ -131,6 +131,44 @@ def test_cmd_calc_equal_price_and_sl_honest_error(monkeypatch):
 
 # ── Кнопки на canon-preview карточке (Шаг 1/3) -- обновлены Шагом 2/3 ──
 
+# ── cmd_panel() -- owner-only Mini App launcher (Шаг 3/3) ──
+
+def test_cmd_panel_ignored_for_non_owner(monkeypatch):
+    monkeypatch.setenv("OWNER_CHAT_ID", "999")
+    update = _FakeCalcUpdate(uid=111)
+    _run(bot.cmd_panel(update, _FakeCtx([])))
+    assert update.message.calls == []
+
+
+def test_cmd_panel_honest_message_without_public_url(monkeypatch):
+    monkeypatch.setenv("OWNER_CHAT_ID", "999")
+    monkeypatch.setattr(bot, "MINIAPP_PUBLIC_URL", "")
+    update = _FakeCalcUpdate(uid=999)
+    _run(bot.cmd_panel(update, _FakeCtx([])))
+    assert len(update.message.calls) == 1
+    text = update.message.calls[0]["text"]
+    assert "не готово" not in text  # честная формулировка, не "не готово" (код готов, домена нет)
+    assert "домена" in text
+    kw = update.message.calls[0]["kw"]
+    kb = kw["reply_markup"]
+    buttons = [b for row in kb.inline_keyboard for b in row]
+    assert not any(getattr(b, "web_app", None) for b in buttons)
+
+
+def test_cmd_panel_sends_web_app_button_when_public_url_set(monkeypatch):
+    monkeypatch.setenv("OWNER_CHAT_ID", "999")
+    monkeypatch.setattr(bot, "MINIAPP_PUBLIC_URL", "https://example-owner-only.up.railway.app")
+    update = _FakeCalcUpdate(uid=999)
+    _run(bot.cmd_panel(update, _FakeCtx([])))
+    assert len(update.message.calls) == 1
+    kw = update.message.calls[0]["kw"]
+    kb = kw["reply_markup"]
+    buttons = [b for row in kb.inline_keyboard for b in row]
+    web_app_buttons = [b for b in buttons if getattr(b, "web_app", None)]
+    assert len(web_app_buttons) == 1
+    assert web_app_buttons[0].web_app.url == "https://example-owner-only.up.railway.app/app"
+
+
 def test_owner_preview_attaches_glossary_and_calc_buttons(monkeypatch):
     monkeypatch.setattr(bot, "CARD_V2_OWNER_PREVIEW", True)
     monkeypatch.setattr(bot, "get_open_interest", lambda sym: {"ok": False})

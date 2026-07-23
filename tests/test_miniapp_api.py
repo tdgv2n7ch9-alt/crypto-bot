@@ -629,3 +629,35 @@ def test_dashboard_endpoint_response_is_cached():
             assert r1.status == 200 and r2.status == 200
     _run(go())
     assert len(calls) == 1  # второй запрос -- из кэша, get_btc_market_context не вызван снова
+
+
+# ── /app -- статическая owner-only Mini App страница (Шаг 3/3) ──
+
+def test_app_static_page_no_auth_required():
+    """Сама HTML-страница не содержит секретов (auth -- только на /api/v1/*),
+    отдаётся без initData -- тот же паттерн, что /api/v1/health."""
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/app")
+            assert resp.status == 200
+            text = await resp.text()
+            assert "BEST TRADE" in text
+            assert "text/html" in resp.headers["Content-Type"]
+    _run(go())
+
+
+def test_app_static_page_missing_file_returns_honest_500(tmp_path, monkeypatch):
+    """Файл отсутствует -- честная 500 с "н/д", не голый traceback наружу."""
+    monkeypatch.setattr(ma, "_MINIAPP_INDEX_PATH", str(tmp_path / "missing_index.html"))
+
+    async def go():
+        app = ma.build_app(_FakeBotModule())
+        from aiohttp.test_utils import TestClient, TestServer
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/app")
+            assert resp.status == 500
+            text = await resp.text()
+            assert "н/д" in text
+    _run(go())
