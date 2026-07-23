@@ -133,8 +133,9 @@ def test_owner_preview_sends_to_owner_id_only_when_flag_on(monkeypatch):
     calls = []
 
     class _FakeBot:
-        async def send_message(self, chat_id, text, parse_mode=None):
-            calls.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode})
+        async def send_message(self, chat_id, text, parse_mode=None, reply_markup=None):
+            calls.append({"chat_id": chat_id, "text": text, "parse_mode": parse_mode,
+                          "reply_markup": reply_markup})
 
     _run(bot._maybe_send_card_v2_owner_preview(_FakeBot(), "BTC", _analysis(), "long", "manipulation_bull"))
 
@@ -143,6 +144,9 @@ def test_owner_preview_sends_to_owner_id_only_when_flag_on(monkeypatch):
     assert calls[0]["parse_mode"] == "Markdown"
     assert "CARD_V2 PREVIEW" in calls[0]["text"]
     assert "BTCUSDT LONG" in calls[0]["text"]
+    # Шаг 2/3: кнопки [❓ Словарь]/[🧮 Калькулятор] -- см. test_card_v2_menu_step2.py
+    # для детальной проверки состава кнопок, здесь только факт наличия markup
+    assert calls[0]["reply_markup"] is not None
 
 
 def test_owner_preview_never_raises_on_internal_error(monkeypatch):

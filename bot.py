@@ -5621,6 +5621,24 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # же путь, что и раньше внутри роутера, просто теперь достижимый).
         await _mv2_callback_router(update, ctx, data)
 
+    elif data.startswith("calc_"):
+        # Владелец, ДА, 2026-07-23 (Шаг 2/3) -- кнопка [🧮 Калькулятор] на
+        # canon-preview карточке (Шаг 1/3), callback_data кодирует цену/SL
+        # ИМЕННО этого сигнала напрямую (owner уже видел их на карточке,
+        # повторный ввод не нужен). Owner-гейт тот же, что /health/cmd_calc
+        # -- защита от пересылки сообщения кому-то другому.
+        owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+        if update.effective_user.id != owner_id:
+            return
+        try:
+            _, price_s, sl_s = data.split("_", 2)
+            price, sl = float(price_s), float(sl_s)
+        except (ValueError, IndexError):
+            await q.answer("Не удалось разобрать цену/SL", show_alert=True)
+            return
+        await q.message.reply_text(_render_capital_calc_text(price, sl), parse_mode="Markdown",
+                                    reply_markup=attach_home_row(None))
+
     elif data == "top_spot":
         await q.edit_message_text("\U0001f504 Загружаю ТОП СПОТ...", parse_mode="Markdown")
         class FakeUpdate:
@@ -11920,13 +11938,60 @@ async def _maybe_send_card_v2_owner_preview(bot: Bot, symbol: str, a: dict, mode
              "_owner_preview_ls_ratio": ls_ratio}
         canon_text = _build_canon_preview_card(symbol, a, mode, amd_phase)
         owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+        # Владелец, ДА, 2026-07-23 (Шаг 2/3) -- [❓ Словарь] (термины ИМЕННО
+        # этой карточки, glossary.CARD_TERMS["card_v2_canon"]) + [🧮
+        # Калькулятор] (та же цена/SL, что уже на карточке -- callback_data
+        # кодирует их напрямую, без повторного ввода) -- тот же паттерн
+        # [❓ Словарь], что уже на 4 других типах карточек этого проекта.
+        kb = attach_home_row([[
+            InlineKeyboardButton("❓ Словарь", callback_data="glossary_card_v2_canon"),
+            InlineKeyboardButton("🧮 Калькулятор", callback_data=f"calc_{a['entry1']}_{a['sl']}"),
+        ]])
         await bot.send_message(
             owner_id,
             "🧪 *CARD_V2 PREVIEW* (owner-only, параллельно старому формату)\n\n" + canon_text,
-            parse_mode="Markdown",
+            parse_mode="Markdown", reply_markup=kb,
         )
     except Exception as e:
         log.error(f"[CARD_V2_PREVIEW] {symbol}: {e}")
+
+
+def _render_capital_calc_text(price: float, sl: float) -> str:
+    """Владелец, ДА, 2026-07-23 (Шаг 2/3, VITRINA_SPEC.md §2, "калькулятор
+    позиции") -- та же таблица риска, что уже встроена в карточки
+    (`card_v2.compute_capital_table()`/`format_capital_block()`), здесь как
+    отдельный инструмент (команда `/calc` или кнопка на карточке). Чистая
+    функция, без сети."""
+    table = card_v2.compute_capital_table(price, sl)
+    lines = ["🧮 *Калькулятор позиции*", f"Вход: {price} · SL: {sl}", ""]
+    lines += card_v2.format_capital_block(table)
+    return "\n".join(lines)
+
+
+async def cmd_calc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Owner-only (VITRINA_SPEC.md §2, Шаг 2/3): `/calc <цена> <SL>` --
+    таблица размера позиции по депозиту/риску, без привязки к конкретному
+    сигналу (ad-hoc расчёт). Тот же owner-гейт, что `cmd_health()`."""
+    owner_id = int(os.getenv("OWNER_CHAT_ID", "7009350191"))
+    if update.effective_user.id != owner_id:
+        return
+    args = ctx.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "🧮 *Калькулятор позиции*\n\nИспользование: `/calc <цена входа> <стоп>`\n"
+            "Пример: `/calc 100 96`",
+            parse_mode="Markdown", reply_markup=attach_home_row(None))
+        return
+    try:
+        price, sl = float(args[0]), float(args[1])
+    except ValueError:
+        await update.message.reply_text("Цена и стоп должны быть числами.")
+        return
+    if price <= 0 or sl <= 0 or price == sl:
+        await update.message.reply_text("Цена и стоп должны быть положительными и разными.")
+        return
+    await update.message.reply_text(_render_capital_calc_text(price, sl), parse_mode="Markdown",
+                                     reply_markup=attach_home_row(None))
 
 
 # BACKWARD COMPAT alias
@@ -14652,6 +14717,9 @@ def main():
     app.add_handler(CommandHandler("terminology",  cmd_terminology))
     app.add_handler(CommandHandler("zones_set",    cmd_zones_set))
     app.add_handler(CommandHandler("health",       cmd_health))
+    # Владелец, ДА, 2026-07-23 (сборка нового интерфейса, Шаг 2/3, VITRINA_
+    # SPEC.md §2, калькулятор позиции) -- owner-only, тот же гейт, что /health.
+    app.add_handler(CommandHandler("calc",         cmd_calc))
     app.add_handler(CommandHandler("journal",   cmd_journal))
     app.add_handler(CommandHandler("journal_sync", cmd_journal_sync))
     app.add_handler(CommandHandler("stats",     cmd_stats))
